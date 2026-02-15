@@ -20,7 +20,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 
 	"github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -466,6 +465,35 @@ func ReadSessionPromptFromTree(tree *object.Tree, checkpointPath string) string 
 	}
 
 	return ExtractFirstPrompt(content)
+}
+
+// ReadAgentTypeFromTree reads the agent type from a checkpoint's metadata.json file in a git tree.
+// If metadata.json doesn't exist (shadow branches), it falls back to detecting the agent
+// from the presence of agent-specific config files (.gemini/settings.json or .claude/).
+// Returns agent.AgentTypeUnknown if the agent type cannot be determined.
+func ReadAgentTypeFromTree(tree *object.Tree, checkpointPath string) agent.AgentType {
+	// First, try to read from metadata.json (present in condensed/committed checkpoints)
+	metadataPath := checkpointPath + "/" + paths.MetadataFileName
+	if file, err := tree.File(metadataPath); err == nil {
+		if content, err := file.Contents(); err == nil {
+			var metadata checkpoint.CommittedMetadata
+			if err := json.Unmarshal([]byte(content), &metadata); err == nil && metadata.Agent != "" {
+				return metadata.Agent
+			}
+		}
+	}
+
+	// Fall back to detecting agent from config files (shadow branches don't have metadata.json)
+	// Check for Gemini config
+	if _, err := tree.File(".gemini/settings.json"); err == nil {
+		return agent.AgentTypeGemini
+	}
+	// Check for Claude config (either settings.local.json or settings.json in .claude/)
+	if _, err := tree.Tree(".claude"); err == nil {
+		return agent.AgentTypeClaudeCode
+	}
+
+	return agent.AgentTypeUnknown
 }
 
 // isOnlySeparators checks if a string contains only dashes, spaces, and newlines.
@@ -1424,41 +1452,12 @@ func getSessionDescriptionFromTree(tree *object.Tree, metadataDir string) string
 	return NoDescription
 }
 
-// GetGitAuthorFromRepo retrieves the git user.name and user.email from the repository config.
-// It checks local config first, then falls back to global config.
-// Returns ("Unknown", "unknown@local") if no user is configured - this allows
-// operations to proceed even without git user config, which is especially useful
-// for internal metadata commits on branches like entire/checkpoints/v1.
+// GetGitAuthorFromRepo retrieves the git user.name and user.email,
+// checking both the repository-local config and the global ~/.gitconfig.
+// Delegates to checkpoint.GetGitAuthorFromRepo — this wrapper exists so
+// callers within the strategy package don't need a qualified import.
 func GetGitAuthorFromRepo(repo *git.Repository) (name, email string) {
-	// Get repository config (includes local settings)
-	cfg, err := repo.Config()
-	if err == nil {
-		name = cfg.User.Name
-		email = cfg.User.Email
-	}
-
-	// If not found in local config, try global config
-	if name == "" || email == "" {
-		globalCfg, err := config.LoadConfig(config.GlobalScope)
-		if err == nil {
-			if name == "" {
-				name = globalCfg.User.Name
-			}
-			if email == "" {
-				email = globalCfg.User.Email
-			}
-		}
-	}
-
-	// Provide sensible defaults if git user is not configured
-	if name == "" {
-		name = "Unknown"
-	}
-	if email == "" {
-		email = "unknown@local"
-	}
-
-	return name, email
+	return checkpoint.GetGitAuthorFromRepo(repo)
 }
 
 // GetCurrentBranchName returns the short name of the current branch if HEAD points to a branch.

@@ -428,8 +428,7 @@ func commitWithMetadata() error { //nolint:maintidx // already present in codeba
 	}
 
 	// Fire EventTurnEnd to transition session phase (all strategies).
-	// This moves ACTIVE → IDLE or ACTIVE_COMMITTED → IDLE.
-	// For ACTIVE_COMMITTED → IDLE, HandleTurnEnd dispatches ActionCondense.
+	// This moves ACTIVE → IDLE.
 	transitionSessionTurnEnd(sessionID)
 
 	// Trigger wingman review for auto-commit strategy (commit already happened
@@ -831,8 +830,8 @@ func outputWingmanStopNotification(repoRoot string) {
 }
 
 // transitionSessionTurnEnd fires EventTurnEnd to move the session from
-// ACTIVE → IDLE (or ACTIVE_COMMITTED → IDLE). Best-effort: logs warnings
-// on failure rather than returning errors.
+// ACTIVE → IDLE. Best-effort: logs warnings on failure rather than
+// returning errors.
 func transitionSessionTurnEnd(sessionID string) {
 	turnState, loadErr := strategy.LoadSessionState(sessionID)
 	if loadErr != nil {
@@ -842,15 +841,14 @@ func transitionSessionTurnEnd(sessionID string) {
 	if turnState == nil {
 		return
 	}
-	remaining := strategy.TransitionAndLog(turnState, session.EventTurnEnd, session.TransitionContext{})
+	strategy.TransitionAndLog(turnState, session.EventTurnEnd, session.TransitionContext{})
 
-	// Dispatch strategy-specific actions (e.g., ActionCondense for ACTIVE_COMMITTED → IDLE)
-	if len(remaining) > 0 {
-		strat := GetStrategy()
-		if handler, ok := strat.(strategy.TurnEndHandler); ok {
-			if err := handler.HandleTurnEnd(turnState, remaining); err != nil {
-				fmt.Fprintf(os.Stderr, "Warning: turn-end action dispatch failed: %v\n", err)
-			}
+	// Always dispatch to strategy for turn-end handling. The strategy reads
+	// work items from state (e.g. TurnCheckpointIDs), not the action list.
+	strat := GetStrategy()
+	if handler, ok := strat.(strategy.TurnEndHandler); ok {
+		if err := handler.HandleTurnEnd(turnState); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: turn-end action dispatch failed: %v\n", err)
 		}
 	}
 

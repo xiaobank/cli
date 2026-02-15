@@ -12,35 +12,36 @@ import (
 type Phase string
 
 const (
-	PhaseActive          Phase = "active"
-	PhaseActiveCommitted Phase = "active_committed"
-	PhaseIdle            Phase = "idle"
-	PhaseEnded           Phase = "ended"
+	PhaseActive Phase = "active"
+	PhaseIdle   Phase = "idle"
+	PhaseEnded  Phase = "ended"
 )
 
 // allPhases is the canonical list of phases for enumeration (e.g., diagram generation).
-var allPhases = []Phase{PhaseIdle, PhaseActive, PhaseActiveCommitted, PhaseEnded}
+var allPhases = []Phase{PhaseIdle, PhaseActive, PhaseEnded}
 
 // PhaseFromString normalizes a phase string, treating empty or unknown values
 // as PhaseIdle for backward compatibility with pre-state-machine session files.
 func PhaseFromString(s string) Phase {
 	switch Phase(s) {
-	case PhaseActive:
+	case PhaseActive, "active_committed":
+		// "active_committed" was removed with the 1:1 checkpoint model.
+		// It previously meant "agent active + commit happened during turn".
+		// Normalize to ACTIVE so HandleTurnEnd can finalize any pending checkpoints.
 		return PhaseActive
-	case PhaseActiveCommitted:
-		return PhaseActiveCommitted
 	case PhaseIdle:
 		return PhaseIdle
 	case PhaseEnded:
 		return PhaseEnded
 	default:
+		// Backward compat: truly unknown phases normalize to idle.
 		return PhaseIdle
 	}
 }
 
 // IsActive reports whether the phase represents an active agent turn.
 func (p Phase) IsActive() bool {
-	return p == PhaseActive || p == PhaseActiveCommitted
+	return p == PhaseActive
 }
 
 // Event represents something that happened to a session.
@@ -83,7 +84,6 @@ const (
 	ActionCondense               Action = iota // Condense session data to permanent storage
 	ActionCondenseIfFilesTouched               // Condense only if FilesTouched is non-empty
 	ActionDiscardIfNoFiles                     // Discard session if FilesTouched is empty
-	ActionMigrateShadowBranch                  // Migrate shadow branch to new HEAD
 	ActionWarnStaleSession                     // Warn user about stale session(s)
 	ActionClearEndedAt                         // Clear EndedAt timestamp (session re-entering)
 	ActionUpdateLastInteraction                // Update LastInteractionTime
@@ -98,8 +98,6 @@ func (a Action) String() string {
 		return "CondenseIfFilesTouched"
 	case ActionDiscardIfNoFiles:
 		return "DiscardIfNoFiles"
-	case ActionMigrateShadowBranch:
-		return "MigrateShadowBranch"
 	case ActionWarnStaleSession:
 		return "WarnStaleSession"
 	case ActionClearEndedAt:
@@ -138,8 +136,6 @@ func Transition(current Phase, event Event, ctx TransitionContext) TransitionRes
 		return transitionFromIdle(event, ctx)
 	case PhaseActive:
 		return transitionFromActive(event, ctx)
-	case PhaseActiveCommitted:
-		return transitionFromActiveCommitted(event, ctx)
 	case PhaseEnded:
 		return transitionFromEnded(event, ctx)
 	default:
@@ -183,10 +179,7 @@ func transitionFromIdle(event Event, ctx TransitionContext) TransitionResult {
 func transitionFromActive(event Event, ctx TransitionContext) TransitionResult {
 	switch event {
 	case EventTurnStart:
-		// Ctrl-C recovery: just continue.
-		// This is a degenerate case where the EndTurn is skipped after a in-turn commit.
-		// Either the agent crashed or the user interrupted it.
-		// We choose to continue, and defer condensation to the next TurnEnd or GitCommit.
+		// Ctrl-C recovery: agent crashed or user interrupted mid-turn.
 		return TransitionResult{
 			NewPhase: PhaseActive,
 			Actions:  []Action{ActionUpdateLastInteraction},
@@ -201,8 +194,8 @@ func transitionFromActive(event Event, ctx TransitionContext) TransitionResult {
 			return TransitionResult{NewPhase: PhaseActive}
 		}
 		return TransitionResult{
-			NewPhase: PhaseActiveCommitted,
-			Actions:  []Action{ActionMigrateShadowBranch, ActionUpdateLastInteraction},
+			NewPhase: PhaseActive,
+			Actions:  []Action{ActionCondense, ActionUpdateLastInteraction},
 		}
 	case EventSessionStart:
 		return TransitionResult{
@@ -216,49 +209,6 @@ func transitionFromActive(event Event, ctx TransitionContext) TransitionResult {
 		}
 	default:
 		return TransitionResult{NewPhase: PhaseActive}
-	}
-}
-
-func transitionFromActiveCommitted(event Event, ctx TransitionContext) TransitionResult {
-	switch event {
-	case EventTurnStart:
-		// Ctrl-C recovery after commit.
-		// This is a degenerate case where the EndTurn is skipped after a in-turn commit.
-		// Either the agent crashed or the user interrupted it.
-		// We choose to continue, and defer condensation to the next TurnEnd or GitCommit.
-		return TransitionResult{
-			NewPhase: PhaseActive,
-			Actions:  []Action{ActionUpdateLastInteraction},
-		}
-	case EventTurnEnd:
-		return TransitionResult{
-			NewPhase: PhaseIdle,
-			Actions:  []Action{ActionCondense, ActionUpdateLastInteraction},
-		}
-	case EventGitCommit:
-		if ctx.IsRebaseInProgress {
-			return TransitionResult{NewPhase: PhaseActiveCommitted}
-		}
-		// Don't update LastInteractionTime on self-loop: a git commit is not
-		// proof the agent is alive. Only TurnStart/TurnEnd prove liveness.
-		// Without this, PostCommit refreshes all sessions on every commit,
-		// preventing hasAnyLiveSession from detecting truly stale sessions.
-		return TransitionResult{
-			NewPhase: PhaseActiveCommitted,
-			Actions:  []Action{ActionMigrateShadowBranch},
-		}
-	case EventSessionStart:
-		return TransitionResult{
-			NewPhase: PhaseActiveCommitted,
-			Actions:  []Action{ActionWarnStaleSession},
-		}
-	case EventSessionStop:
-		return TransitionResult{
-			NewPhase: PhaseEnded,
-			Actions:  []Action{ActionUpdateLastInteraction},
-		}
-	default:
-		return TransitionResult{NewPhase: PhaseActiveCommitted}
 	}
 }
 
@@ -304,7 +254,7 @@ func transitionFromEnded(event Event, ctx TransitionContext) TransitionResult {
 // and EndedAt as indicated by the transition.
 //
 // Returns the subset of actions that require strategy-specific handling
-// (e.g., ActionCondense, ActionMigrateShadowBranch, ActionWarnStaleSession).
+// (e.g., ActionCondense, ActionWarnStaleSession).
 // The caller is responsible for dispatching those.
 func ApplyCommonActions(state *State, result TransitionResult) []Action {
 	state.Phase = result.NewPhase
@@ -318,7 +268,7 @@ func ApplyCommonActions(state *State, result TransitionResult) []Action {
 		case ActionClearEndedAt:
 			state.EndedAt = nil
 		case ActionCondense, ActionCondenseIfFilesTouched, ActionDiscardIfNoFiles,
-			ActionMigrateShadowBranch, ActionWarnStaleSession:
+			ActionWarnStaleSession:
 			// Strategy-specific actions — pass through to caller.
 			remaining = append(remaining, action)
 		}
@@ -336,7 +286,6 @@ func MermaidDiagram() string {
 	// State declarations with descriptions.
 	b.WriteString("    state \"IDLE\" as idle\n")
 	b.WriteString("    state \"ACTIVE\" as active\n")
-	b.WriteString("    state \"ACTIVE_COMMITTED\" as active_committed\n")
 	b.WriteString("    state \"ENDED\" as ended\n")
 	b.WriteString("\n")
 
