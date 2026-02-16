@@ -1175,6 +1175,435 @@ func TestRemoveGitHook_DoesNotOverwriteReplacedHook(t *testing.T) {
 	}
 }
 
+// --- Husky v9 tests ---
+
+// initHuskyTestRepo creates a temporary git repository with Husky-style core.hooksPath
+// pointing to .husky/_. Both .husky/ and .husky/_/ directories are created on disk.
+// Returns the repo dir, the generated hooks dir (.husky/_), and the user hooks dir (.husky/).
+func initHuskyTestRepo(t *testing.T) (string, string, string) {
+	t.Helper()
+	tmpDir, _ := initHooksTestRepo(t)
+
+	huskyDir := filepath.Join(tmpDir, ".husky")
+	generatedDir := filepath.Join(huskyDir, "_")
+	if err := os.MkdirAll(generatedDir, 0o755); err != nil {
+		t.Fatalf("failed to create .husky/_: %v", err)
+	}
+
+	ctx := context.Background()
+	cmd := exec.CommandContext(ctx, "git", "config", "core.hooksPath", ".husky/_")
+	cmd.Dir = tmpDir
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("failed to set core.hooksPath: %v", err)
+	}
+
+	return tmpDir, generatedDir, huskyDir
+}
+
+func TestIsHuskyHooksPath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{"/repo/.husky/_", true},
+		{"/repo/.husky/_/", true},
+		{".husky/_", true},
+		{"/repo/.git/hooks", false},
+		{"/repo/.husky", false},
+		{"/repo/husky/_", false},
+		{"/repo/.husky/_/nested", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		if got := isHuskyHooksPath(tt.path); got != tt.want {
+			t.Errorf("isHuskyHooksPath(%q) = %v, want %v", tt.path, got, tt.want)
+		}
+	}
+}
+
+func TestGetHuskyUserHooksDir(t *testing.T) {
+	t.Parallel()
+
+	// Non-Husky path should return empty
+	if got := getHuskyUserHooksDir("/some/path/.git/hooks"); got != "" {
+		t.Errorf("getHuskyUserHooksDir(non-husky) = %q, want empty", got)
+	}
+
+	// Create a real .husky/ directory
+	tmpDir := t.TempDir()
+	huskyDir := filepath.Join(tmpDir, ".husky")
+	generatedDir := filepath.Join(huskyDir, "_")
+	if err := os.MkdirAll(generatedDir, 0o755); err != nil {
+		t.Fatalf("failed to create dirs: %v", err)
+	}
+
+	got := getHuskyUserHooksDir(generatedDir)
+	if got != huskyDir {
+		t.Errorf("getHuskyUserHooksDir(%q) = %q, want %q", generatedDir, got, huskyDir)
+	}
+}
+
+func TestGetHuskyUserHooksDir_DirNotExists(t *testing.T) {
+	t.Parallel()
+
+	// .husky/_ path but .husky/ doesn't exist on disk
+	if got := getHuskyUserHooksDir("/nonexistent/.husky/_"); got != "" {
+		t.Errorf("getHuskyUserHooksDir(missing dir) = %q, want empty", got)
+	}
+}
+
+func TestInstallGitHook_HuskyDetected(t *testing.T) {
+	tmpDir, generatedDir, huskyDir := initHuskyTestRepo(t)
+
+	count, err := InstallGitHook(true)
+	if err != nil {
+		t.Fatalf("InstallGitHook() error = %v", err)
+	}
+	if count == 0 {
+		t.Fatal("InstallGitHook() should install hooks")
+	}
+
+	// Hooks should be injected into .husky/<hookname>, not .husky/_/<hookname>
+	for _, hook := range gitHookNames {
+		userHookPath := filepath.Join(huskyDir, hook)
+		data, err := os.ReadFile(userHookPath)
+		if err != nil {
+			t.Fatalf("expected user hook %s to exist: %v", hook, err)
+		}
+		content := string(data)
+		if !strings.Contains(content, huskyBeginMarker) {
+			t.Errorf("user hook %s should contain BEGIN marker", hook)
+		}
+		if !strings.Contains(content, huskyEndMarker) {
+			t.Errorf("user hook %s should contain END marker", hook)
+		}
+		if !strings.Contains(content, entireHookMarker) {
+			t.Errorf("user hook %s should contain Entire CLI marker", hook)
+		}
+		// Should NOT have a shebang (Husky user scripts don't need one)
+		if strings.Contains(content, "#!/bin/sh") {
+			t.Errorf("user hook %s should not have a shebang", hook)
+		}
+
+		// Should NOT have standalone hooks in .husky/_/
+		generatedHookPath := filepath.Join(generatedDir, hook)
+		if _, statErr := os.Stat(generatedHookPath); !os.IsNotExist(statErr) {
+			t.Errorf("generated hook %s should not exist in .husky/_/", hook)
+		}
+	}
+
+	if !IsGitHookInstalledInDir(tmpDir) {
+		t.Error("IsGitHookInstalledInDir() should detect Husky-injected hooks")
+	}
+}
+
+func TestInstallGitHook_HuskyIdempotent(t *testing.T) {
+	initHuskyTestRepo(t)
+
+	// First install
+	firstCount, err := InstallGitHook(true)
+	if err != nil {
+		t.Fatalf("first InstallGitHook() error = %v", err)
+	}
+	if firstCount == 0 {
+		t.Fatal("first install should install hooks")
+	}
+
+	// Second install should return 0 (all already up to date)
+	secondCount, err := InstallGitHook(true)
+	if err != nil {
+		t.Fatalf("second InstallGitHook() error = %v", err)
+	}
+	if secondCount != 0 {
+		t.Errorf("second InstallGitHook() = %d, want 0 (idempotent)", secondCount)
+	}
+}
+
+func TestInstallGitHook_HuskyExistingContent(t *testing.T) {
+	_, _, huskyDir := initHuskyTestRepo(t)
+
+	// Create existing user hook content
+	userContent := "npm test\nlint-staged\n"
+	hookPath := filepath.Join(huskyDir, "pre-push")
+	if err := os.WriteFile(hookPath, []byte(userContent), 0o755); err != nil {
+		t.Fatalf("failed to create user hook: %v", err)
+	}
+
+	_, err := InstallGitHook(true)
+	if err != nil {
+		t.Fatalf("InstallGitHook() error = %v", err)
+	}
+
+	data, err := os.ReadFile(hookPath)
+	if err != nil {
+		t.Fatalf("hook should exist: %v", err)
+	}
+	content := string(data)
+
+	// User content should be preserved
+	if !strings.Contains(content, "npm test") {
+		t.Error("user content 'npm test' should be preserved")
+	}
+	if !strings.Contains(content, "lint-staged") {
+		t.Error("user content 'lint-staged' should be preserved")
+	}
+
+	// Entire block should be appended
+	if !strings.Contains(content, huskyBeginMarker) {
+		t.Error("should contain BEGIN marker")
+	}
+	if !strings.Contains(content, huskyEndMarker) {
+		t.Error("should contain END marker")
+	}
+
+	// User content should come before Entire block
+	userIdx := strings.Index(content, "npm test")
+	entireIdx := strings.Index(content, huskyBeginMarker)
+	if userIdx > entireIdx {
+		t.Error("user content should come before Entire block")
+	}
+}
+
+func TestInstallGitHook_HuskyUpdateBlock(t *testing.T) {
+	_, _, huskyDir := initHuskyTestRepo(t)
+
+	// Pre-populate with an old version of the block
+	hookPath := filepath.Join(huskyDir, "prepare-commit-msg")
+	oldContent := "npm test\n# BEGIN entire\n# old stuff\n# END entire\n"
+	if err := os.WriteFile(hookPath, []byte(oldContent), 0o755); err != nil {
+		t.Fatalf("failed to create hook: %v", err)
+	}
+
+	count, err := InstallGitHook(true)
+	if err != nil {
+		t.Fatalf("InstallGitHook() error = %v", err)
+	}
+	if count == 0 {
+		t.Error("should update the outdated block")
+	}
+
+	data, err := os.ReadFile(hookPath)
+	if err != nil {
+		t.Fatalf("hook should exist: %v", err)
+	}
+	content := string(data)
+
+	// Old content should be replaced
+	if strings.Contains(content, "# old stuff") {
+		t.Error("old block content should be replaced")
+	}
+
+	// New block should be present
+	if !strings.Contains(content, entireHookMarker) {
+		t.Error("new block should contain Entire CLI marker")
+	}
+
+	// User content should be preserved
+	if !strings.Contains(content, "npm test") {
+		t.Error("user content should be preserved")
+	}
+
+	// Should have exactly one BEGIN/END pair
+	if strings.Count(content, huskyBeginMarker) != 1 {
+		t.Errorf("should have exactly one BEGIN marker, got %d", strings.Count(content, huskyBeginMarker))
+	}
+}
+
+func TestRemoveGitHook_Husky(t *testing.T) {
+	tmpDir, _, huskyDir := initHuskyTestRepo(t)
+
+	// Install hooks
+	_, err := InstallGitHook(true)
+	if err != nil {
+		t.Fatalf("InstallGitHook() error = %v", err)
+	}
+
+	// Remove hooks
+	removed, err := RemoveGitHook()
+	if err != nil {
+		t.Fatalf("RemoveGitHook() error = %v", err)
+	}
+	if removed != len(gitHookNames) {
+		t.Errorf("RemoveGitHook() = %d, want %d", removed, len(gitHookNames))
+	}
+
+	// Hook files should be deleted (they only had Entire content)
+	for _, hook := range gitHookNames {
+		hookPath := filepath.Join(huskyDir, hook)
+		if _, statErr := os.Stat(hookPath); !os.IsNotExist(statErr) {
+			t.Errorf("hook %s should be deleted after removal", hook)
+		}
+	}
+
+	if IsGitHookInstalledInDir(tmpDir) {
+		t.Error("IsGitHookInstalledInDir() should be false after removal")
+	}
+}
+
+func TestRemoveGitHook_HuskyPreservesUserContent(t *testing.T) {
+	_, _, huskyDir := initHuskyTestRepo(t)
+
+	// Create existing user hook content, then install
+	hookPath := filepath.Join(huskyDir, "pre-push")
+	userContent := "npm test\nlint-staged\n"
+	if err := os.WriteFile(hookPath, []byte(userContent), 0o755); err != nil {
+		t.Fatalf("failed to create user hook: %v", err)
+	}
+
+	_, err := InstallGitHook(true)
+	if err != nil {
+		t.Fatalf("InstallGitHook() error = %v", err)
+	}
+
+	// Verify block was injected
+	data, readErr := os.ReadFile(hookPath)
+	if readErr != nil {
+		t.Fatalf("failed to read hook: %v", readErr)
+	}
+	if !strings.Contains(string(data), huskyBeginMarker) {
+		t.Fatal("setup: block should be injected before removal test")
+	}
+
+	// Remove hooks
+	_, err = RemoveGitHook()
+	if err != nil {
+		t.Fatalf("RemoveGitHook() error = %v", err)
+	}
+
+	// User content should survive
+	data, err = os.ReadFile(hookPath)
+	if err != nil {
+		t.Fatal("hook file should still exist (user content present)")
+	}
+	content := string(data)
+
+	if !strings.Contains(content, "npm test") {
+		t.Error("user content 'npm test' should be preserved after removal")
+	}
+	if !strings.Contains(content, "lint-staged") {
+		t.Error("user content 'lint-staged' should be preserved after removal")
+	}
+
+	// Entire block should be gone
+	if strings.Contains(content, huskyBeginMarker) {
+		t.Error("BEGIN marker should be removed")
+	}
+	if strings.Contains(content, huskyEndMarker) {
+		t.Error("END marker should be removed")
+	}
+}
+
+func TestIsGitHookInstalled_Husky(t *testing.T) {
+	tmpDir, _, huskyDir := initHuskyTestRepo(t)
+
+	// Before install: should not be detected
+	if IsGitHookInstalledInDir(tmpDir) {
+		t.Error("should not be installed before install")
+	}
+
+	// Install
+	_, err := InstallGitHook(true)
+	if err != nil {
+		t.Fatalf("InstallGitHook() error = %v", err)
+	}
+
+	// After install: should be detected
+	if !IsGitHookInstalledInDir(tmpDir) {
+		t.Error("should be installed after install")
+	}
+
+	// Remove one hook's block to simulate partial installation
+	hookPath := filepath.Join(huskyDir, "post-commit")
+	if err := os.Remove(hookPath); err != nil {
+		t.Fatalf("failed to remove hook: %v", err)
+	}
+
+	// Partial installation: should not be detected
+	if IsGitHookInstalledInDir(tmpDir) {
+		t.Error("should not be detected with partial installation")
+	}
+}
+
+func TestInstallGitHook_HuskyDirNotExists(t *testing.T) {
+	tmpDir, _ := initHooksTestRepo(t)
+
+	// Set core.hooksPath to .husky/_ but don't create .husky/ on disk
+	ctx := context.Background()
+	cmd := exec.CommandContext(ctx, "git", "config", "core.hooksPath", ".husky/_")
+	cmd.Dir = tmpDir
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("failed to set core.hooksPath: %v", err)
+	}
+
+	// Should fall back to standard install (creates .husky/_/ directory)
+	count, err := InstallGitHook(true)
+	if err != nil {
+		t.Fatalf("InstallGitHook() error = %v", err)
+	}
+	if count == 0 {
+		t.Fatal("should install hooks via standard path")
+	}
+
+	// Hooks should be standalone files in .husky/_/
+	generatedDir := filepath.Join(tmpDir, ".husky", "_")
+	for _, hook := range gitHookNames {
+		hookPath := filepath.Join(generatedDir, hook)
+		data, readErr := os.ReadFile(hookPath)
+		if readErr != nil {
+			t.Fatalf("expected standalone hook %s in .husky/_/: %v", hook, readErr)
+		}
+		// Should be a standalone hook with shebang
+		if !strings.Contains(string(data), "#!/bin/sh") {
+			t.Errorf("standalone hook %s should have shebang", hook)
+		}
+		if !strings.Contains(string(data), entireHookMarker) {
+			t.Errorf("standalone hook %s should contain Entire marker", hook)
+		}
+	}
+}
+
+func TestInstallGitHook_HuskyCleansUpGenerated(t *testing.T) {
+	_, generatedDir, huskyDir := initHuskyTestRepo(t)
+
+	// Simulate stale standalone hooks in .husky/_/ (from PR #355 behavior)
+	for _, hook := range gitHookNames {
+		staleContent := "#!/bin/sh\n# " + entireHookMarker + "\nentire hooks git " + hook + "\n"
+		stalePath := filepath.Join(generatedDir, hook)
+		if err := os.WriteFile(stalePath, []byte(staleContent), 0o755); err != nil {
+			t.Fatalf("failed to create stale hook %s: %v", hook, err)
+		}
+	}
+
+	// Install with Husky detection
+	_, err := InstallGitHook(true)
+	if err != nil {
+		t.Fatalf("InstallGitHook() error = %v", err)
+	}
+
+	// Stale hooks in .husky/_/ should be cleaned up
+	for _, hook := range gitHookNames {
+		stalePath := filepath.Join(generatedDir, hook)
+		if _, statErr := os.Stat(stalePath); !os.IsNotExist(statErr) {
+			t.Errorf("stale hook %s should be cleaned up from .husky/_/", hook)
+		}
+	}
+
+	// User hooks should be installed in .husky/
+	for _, hook := range gitHookNames {
+		userHookPath := filepath.Join(huskyDir, hook)
+		data, readErr := os.ReadFile(userHookPath)
+		if readErr != nil {
+			t.Fatalf("expected user hook %s: %v", hook, readErr)
+		}
+		if !strings.Contains(string(data), huskyBeginMarker) {
+			t.Errorf("user hook %s should contain BEGIN marker", hook)
+		}
+	}
+}
+
 func TestRemoveGitHook_PermissionDenied(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("Test cannot run as root (permission checks are bypassed)")
