@@ -901,7 +901,6 @@ func triggerWingmanAutoApplyIfPending(repoRoot string) {
 	spawnDetachedWingmanApply(repoRoot)
 }
 
-
 // markSessionEnded transitions the session to ENDED phase via the state machine.
 func markSessionEnded(sessionID string) error {
 	state, err := strategy.LoadSessionState(sessionID)
