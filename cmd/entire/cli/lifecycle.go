@@ -9,6 +9,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -26,6 +27,13 @@ import (
 // DispatchLifecycleEvent routes a normalized lifecycle event to the appropriate handler.
 // Returns nil if the event was handled successfully.
 func DispatchLifecycleEvent(ag agent.Agent, event *agent.Event) error {
+	if ag == nil {
+		return errors.New("agent cannot be nil")
+	}
+	if event == nil {
+		return errors.New("event cannot be nil")
+	}
+
 	switch event.Type {
 	case agent.SessionStart:
 		return handleLifecycleSessionStart(ag, event)
