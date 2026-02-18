@@ -189,7 +189,7 @@ func TestInstallHooks_PreservesExistingHooks(t *testing.T) {
 	tempDir := t.TempDir()
 	t.Chdir(tempDir)
 
-	// Create hooks.json with existing user hooks
+	// Create hooks file with existing user hooks
 	writeHooksFile(t, tempDir, CursorHooksFile{
 		Version: 1,
 		Hooks: CursorHooks{
@@ -244,15 +244,15 @@ func TestInstallHooks_LocalDev(t *testing.T) {
 
 func readHooksFile(t *testing.T, tempDir string) CursorHooksFile {
 	t.Helper()
-	hooksPath := filepath.Join(tempDir, ".cursor", "hooks.json")
+	hooksPath := filepath.Join(tempDir, ".cursor", HooksFileName)
 	data, err := os.ReadFile(hooksPath)
 	if err != nil {
-		t.Fatalf("failed to read hooks.json: %v", err)
+		t.Fatalf("failed to read "+HooksFileName+": %v", err)
 	}
 
 	var hooksFile CursorHooksFile
 	if err := json.Unmarshal(data, &hooksFile); err != nil {
-		t.Fatalf("failed to parse hooks.json: %v", err)
+		t.Fatalf("failed to parse "+HooksFileName+": %v", err)
 	}
 	return hooksFile
 }
@@ -265,11 +265,11 @@ func writeHooksFile(t *testing.T, tempDir string, hooksFile CursorHooksFile) {
 	}
 	data, err := json.MarshalIndent(hooksFile, "", "  ")
 	if err != nil {
-		t.Fatalf("failed to marshal hooks.json: %v", err)
+		t.Fatalf("failed to marshal "+HooksFileName+": %v", err)
 	}
-	hooksPath := filepath.Join(cursorDir, "hooks.json")
+	hooksPath := filepath.Join(cursorDir, HooksFileName)
 	if err := os.WriteFile(hooksPath, data, 0o644); err != nil {
-		t.Fatalf("failed to write hooks.json: %v", err)
+		t.Fatalf("failed to write "+HooksFileName+": %v", err)
 	}
 }
 

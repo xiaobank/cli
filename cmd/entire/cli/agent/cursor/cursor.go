@@ -63,7 +63,7 @@ func (c *CursorAgent) DetectPresence() (bool, error) {
 
 // GetHookConfigPath returns the path to Cursor's hook config file.
 func (c *CursorAgent) GetHookConfigPath() string {
-	return ".cursor/hooks.json"
+	return ".cursor/" + HooksFileName
 }
 
 // SupportsHooks returns true as Cursor supports lifecycle hooks.

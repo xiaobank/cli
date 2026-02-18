@@ -72,7 +72,7 @@ func (c *CursorAgent) InstallHooks(localDev bool, force bool) (int, error) {
 	existingData, readErr := os.ReadFile(hooksPath) //nolint:gosec // path is constructed from repo root + fixed path
 	if readErr == nil {
 		if err := json.Unmarshal(existingData, &hooksFile); err != nil {
-			return 0, fmt.Errorf("failed to parse existing hooks.json: %w", err)
+			return 0, fmt.Errorf("failed to parse existing "+HooksFileName+": %w", err)
 		}
 	} else {
 		hooksFile.Version = 1
@@ -147,17 +147,17 @@ func (c *CursorAgent) InstallHooks(localDev bool, force bool) (int, error) {
 
 	output, err := jsonutil.MarshalIndentWithNewline(hooksFile, "", "  ")
 	if err != nil {
-		return 0, fmt.Errorf("failed to marshal hooks.json: %w", err)
+		return 0, fmt.Errorf("failed to marshal "+HooksFileName+": %w", err)
 	}
 
 	if err := os.WriteFile(hooksPath, output, 0o600); err != nil {
-		return 0, fmt.Errorf("failed to write hooks.json: %w", err)
+		return 0, fmt.Errorf("failed to write "+HooksFileName+": %w", err)
 	}
 
 	return count, nil
 }
 
-// UninstallHooks removes Entire hooks from Cursor hooks.json.
+// UninstallHooks removes Entire hooks from Cursor HooksFileName.
 func (c *CursorAgent) UninstallHooks() error {
 	repoRoot, err := paths.RepoRoot()
 	if err != nil {
@@ -171,7 +171,7 @@ func (c *CursorAgent) UninstallHooks() error {
 
 	var hooksFile CursorHooksFile
 	if err := json.Unmarshal(data, &hooksFile); err != nil {
-		return fmt.Errorf("failed to parse hooks.json: %w", err)
+		return fmt.Errorf("failed to parse "+HooksFileName+": %w", err)
 	}
 
 	// Remove Entire hooks from all hook types
@@ -185,11 +185,11 @@ func (c *CursorAgent) UninstallHooks() error {
 	// Write back
 	output, err := jsonutil.MarshalIndentWithNewline(hooksFile, "", "  ")
 	if err != nil {
-		return fmt.Errorf("failed to marshal hooks.json: %w", err)
+		return fmt.Errorf("failed to marshal "+HooksFileName+": %w", err)
 	}
 
 	if err := os.WriteFile(hooksPath, output, 0o600); err != nil {
-		return fmt.Errorf("failed to write hooks.json: %w", err)
+		return fmt.Errorf("failed to write "+HooksFileName+": %w", err)
 	}
 	return nil
 }

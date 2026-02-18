@@ -2,7 +2,7 @@ package cursor
 
 import "encoding/json"
 
-// CursorHooksFile represents the .cursor/hooks.json structure.
+// CursorHooksFile represents the .cursor/HooksFileName structure.
 // Cursor uses a flat JSON file with version and hooks sections.
 //
 //nolint:revive // CursorHooksFile is clearer than HooksFile when used outside this package
