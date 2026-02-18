@@ -580,7 +580,10 @@ func extractUserPromptsFromLines(lines []string) []string {
 		// Check for user message (supports both "human" and "user" types)
 		msgType, ok := entry["type"].(string)
 		if !ok || (msgType != "human" && msgType != "user") {
-			continue
+			msgType, ok = entry["role"].(string)
+			if !ok || (msgType != "user") {
+				continue
+			}
 		}
 
 		// Extract message content

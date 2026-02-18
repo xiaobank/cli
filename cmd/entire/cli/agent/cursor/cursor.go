@@ -323,7 +323,7 @@ func extractModifiedFiles(lines []transcript.Line) []string {
 	var files []string
 
 	for i := range lines {
-		if lines[i].Type != transcript.TypeAssistant {
+		if lines[i].Role != transcript.TypeAssistant && lines[i].Type != transcript.TypeAssistant {
 			continue
 		}
 

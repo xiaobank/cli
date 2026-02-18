@@ -64,7 +64,7 @@ func (c *CursorAgent) ExtractPrompts(sessionRef string, fromOffset int) ([]strin
 
 	var prompts []string
 	for i := range lines {
-		if lines[i].Type != transcript.TypeUser {
+		if lines[i].Role != transcript.TypeUser {
 			continue
 		}
 		content := transcript.ExtractUserContent(lines[i].Message)
@@ -88,7 +88,7 @@ func (c *CursorAgent) ExtractSummary(sessionRef string) (string, error) {
 	}
 
 	for i := len(lines) - 1; i >= 0; i-- {
-		if lines[i].Type != transcript.TypeAssistant {
+		if lines[i].Role != transcript.TypeAssistant && lines[i].Type != transcript.TypeAssistant {
 			continue
 		}
 		var msg transcript.AssistantMessage

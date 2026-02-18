@@ -16,9 +16,10 @@ const (
 	ContentTypeToolUse = "tool_use"
 )
 
-// Line represents a single line in a Claude Code JSONL transcript.
+// Line represents a single line in a Claude Code or Cursor JSONL transcript.
 type Line struct {
 	Type    string          `json:"type"`
+	Role    string          `json:"role"`
 	UUID    string          `json:"uuid"`
 	Message json.RawMessage `json:"message"`
 }

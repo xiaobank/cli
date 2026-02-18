@@ -88,6 +88,11 @@ func TestStripIDEContextTags(t *testing.T) {
 			input:    "<ide_opened_file>file.go</ide_opened_file><system-reminder>reminder</system-reminder>\n\nactual prompt",
 			expected: "actual prompt",
 		},
+		{
+			name:     "cursor user input",
+			input:    "<user_query>\nanother one wordy file and commit\n</user_query>",
+			expected: "another one wordy file and commit",
+		},
 	}
 
 	for _, tt := range tests {

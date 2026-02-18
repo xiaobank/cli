@@ -20,6 +20,11 @@ var systemTagRegexes = []*regexp.Regexp{
 	regexp.MustCompile(`(?s)<local-command-stdout[^>]*>.*?</local-command-stdout>`),
 }
 
+// unwrapTagRegexes matches tags whose content should be kept (unwrapped) rather than removed.
+var unwrapTagRegexes = []*regexp.Regexp{
+	regexp.MustCompile(`(?s)<user_query[^>]*>(.*?)</user_query>`),
+}
+
 // StripIDEContextTags removes IDE-injected context tags from prompt text.
 // The VSCode extension injects tags like:
 //   - <ide_opened_file>...</ide_opened_file> - currently open file
@@ -30,11 +35,17 @@ var systemTagRegexes = []*regexp.Regexp{
 //   - <system-reminder>...</system-reminder>
 //   - <command-name>...</command-name>
 //
+// And unwraps content from wrapper tags like:
+//   - <user_query>...</user_query> - Cursor's user input wrapper
+//
 // These shouldn't appear in commit messages or session descriptions.
 func StripIDEContextTags(text string) string {
 	result := ideContextTagRegex.ReplaceAllString(text, "")
 	for _, re := range systemTagRegexes {
 		result = re.ReplaceAllString(result, "")
+	}
+	for _, re := range unwrapTagRegexes {
+		result = re.ReplaceAllString(result, "$1")
 	}
 	return strings.TrimSpace(result)
 }

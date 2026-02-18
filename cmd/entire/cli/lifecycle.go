@@ -319,7 +319,9 @@ func handleLifecycleTurnEnd(ag agent.Agent, event *agent.Event) error {
 
 	// Check if there are any changes
 	totalChanges := len(relModifiedFiles) + len(relNewFiles) + len(relDeletedFiles)
-	if totalChanges == 0 {
+
+	// TODO: figure out better way to get change count
+	if totalChanges == 0 && ag.Name() != "cursor" {
 		fmt.Fprintf(os.Stderr, "No files were modified during this session\n")
 		fmt.Fprintf(os.Stderr, "Skipping commit\n")
 		transitionSessionTurnEnd(sessionID)
