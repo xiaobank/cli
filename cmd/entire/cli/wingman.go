@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/huh"
+	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
@@ -81,7 +83,11 @@ to apply them.`,
 }
 
 func newWingmanEnableCmd() *cobra.Command {
-	var useLocal bool
+	var (
+		useLocal  bool
+		agentFlag string
+		modelFlag string
+	)
 
 	cmd := &cobra.Command{
 		Use:   "enable",
@@ -103,6 +109,18 @@ func newWingmanEnableCmd() *cobra.Command {
 				return NewSilentError(errors.New("entire not enabled"))
 			}
 
+			// Resolve agent
+			selectedAgent, err := resolveWingmanEnableAgent(cmd, agentFlag)
+			if err != nil {
+				return err
+			}
+
+			// Resolve model
+			selectedModel, err := resolveWingmanEnableModel(cmd, modelFlag)
+			if err != nil {
+				return err
+			}
+
 			// Load the target file specifically so we don't bloat it with merged values
 			s, err := loadSettingsTarget(useLocal)
 			if err != nil {
@@ -112,13 +130,28 @@ func newWingmanEnableCmd() *cobra.Command {
 			if s.StrategyOptions == nil {
 				s.StrategyOptions = make(map[string]any)
 			}
-			s.StrategyOptions["wingman"] = map[string]any{"enabled": true}
+
+			wingmanOpts := map[string]any{"enabled": true}
+			if selectedAgent != "" {
+				wingmanOpts["agent"] = selectedAgent
+			}
+			if selectedModel != "" {
+				wingmanOpts["model"] = selectedModel
+			}
+			s.StrategyOptions["wingman"] = wingmanOpts
 
 			if err := saveSettingsTarget(s, useLocal); err != nil {
 				return fmt.Errorf("failed to save settings: %w", err)
 			}
 
-			msg := "Wingman enabled. Code changes will be automatically reviewed after agent turns."
+			msg := "Wingman enabled."
+			if selectedAgent != "" {
+				msg += fmt.Sprintf(" Agent: %s.", selectedAgent)
+			}
+			if selectedModel != "" {
+				msg += fmt.Sprintf(" Model: %s.", selectedModel)
+			}
+			msg += " Code changes will be automatically reviewed after agent turns."
 			if useLocal {
 				msg += " (saved to settings.local.json)"
 			}
@@ -128,8 +161,118 @@ func newWingmanEnableCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&useLocal, "local", false, "Write to settings.local.json instead of settings.json")
+	cmd.Flags().StringVar(&agentFlag, "agent", "", "Agent to use for reviews (e.g., claude-code)")
+	cmd.Flags().StringVar(&modelFlag, "model", "", "Model to use for reviews (e.g., opus, sonnet)")
 
 	return cmd
+}
+
+// resolveWingmanEnableAgent determines which agent to use for wingman.
+// If agentFlag is set, validates it. Otherwise, prompts interactively or uses the default.
+func resolveWingmanEnableAgent(cmd *cobra.Command, agentFlag string) (string, error) {
+	if agentFlag != "" {
+		// Validate the agent exists and supports Prompter
+		ag, err := agent.Get(agent.AgentName(agentFlag))
+		if err != nil {
+			return "", fmt.Errorf("unknown agent %q: %w", agentFlag, err)
+		}
+		if _, ok := ag.(agent.Prompter); !ok {
+			return "", fmt.Errorf("agent %q does not support wingman reviews (missing Prompter interface)", agentFlag)
+		}
+		return agentFlag, nil
+	}
+
+	// Find agents that implement Prompter
+	prompterAgents := findPrompterAgents()
+	if len(prompterAgents) == 0 {
+		return "", errors.New("no agents support wingman reviews")
+	}
+
+	// Single agent — use it automatically
+	if len(prompterAgents) == 1 {
+		name := string(prompterAgents[0].Name())
+		fmt.Fprintf(cmd.OutOrStdout(), "Using agent: %s\n", prompterAgents[0].Type())
+		return name, nil
+	}
+
+	// Multiple agents — prompt interactively if possible
+	if !canPromptInteractively() {
+		name := string(agent.DefaultAgentName)
+		fmt.Fprintf(cmd.OutOrStdout(), "Using default agent: %s\n", name)
+		return name, nil
+	}
+
+	// Build select options
+	options := make([]huh.Option[string], 0, len(prompterAgents))
+	for _, ag := range prompterAgents {
+		label := fmt.Sprintf("%s (%s)", ag.Type(), ag.Name())
+		if ag.Name() == agent.DefaultAgentName {
+			label += " (default)"
+		}
+		options = append(options, huh.NewOption(label, string(ag.Name())))
+	}
+
+	var selected string
+	form := NewAccessibleForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Which agent should wingman use for reviews?").
+				Options(options...).
+				Value(&selected),
+		),
+	)
+	if err := form.Run(); err != nil {
+		return "", fmt.Errorf("agent selection cancelled: %w", err)
+	}
+	return selected, nil
+}
+
+// resolveWingmanEnableModel determines which model to use for wingman.
+// If modelFlag is set, uses it directly. Otherwise, prompts interactively or uses the default.
+func resolveWingmanEnableModel(cmd *cobra.Command, modelFlag string) (string, error) {
+	if modelFlag != "" {
+		return modelFlag, nil
+	}
+
+	if !canPromptInteractively() {
+		// Non-interactive: use default silently (resolveWingmanModel() handles fallback at runtime)
+		return "", nil
+	}
+
+	var selected string
+	form := NewAccessibleForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Which model should wingman use?").
+				Options(
+					huh.NewOption("opus (default)", "opus"),
+					huh.NewOption("sonnet", "sonnet"),
+					huh.NewOption("haiku", "haiku"),
+				).
+				Value(&selected),
+		),
+	)
+	if err := form.Run(); err != nil {
+		return "", fmt.Errorf("model selection cancelled: %w", err)
+	}
+	_ = cmd // suppress unused warning in non-interactive path
+	return selected, nil
+}
+
+// findPrompterAgents returns all registered agents that implement the Prompter interface.
+func findPrompterAgents() []agent.Agent {
+	names := agent.List()
+	var prompterAgents []agent.Agent
+	for _, name := range names {
+		ag, err := agent.Get(name)
+		if err != nil {
+			continue
+		}
+		if _, ok := ag.(agent.Prompter); ok {
+			prompterAgents = append(prompterAgents, ag)
+		}
+	}
+	return prompterAgents
 }
 
 func newWingmanDisableCmd() *cobra.Command {
@@ -224,6 +367,10 @@ func newWingmanStatusCmd() *cobra.Command {
 			} else {
 				fmt.Fprintln(cmd.OutOrStdout(), "Wingman: disabled")
 			}
+
+			// Show configured agent and model
+			fmt.Fprintf(cmd.OutOrStdout(), "Agent: %s\n", resolveWingmanAgent())
+			fmt.Fprintf(cmd.OutOrStdout(), "Model: %s\n", resolveWingmanModel())
 
 			// Show last review info if available
 			state, err := loadWingmanState()

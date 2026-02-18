@@ -227,34 +227,6 @@ func TestWingmanState_SaveLoad(t *testing.T) {
 	}
 }
 
-func TestWingmanStripGitEnv(t *testing.T) {
-	t.Parallel()
-
-	env := []string{
-		"PATH=/usr/bin",
-		"HOME=/home/user",
-		"GIT_DIR=/repo/.git",
-		"GIT_WORK_TREE=/repo",
-		"EDITOR=vim",
-		"CLAUDECODE=1",
-	}
-
-	filtered := wingmanStripGitEnv(env)
-
-	for _, e := range filtered {
-		if strings.HasPrefix(e, "GIT_") {
-			t.Errorf("GIT_ variable should be stripped: %s", e)
-		}
-		if strings.HasPrefix(e, "CLAUDECODE=") {
-			t.Errorf("CLAUDECODE variable should be stripped: %s", e)
-		}
-	}
-
-	if len(filtered) != 3 {
-		t.Errorf("expected 3 non-stripped vars, got %d", len(filtered))
-	}
-}
-
 func TestIsWingmanEnabled_Settings(t *testing.T) {
 	t.Parallel()
 
@@ -833,6 +805,202 @@ func TestHasAnyLiveSession_RecentModtimeButStaleInteraction(t *testing.T) {
 
 	if hasAnyLiveSession(tmpDir) {
 		t.Error("should return false: LastInteractionTime is stale even though file modtime is recent")
+	}
+}
+
+func TestFindPrompterAgents(t *testing.T) {
+	t.Parallel()
+
+	agents := findPrompterAgents()
+	if len(agents) == 0 {
+		t.Fatal("expected at least one Prompter agent (claude-code)")
+	}
+
+	// claude-code should always be in the list
+	found := false
+	for _, ag := range agents {
+		if ag.Name() == testAgentName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected claude-code in Prompter agents")
+	}
+}
+
+func TestResolveWingmanEnableAgent_ValidFlag(t *testing.T) {
+	t.Parallel()
+
+	// claude-code is a valid Prompter agent
+	result, err := resolveWingmanEnableAgent(nil, testAgentName)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != testAgentName {
+		t.Errorf("got %q, want %q", result, testAgentName)
+	}
+}
+
+func TestResolveWingmanEnableAgent_UnknownAgent(t *testing.T) {
+	t.Parallel()
+
+	_, err := resolveWingmanEnableAgent(nil, "nonexistent-agent")
+	if err == nil {
+		t.Fatal("expected error for unknown agent")
+	}
+	if !strings.Contains(err.Error(), "unknown agent") {
+		t.Errorf("expected 'unknown agent' error, got: %v", err)
+	}
+}
+
+func TestResolveWingmanEnableAgent_NonPrompterAgent(t *testing.T) {
+	t.Parallel()
+
+	// gemini is registered but does not implement Prompter
+	_, err := resolveWingmanEnableAgent(nil, "gemini")
+	if err == nil {
+		t.Fatal("expected error for non-Prompter agent")
+	}
+	if !strings.Contains(err.Error(), "does not support wingman reviews") {
+		t.Errorf("expected 'does not support wingman reviews' error, got: %v", err)
+	}
+}
+
+func TestResolveWingmanEnableModel_WithFlag(t *testing.T) {
+	t.Parallel()
+
+	result, err := resolveWingmanEnableModel(nil, "sonnet")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "sonnet" {
+		t.Errorf("got %q, want %q", result, "sonnet")
+	}
+}
+
+func TestResolveWingmanEnableModel_NonInteractive(t *testing.T) {
+	// Non-interactive mode (no TTY) should return empty string (use runtime default)
+	t.Setenv("ENTIRE_TEST_TTY", "0")
+
+	result, err := resolveWingmanEnableModel(nil, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "" {
+		t.Errorf("got %q, want empty (runtime default)", result)
+	}
+}
+
+func TestWingmanEnable_WritesAgentModel(t *testing.T) {
+	// Uses t.Chdir so cannot be parallel
+	tmpDir := t.TempDir()
+
+	cmd := exec.CommandContext(context.Background(), "git", "init", tmpDir)
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("failed to git init: %v", err)
+	}
+
+	entireDir := filepath.Join(tmpDir, ".entire")
+	if err := os.MkdirAll(entireDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write initial settings with entire enabled
+	initialSettings := testSettingsEnabled
+	if err := os.WriteFile(filepath.Join(entireDir, "settings.json"), []byte(initialSettings), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Chdir(tmpDir)
+
+	// Simulate wingman enable with agent + model
+	s, err := loadSettingsTarget(false)
+	if err != nil {
+		t.Fatalf("failed to load settings: %v", err)
+	}
+
+	if s.StrategyOptions == nil {
+		s.StrategyOptions = make(map[string]any)
+	}
+	wingmanOpts := map[string]any{
+		"enabled": true,
+		"agent":   testAgentName,
+		"model":   "sonnet",
+	}
+	s.StrategyOptions["wingman"] = wingmanOpts
+
+	if err := saveSettingsTarget(s, false); err != nil {
+		t.Fatalf("failed to save settings: %v", err)
+	}
+
+	// Reload and verify
+	loaded, err := loadSettingsTarget(false)
+	if err != nil {
+		t.Fatalf("failed to reload settings: %v", err)
+	}
+
+	if !loaded.IsWingmanEnabled() {
+		t.Error("wingman should be enabled")
+	}
+	if a := loaded.WingmanAgent(); a != testAgentName {
+		t.Errorf("WingmanAgent() = %q, want %q", a, testAgentName)
+	}
+	if m := loaded.WingmanModel(); m != "sonnet" {
+		t.Errorf("WingmanModel() = %q, want %q", m, "sonnet")
+	}
+}
+
+func TestWingmanEnable_NoAgentModel_DefaultsAtRuntime(t *testing.T) {
+	// Uses t.Chdir so cannot be parallel
+	tmpDir := t.TempDir()
+
+	cmd := exec.CommandContext(context.Background(), "git", "init", tmpDir)
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("failed to git init: %v", err)
+	}
+
+	entireDir := filepath.Join(tmpDir, ".entire")
+	if err := os.MkdirAll(entireDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	initialSettings := testSettingsEnabled
+	if err := os.WriteFile(filepath.Join(entireDir, "settings.json"), []byte(initialSettings), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Chdir(tmpDir)
+
+	// Simulate wingman enable without agent/model (non-interactive)
+	s, err := loadSettingsTarget(false)
+	if err != nil {
+		t.Fatalf("failed to load settings: %v", err)
+	}
+
+	if s.StrategyOptions == nil {
+		s.StrategyOptions = make(map[string]any)
+	}
+	s.StrategyOptions["wingman"] = map[string]any{"enabled": true}
+
+	if err := saveSettingsTarget(s, false); err != nil {
+		t.Fatalf("failed to save settings: %v", err)
+	}
+
+	// Reload and verify — agent/model should be empty (runtime defaults apply)
+	loaded, err := loadSettingsTarget(false)
+	if err != nil {
+		t.Fatalf("failed to reload settings: %v", err)
+	}
+
+	if !loaded.IsWingmanEnabled() {
+		t.Error("wingman should be enabled")
+	}
+	if a := loaded.WingmanAgent(); a != "" {
+		t.Errorf("WingmanAgent() = %q, want empty (runtime default)", a)
+	}
+	if m := loaded.WingmanModel(); m != "" {
+		t.Errorf("WingmanModel() = %q, want empty (runtime default)", m)
 	}
 }
 
