@@ -2,7 +2,6 @@
 package cursor
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -158,7 +157,7 @@ func (c *CursorAgent) GetSessionDir(repoPath string) (string, error) {
 		return "", fmt.Errorf("failed to get home directory: %w", err)
 	}
 
-	projectDir := SanitizePathForCursor(repoPath)
+	projectDir := sanitizePathForCursor(repoPath)
 	return filepath.Join(homeDir, ".cursor", "projects", projectDir), nil
 }
 
@@ -218,89 +217,11 @@ func (c *CursorAgent) FormatResumeCommand(sessionID string) string {
 	return "cursor --resume " + sessionID
 }
 
-// SanitizePathForCursor converts a path to Cursor's project directory format.
+// sanitizePathForCursor converts a path to Cursor's project directory format.
 var nonAlphanumericRegex = regexp.MustCompile(`[^a-zA-Z0-9]`)
 
-func SanitizePathForCursor(path string) string {
+func sanitizePathForCursor(path string) string {
 	return nonAlphanumericRegex.ReplaceAllString(path, "-")
-}
-
-// TranscriptAnalyzer interface implementation
-
-// GetTranscriptPosition returns the current line count of a Cursor transcript.
-// Cursor uses JSONL format, so position is the number of lines.
-func (c *CursorAgent) GetTranscriptPosition(path string) (int, error) {
-	if path == "" {
-		return 0, nil
-	}
-
-	file, err := os.Open(path) //nolint:gosec // Path comes from Cursor transcript location
-	if err != nil {
-		if os.IsNotExist(err) {
-			return 0, nil
-		}
-		return 0, fmt.Errorf("failed to open transcript file: %w", err)
-	}
-	defer file.Close()
-
-	reader := bufio.NewReader(file)
-	lineCount := 0
-
-	for {
-		line, err := reader.ReadBytes('\n')
-		if err != nil {
-			if err == io.EOF {
-				if len(line) > 0 {
-					lineCount++
-				}
-				break
-			}
-			return 0, fmt.Errorf("failed to read transcript: %w", err)
-		}
-		lineCount++
-	}
-
-	return lineCount, nil
-}
-
-// ExtractModifiedFilesFromOffset extracts files modified since a given line number.
-func (c *CursorAgent) ExtractModifiedFilesFromOffset(path string, startOffset int) (files []string, currentPosition int, err error) {
-	if path == "" {
-		return nil, 0, nil
-	}
-
-	file, openErr := os.Open(path) //nolint:gosec // Path comes from Cursor transcript location
-	if openErr != nil {
-		return nil, 0, fmt.Errorf("failed to open transcript file: %w", openErr)
-	}
-	defer file.Close()
-
-	reader := bufio.NewReader(file)
-	var lines []transcript.Line
-	lineNum := 0
-
-	for {
-		lineData, readErr := reader.ReadBytes('\n')
-		if readErr != nil && readErr != io.EOF {
-			return nil, 0, fmt.Errorf("failed to read transcript: %w", readErr)
-		}
-
-		if len(lineData) > 0 {
-			lineNum++
-			if lineNum > startOffset {
-				var line transcript.Line
-				if parseErr := json.Unmarshal(lineData, &line); parseErr == nil {
-					lines = append(lines, line)
-				}
-			}
-		}
-
-		if readErr == io.EOF {
-			break
-		}
-	}
-
-	return extractModifiedFiles(lines), lineNum, nil
 }
 
 // ChunkTranscript splits a JSONL transcript at line boundaries.
