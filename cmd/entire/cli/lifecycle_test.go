@@ -201,7 +201,7 @@ func TestHandleLifecycleTurnEnd_EmptyTranscriptRef(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for empty transcript ref, got nil")
 	}
-	if !strings.Contains(err.Error(), "transcript file not found") {
+	if !strings.Contains(err.Error(), "transcript file not specified") {
 		t.Errorf("expected error about transcript file, got: %v", err)
 	}
 }
@@ -507,7 +507,7 @@ func TestDispatchLifecycleEvent_RoutesToCorrectHandler(t *testing.T) {
 			eventType:   agent.TurnEnd,
 			sessionID:   "test",
 			expectError: true,
-			errorSubstr: "transcript file not found",
+			errorSubstr: "transcript file not specified",
 		},
 		{
 			name:        "Compaction with empty transcript is no-op",

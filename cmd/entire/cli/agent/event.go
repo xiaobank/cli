@@ -2,6 +2,9 @@ package agent
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"time"
 )
 
@@ -92,4 +95,21 @@ type Event struct {
 	// Metadata holds agent-specific state that the framework stores and makes available
 	// on subsequent events. Examples: Pi's activeLeafId, Cursor's is_background_agent.
 	Metadata map[string]string
+}
+
+// ReadAndParseHookInput reads all bytes from stdin and unmarshals JSON into the given type.
+// This is a shared helper for agent ParseHookEvent implementations.
+func ReadAndParseHookInput[T any](stdin io.Reader) (*T, error) {
+	data, err := io.ReadAll(stdin)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read hook input: %w", err)
+	}
+	if len(data) == 0 {
+		return nil, errors.New("empty hook input")
+	}
+	var result T
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse hook input: %w", err)
+	}
+	return &result, nil
 }

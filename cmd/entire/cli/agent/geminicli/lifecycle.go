@@ -1,8 +1,6 @@
 package geminicli
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -94,7 +92,7 @@ func (g *GeminiCLIAgent) CalculateTokenUsage(sessionRef string, fromOffset int) 
 // --- Internal hook parsing functions ---
 
 func (g *GeminiCLIAgent) parseSessionStart(stdin io.Reader) (*agent.Event, error) {
-	raw, err := readAndParse[sessionInfoRaw](stdin)
+	raw, err := agent.ReadAndParseHookInput[sessionInfoRaw](stdin)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +105,7 @@ func (g *GeminiCLIAgent) parseSessionStart(stdin io.Reader) (*agent.Event, error
 }
 
 func (g *GeminiCLIAgent) parseTurnStart(stdin io.Reader) (*agent.Event, error) {
-	raw, err := readAndParse[agentHookInputRaw](stdin)
+	raw, err := agent.ReadAndParseHookInput[agentHookInputRaw](stdin)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +119,7 @@ func (g *GeminiCLIAgent) parseTurnStart(stdin io.Reader) (*agent.Event, error) {
 }
 
 func (g *GeminiCLIAgent) parseTurnEnd(stdin io.Reader) (*agent.Event, error) {
-	raw, err := readAndParse[agentHookInputRaw](stdin)
+	raw, err := agent.ReadAndParseHookInput[agentHookInputRaw](stdin)
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +132,7 @@ func (g *GeminiCLIAgent) parseTurnEnd(stdin io.Reader) (*agent.Event, error) {
 }
 
 func (g *GeminiCLIAgent) parseSessionEnd(stdin io.Reader) (*agent.Event, error) {
-	raw, err := readAndParse[sessionInfoRaw](stdin)
+	raw, err := agent.ReadAndParseHookInput[sessionInfoRaw](stdin)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +145,7 @@ func (g *GeminiCLIAgent) parseSessionEnd(stdin io.Reader) (*agent.Event, error) 
 }
 
 func (g *GeminiCLIAgent) parseCompaction(stdin io.Reader) (*agent.Event, error) {
-	raw, err := readAndParse[sessionInfoRaw](stdin)
+	raw, err := agent.ReadAndParseHookInput[sessionInfoRaw](stdin)
 	if err != nil {
 		return nil, err
 	}
@@ -157,20 +155,4 @@ func (g *GeminiCLIAgent) parseCompaction(stdin io.Reader) (*agent.Event, error) 
 		SessionRef: raw.TranscriptPath,
 		Timestamp:  time.Now(),
 	}, nil
-}
-
-// readAndParse reads stdin and unmarshals JSON into the given type.
-func readAndParse[T any](stdin io.Reader) (*T, error) {
-	data, err := io.ReadAll(stdin)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read hook input: %w", err)
-	}
-	if len(data) == 0 {
-		return nil, errors.New("empty hook input")
-	}
-	var result T
-	if err := json.Unmarshal(data, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse hook input: %w", err)
-	}
-	return &result, nil
 }

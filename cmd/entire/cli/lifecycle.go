@@ -165,7 +165,10 @@ func handleLifecycleTurnEnd(ag agent.Agent, event *agent.Event) error {
 	}
 
 	transcriptRef := event.SessionRef
-	if transcriptRef == "" || !fileExists(transcriptRef) {
+	if transcriptRef == "" {
+		return errors.New("transcript file not specified")
+	}
+	if !fileExists(transcriptRef) {
 		return fmt.Errorf("transcript file not found: %s", transcriptRef)
 	}
 
@@ -218,8 +221,9 @@ func handleLifecycleTurnEnd(ag agent.Agent, event *agent.Event) error {
 	var modifiedFiles []string
 	var newTranscriptPosition int
 
-	// Compute subagents directory for agents that support subagent extraction
-	subagentsDir := filepath.Join(filepath.Dir(transcriptRef), "subagents")
+	// Compute subagents directory for agents that support subagent extraction.
+	// Subagent transcripts live in <transcriptDir>/<modelSessionID>/subagents/
+	subagentsDir := filepath.Join(filepath.Dir(transcriptRef), event.SessionID, "subagents")
 
 	if analyzer, ok := ag.(agent.TranscriptAnalyzer); ok {
 		// Extract prompts
@@ -306,6 +310,12 @@ func handleLifecycleTurnEnd(ag agent.Agent, event *agent.Event) error {
 		relNewFiles = FilterAndNormalizePaths(changes.New, repoRoot)
 		relDeletedFiles = FilterAndNormalizePaths(changes.Deleted, repoRoot)
 	}
+
+	// Filter transcript-extracted files to exclude files already committed to HEAD.
+	// When an agent commits files mid-turn, those files are condensed by PostCommit
+	// and should not be re-added to FilesTouched by SaveStep. A file is "committed"
+	// if it exists in HEAD with the same content as the working tree.
+	relModifiedFiles = filterToUncommittedFiles(relModifiedFiles, repoRoot)
 
 	// Check if there are any changes
 	totalChanges := len(relModifiedFiles) + len(relNewFiles) + len(relDeletedFiles)
@@ -529,7 +539,11 @@ func handleLifecycleSubagentEnd(ag agent.Agent, event *agent.Event) error {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to load pre-task state: %v\n", err)
 	}
-	changes, err := DetectFileChanges(preState.PreUntrackedFiles())
+	var preUntrackedFiles []string
+	if preState != nil {
+		preUntrackedFiles = preState.PreUntrackedFiles()
+	}
+	changes, err := DetectFileChanges(preUntrackedFiles)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to compute file changes: %v\n", err)
 	}
@@ -650,13 +664,13 @@ func createContextFile(contextFile, commitMessage, sessionID string, prompts []s
 	var sb strings.Builder
 
 	sb.WriteString("# Session Context\n\n")
-	sb.WriteString(fmt.Sprintf("Session ID: %s\n", sessionID))
-	sb.WriteString(fmt.Sprintf("Commit Message: %s\n\n", commitMessage))
+	fmt.Fprintf(&sb, "Session ID: %s\n", sessionID)
+	fmt.Fprintf(&sb, "Commit Message: %s\n\n", commitMessage)
 
 	if len(prompts) > 0 {
 		sb.WriteString("## Prompts\n\n")
 		for i, p := range prompts {
-			sb.WriteString(fmt.Sprintf("### Prompt %d\n\n%s\n\n", i+1, p))
+			fmt.Fprintf(&sb, "### Prompt %d\n\n%s\n\n", i+1, p)
 		}
 	}
 

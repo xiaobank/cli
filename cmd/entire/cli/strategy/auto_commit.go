@@ -81,7 +81,7 @@ func (s *AutoCommitStrategy) getCheckpointStore() (*checkpoint.GitStore, error) 
 	return s.checkpointStore, s.checkpointStoreErr
 }
 
-// NewAutoCommitStrategy creates a new AutoCommitStrategy instance
+// NewAutoCommitStrategy creates a new AutoCommitStrategy instance.
 //
 
 func NewAutoCommitStrategy() Strategy {

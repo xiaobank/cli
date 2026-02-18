@@ -3,9 +3,13 @@
 package session
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/entireio/cli/cmd/entire/cli/logging"
 )
 
 // Phase represents the lifecycle stage of a session.
@@ -294,6 +298,19 @@ func (NoOpActionHandler) HandleWarnStaleSession(_ *State) error       { return n
 // handler actions are skipped but common actions continue. Returns the
 // first handler error, or nil.
 func ApplyTransition(state *State, result TransitionResult, handler ActionHandler) error {
+	logCtx := logging.WithComponent(context.Background(), "session")
+
+	actionStrs := make([]string, len(result.Actions))
+	for i, a := range result.Actions {
+		actionStrs[i] = a.String()
+	}
+	logging.Debug(logCtx, "ApplyTransition",
+		slog.String("session_id", state.SessionID),
+		slog.String("old_phase", string(state.Phase)),
+		slog.String("new_phase", string(result.NewPhase)),
+		slog.String("actions", strings.Join(actionStrs, ",")),
+	)
+
 	state.Phase = result.NewPhase
 
 	var handlerErr error

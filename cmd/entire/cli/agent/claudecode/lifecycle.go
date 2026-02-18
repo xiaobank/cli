@@ -3,7 +3,6 @@ package claudecode
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -133,7 +132,7 @@ func (c *ClaudeCodeAgent) CalculateTokenUsage(sessionRef string, fromOffset int)
 // --- Internal hook parsing functions ---
 
 func (c *ClaudeCodeAgent) parseSessionStart(stdin io.Reader) (*agent.Event, error) {
-	raw, err := readAndParse[sessionInfoRaw](stdin)
+	raw, err := agent.ReadAndParseHookInput[sessionInfoRaw](stdin)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +145,7 @@ func (c *ClaudeCodeAgent) parseSessionStart(stdin io.Reader) (*agent.Event, erro
 }
 
 func (c *ClaudeCodeAgent) parseTurnStart(stdin io.Reader) (*agent.Event, error) {
-	raw, err := readAndParse[userPromptSubmitRaw](stdin)
+	raw, err := agent.ReadAndParseHookInput[userPromptSubmitRaw](stdin)
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +159,7 @@ func (c *ClaudeCodeAgent) parseTurnStart(stdin io.Reader) (*agent.Event, error) 
 }
 
 func (c *ClaudeCodeAgent) parseTurnEnd(stdin io.Reader) (*agent.Event, error) {
-	raw, err := readAndParse[sessionInfoRaw](stdin)
+	raw, err := agent.ReadAndParseHookInput[sessionInfoRaw](stdin)
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +172,7 @@ func (c *ClaudeCodeAgent) parseTurnEnd(stdin io.Reader) (*agent.Event, error) {
 }
 
 func (c *ClaudeCodeAgent) parseSessionEnd(stdin io.Reader) (*agent.Event, error) {
-	raw, err := readAndParse[sessionInfoRaw](stdin)
+	raw, err := agent.ReadAndParseHookInput[sessionInfoRaw](stdin)
 	if err != nil {
 		return nil, err
 	}
@@ -186,7 +185,7 @@ func (c *ClaudeCodeAgent) parseSessionEnd(stdin io.Reader) (*agent.Event, error)
 }
 
 func (c *ClaudeCodeAgent) parseSubagentStart(stdin io.Reader) (*agent.Event, error) {
-	raw, err := readAndParse[taskHookInputRaw](stdin)
+	raw, err := agent.ReadAndParseHookInput[taskHookInputRaw](stdin)
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +200,7 @@ func (c *ClaudeCodeAgent) parseSubagentStart(stdin io.Reader) (*agent.Event, err
 }
 
 func (c *ClaudeCodeAgent) parseSubagentEnd(stdin io.Reader) (*agent.Event, error) {
-	raw, err := readAndParse[postToolHookInputRaw](stdin)
+	raw, err := agent.ReadAndParseHookInput[postToolHookInputRaw](stdin)
 	if err != nil {
 		return nil, err
 	}
@@ -217,22 +216,6 @@ func (c *ClaudeCodeAgent) parseSubagentEnd(stdin io.Reader) (*agent.Event, error
 		event.SubagentID = raw.ToolResponse.AgentID
 	}
 	return event, nil
-}
-
-// readAndParse reads stdin and unmarshals JSON into the given type.
-func readAndParse[T any](stdin io.Reader) (*T, error) {
-	data, err := io.ReadAll(stdin)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read hook input: %w", err)
-	}
-	if len(data) == 0 {
-		return nil, errors.New("empty hook input")
-	}
-	var result T
-	if err := json.Unmarshal(data, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse hook input: %w", err)
-	}
-	return &result, nil
 }
 
 // --- Transcript flush sentinel ---

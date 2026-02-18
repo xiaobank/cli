@@ -351,7 +351,7 @@ func TestReadAndParse_ValidInput(t *testing.T) {
 
 	input := `{"session_id": "test-123", "transcript_path": "/path/to/transcript"}`
 
-	result, err := readAndParse[sessionInfoRaw](strings.NewReader(input))
+	result, err := agent.ReadAndParseHookInput[sessionInfoRaw](strings.NewReader(input))
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -370,7 +370,7 @@ func TestReadAndParse_ValidInput(t *testing.T) {
 func TestReadAndParse_EmptyInput(t *testing.T) {
 	t.Parallel()
 
-	_, err := readAndParse[sessionInfoRaw](strings.NewReader(""))
+	_, err := agent.ReadAndParseHookInput[sessionInfoRaw](strings.NewReader(""))
 
 	if err == nil {
 		t.Fatal("expected error for empty input")
@@ -383,7 +383,7 @@ func TestReadAndParse_EmptyInput(t *testing.T) {
 func TestReadAndParse_InvalidJSON(t *testing.T) {
 	t.Parallel()
 
-	_, err := readAndParse[sessionInfoRaw](strings.NewReader("not valid json"))
+	_, err := agent.ReadAndParseHookInput[sessionInfoRaw](strings.NewReader("not valid json"))
 
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
@@ -399,7 +399,7 @@ func TestReadAndParse_PartialJSON(t *testing.T) {
 	// JSON with only some fields - should still parse (missing fields are zero values)
 	input := `{"session_id": "partial-only"}`
 
-	result, err := readAndParse[sessionInfoRaw](strings.NewReader(input))
+	result, err := agent.ReadAndParseHookInput[sessionInfoRaw](strings.NewReader(input))
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -418,7 +418,7 @@ func TestReadAndParse_ExtraFields(t *testing.T) {
 	// JSON with extra fields - should ignore them
 	input := `{"session_id": "test", "transcript_path": "/t", "extra_field": "ignored", "another": 123}`
 
-	result, err := readAndParse[sessionInfoRaw](strings.NewReader(input))
+	result, err := agent.ReadAndParseHookInput[sessionInfoRaw](strings.NewReader(input))
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
