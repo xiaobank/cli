@@ -21,11 +21,9 @@ func TestCLICommand(t *testing.T) {
 func TestPrompt_ValidJSONResponse(t *testing.T) {
 	t.Parallel()
 
-	response := `{"result":"Hello from Claude"}`
-
 	ag := &ClaudeCodeAgent{
 		CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
-			return exec.CommandContext(ctx, "sh", "-c", "printf '%s' '"+response+"'")
+			return exec.CommandContext(ctx, "sh", "-c", `printf '{"result":"Hello from Claude"}'`)
 		},
 	}
 
