@@ -14,16 +14,8 @@ import (
 )
 
 func main() {
-	// Create context that cancels on interrupt
-	ctx, cancel := context.WithCancel(context.Background())
-
-	// Handle interrupt signals
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-sigChan
-		cancel()
-	}()
+	// Create context that cancels on interrupt signals
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 
 	// Create and execute root command
 	rootCmd := cli.NewRootCmd()
