@@ -44,6 +44,9 @@ type BenchRepo struct {
 
 	// WorktreeID is the worktree identifier (empty for main worktree).
 	WorktreeID string
+
+	// Strategy is the strategy name used in .entire/settings.json.
+	Strategy string
 }
 
 // RepoOpts configures how NewBenchRepo creates the test repository.
@@ -167,6 +170,7 @@ func NewBenchRepo(b *testing.B, opts RepoOpts) *BenchRepo {
 		Repo:     repo,
 		Store:    checkpoint.NewGitStore(repo),
 		HeadHash: headHash.String(),
+		Strategy: opts.Strategy,
 	}
 
 	// Determine worktree ID
@@ -344,8 +348,16 @@ func (br *BenchRepo) WriteTranscriptFile(b *testing.B, sessionID string, data []
 // SeedShadowBranch creates N checkpoint commits on the shadow branch
 // for the current HEAD. This simulates a session that already has
 // prior checkpoints saved.
+//
+// Temporarily changes cwd to br.Dir because WriteTemporary uses
+// paths.RepoRoot() which depends on os.Getwd().
 func (br *BenchRepo) SeedShadowBranch(b *testing.B, sessionID string, checkpointCount int, filesPerCheckpoint int) {
 	b.Helper()
+
+	// WriteTemporary internally calls paths.RepoRoot() which uses os.Getwd().
+	// Switch cwd so it resolves to the bench repo.
+	b.Chdir(br.Dir)
+	paths.ClearRepoRootCache()
 
 	for i := range checkpointCount {
 		var modified []string
@@ -411,7 +423,7 @@ func (br *BenchRepo) SeedMetadataBranch(b *testing.B, checkpointCount int) {
 		err = br.Store.WriteCommitted(context.Background(), checkpoint.WriteCommittedOptions{
 			CheckpointID:     cpID,
 			SessionID:        sessionID,
-			Strategy:         "manual-commit",
+			Strategy:         br.Strategy,
 			Transcript:       transcript,
 			Prompts:          []string{fmt.Sprintf("Implement feature %d", i)},
 			FilesTouched:     files,

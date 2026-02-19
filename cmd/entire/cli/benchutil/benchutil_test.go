@@ -1,7 +1,6 @@
 package benchutil
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/session"
@@ -23,25 +22,23 @@ func BenchmarkNewBenchRepo_Large(b *testing.B) {
 }
 
 func BenchmarkSeedShadowBranch(b *testing.B) {
-	for _, count := range []int{1, 5, 10} {
-		b.Run(fmt.Sprintf("%dCheckpoints", count), func(b *testing.B) {
-			for b.Loop() {
-				repo := NewBenchRepo(b, RepoOpts{FileCount: 10})
-				sessionID := repo.CreateSessionState(b, SessionOpts{})
-				repo.SeedShadowBranch(b, sessionID, count, 3)
-			}
-		})
+	for b.Loop() {
+		b.StopTimer()
+		repo := NewBenchRepo(b, RepoOpts{FileCount: 10})
+		sessionID := repo.CreateSessionState(b, SessionOpts{})
+		b.StartTimer()
+
+		repo.SeedShadowBranch(b, sessionID, 5, 3)
 	}
 }
 
 func BenchmarkSeedMetadataBranch(b *testing.B) {
-	for _, count := range []int{1, 5, 10} {
-		b.Run(fmt.Sprintf("%dCheckpoints", count), func(b *testing.B) {
-			for b.Loop() {
-				repo := NewBenchRepo(b, RepoOpts{FileCount: 10})
-				repo.SeedMetadataBranch(b, count)
-			}
-		})
+	for b.Loop() {
+		b.StopTimer()
+		repo := NewBenchRepo(b, RepoOpts{FileCount: 10})
+		b.StartTimer()
+
+		repo.SeedMetadataBranch(b, 10)
 	}
 }
 
