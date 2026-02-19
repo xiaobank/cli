@@ -6,7 +6,16 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/benchutil"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/session"
 )
+
+/* To use the interactive flame graph, run:
+
+mise exec -- go tool pprof -http=:8089 /tmp/status_cpu.prof &>/dev/null & echo "pprof server started on http://localhost:8089"
+
+and then go to http://localhost:8089/ui/flamegraph
+
+*/
 
 // BenchmarkStatusCommand benchmarks the `entire status` command end-to-end.
 // This is the top-level entry point for understanding status command latency.
@@ -41,12 +50,14 @@ func benchStatus(sessionCount int, detailed bool) func(*testing.B) {
 		// runStatus uses paths.RepoRoot() which requires cwd to be in the repo.
 		b.Chdir(repo.Dir)
 		paths.ClearRepoRootCache()
+		session.ClearGitCommonDirCache()
 
 		b.ResetTimer()
 		for range b.N {
-			// Clear cache each iteration to simulate a fresh CLI invocation.
+			// Clear caches each iteration to simulate a fresh CLI invocation.
 			// In real usage, each `entire status` call starts cold.
 			paths.ClearRepoRootCache()
+			session.ClearGitCommonDirCache()
 
 			if err := runStatus(io.Discard, detailed); err != nil {
 				b.Fatalf("runStatus: %v", err)

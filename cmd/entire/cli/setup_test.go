@@ -12,6 +12,7 @@ import (
 	_ "github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
 	_ "github.com/entireio/cli/cmd/entire/cli/agent/geminicli"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/go-git/go-git/v5"
 )
@@ -27,6 +28,7 @@ func setupTestDir(t *testing.T) string {
 	tmpDir := t.TempDir()
 	t.Chdir(tmpDir)
 	paths.ClearRepoRootCache()
+	session.ClearGitCommonDirCache()
 	return tmpDir
 }
 
