@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"time"
 
@@ -175,7 +174,7 @@ func runTrailRunnerStart(cmd *cobra.Command, daemon bool, pollInterval time.Dura
 	}
 
 	runner := trail.NewRunner(repo, repoRoot, config)
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	if daemon {
 		fmt.Fprintf(cmd.OutOrStdout(), "Starting trail runner in daemon mode (poll interval: %s)\n", pollInterval)
@@ -212,7 +211,7 @@ func runTrailRunnerRunOnce(cmd *cobra.Command, agentName, model string, timeout 
 	}
 
 	runner := trail.NewRunner(repo, repoRoot, config)
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	results, err := runner.RunOnce(ctx)
 	if err != nil {
@@ -264,7 +263,7 @@ func runTrailRun(cmd *cobra.Command, idStr, agentName, model string, timeout tim
 	}
 
 	runner := trail.NewRunner(repo, repoRoot, config)
-	ctx := context.Background()
+	ctx := cmd.Context()
 
 	fmt.Fprintf(cmd.OutOrStdout(), "Running trail: %s (max %d attempts)\n", id, maxAttempts)
 

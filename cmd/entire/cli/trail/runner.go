@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -235,6 +237,14 @@ func (r *Runner) RunTrail(ctx context.Context, trail *Trail) RunResult {
 	var lastValidationOutput string
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		// Check for cancellation before starting each attempt
+		if ctx.Err() != nil {
+			result.Error = fmt.Errorf("cancelled: %w", ctx.Err())
+			result.Success = false
+			result.Output = allOutput.String()
+			break
+		}
+
 		result.Attempts = attempt
 
 		logging.Info(ctx, "running agent",
@@ -267,7 +277,7 @@ func (r *Runner) RunTrail(ctx context.Context, trail *Trail) RunResult {
 			break
 		}
 
-		// Run validation
+		// Run validation before committing so the result is part of the checkpoint
 		logging.Info(ctx, "running validation",
 			slog.String("trail_id", trail.ID.String()),
 			slog.Int("attempt", attempt),
@@ -287,6 +297,22 @@ func (r *Runner) RunTrail(ctx context.Context, trail *Trail) RunResult {
 		}
 
 		result.ValidationPassed = validationPassed
+
+		// Commit after validation to create checkpoint with session logs and validation result
+		validationStatus := "PASSED"
+		if !validationPassed {
+			validationStatus = "FAILED"
+		}
+		commitMsg := fmt.Sprintf("Trail %s attempt %d: %s\n\nValidation: %s",
+			trail.ID.Short(), attempt, trail.Title, validationStatus)
+		if commitErr := r.commitAttempt(ctx, worktreePath, commitMsg, validationOutput); commitErr != nil {
+			logging.Warn(ctx, "failed to commit attempt",
+				slog.String("trail_id", trail.ID.String()),
+				slog.Int("attempt", attempt),
+				slog.String("error", commitErr.Error()),
+			)
+			// Continue anyway - commit is for debugging, not required
+		}
 
 		if validationPassed {
 			logging.Info(ctx, "validation passed",
@@ -479,6 +505,50 @@ func (r *Runner) runValidation(ctx context.Context, worktreePath string) (bool, 
 	}
 
 	return false, output, fmt.Errorf("validation failed: %w", err)
+}
+
+// commitAttempt commits all changes in the worktree to create a checkpoint.
+// This triggers Entire hooks which attach session logs to the checkpoint.
+// The validation output is written to .entire/validation.txt so it's part of the checkpoint.
+func (r *Runner) commitAttempt(ctx context.Context, worktreePath, message, validationOutput string) error {
+	// Write validation output to .entire/validation.txt
+	entireDir := filepath.Join(worktreePath, ".entire")
+	if err := os.MkdirAll(entireDir, 0o750); err != nil {
+		return fmt.Errorf("failed to create .entire directory: %w", err)
+	}
+	validationFile := filepath.Join(entireDir, "validation.txt")
+	if err := os.WriteFile(validationFile, []byte(validationOutput), 0o600); err != nil {
+		return fmt.Errorf("failed to write validation output: %w", err)
+	}
+
+	// Stage all changes including the validation file
+	addCmd := exec.CommandContext(ctx, "git", "add", "-A")
+	addCmd.Dir = worktreePath
+	if err := addCmd.Run(); err != nil {
+		return fmt.Errorf("git add failed: %w", err)
+	}
+
+	// Check if there are changes to commit
+	diffCmd := exec.CommandContext(ctx, "git", "diff", "--cached", "--quiet")
+	diffCmd.Dir = worktreePath
+	if err := diffCmd.Run(); err == nil {
+		// No changes to commit
+		logging.Debug(ctx, "no changes to commit after attempt")
+		return nil
+	}
+
+	// Commit the changes
+	commitCmd := exec.CommandContext(ctx, "git", "commit", "-m", message)
+	commitCmd.Dir = worktreePath
+	if err := commitCmd.Run(); err != nil {
+		return fmt.Errorf("git commit failed: %w", err)
+	}
+
+	logging.Info(ctx, "committed attempt checkpoint",
+		slog.String("message", message),
+	)
+
+	return nil
 }
 
 // RunTrailByID executes a trail by its ID.
