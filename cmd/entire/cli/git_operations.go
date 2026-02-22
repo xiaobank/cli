@@ -76,9 +76,6 @@ func getGitConfigValue(key string) string {
 }
 
 // IsOnDefaultBranch checks if the repository is currently on the default branch.
-// It determines the default branch by:
-// 1. Checking the remote origin's HEAD reference
-// 2. Falling back to common names (main, master) if remote HEAD is unavailable
 // Returns (isDefault, branchName, error)
 func IsOnDefaultBranch() (bool, string, error) {
 	repo, err := openRepository()
@@ -98,13 +95,10 @@ func IsOnDefaultBranch() (bool, string, error) {
 	}
 
 	currentBranch := head.Name().Short()
+	defaultBranch := strategy.GetDefaultBranchName(repo)
 
-	// Try to get default branch from remote origin's HEAD
-	defaultBranch := getDefaultBranchFromRemote(repo)
-
-	// If we couldn't determine from remote, use common defaults
+	// If we couldn't determine default branch, check common names
 	if defaultBranch == "" {
-		// Check if current branch is a common default name
 		if currentBranch == "main" || currentBranch == "master" {
 			return true, currentBranch, nil
 		}
@@ -112,30 +106,6 @@ func IsOnDefaultBranch() (bool, string, error) {
 	}
 
 	return currentBranch == defaultBranch, currentBranch, nil
-}
-
-// getDefaultBranchFromRemote tries to determine the default branch from the origin remote.
-// Returns empty string if unable to determine.
-func getDefaultBranchFromRemote(repo *git.Repository) string {
-	// Try to get the symbolic reference for origin/HEAD
-	ref, err := repo.Reference(plumbing.NewRemoteReferenceName("origin", "HEAD"), true)
-	if err == nil && ref != nil {
-		// ref.Target() gives us something like "refs/remotes/origin/main"
-		target := ref.Target().String()
-		if strings.HasPrefix(target, "refs/remotes/origin/") {
-			return strings.TrimPrefix(target, "refs/remotes/origin/")
-		}
-	}
-
-	// Fallback: check if origin/main or origin/master exists
-	if _, err := repo.Reference(plumbing.NewRemoteReferenceName("origin", "main"), true); err == nil {
-		return "main"
-	}
-	if _, err := repo.Reference(plumbing.NewRemoteReferenceName("origin", "master"), true); err == nil {
-		return "master"
-	}
-
-	return ""
 }
 
 // ShouldSkipOnDefaultBranch checks if we're on the default branch.

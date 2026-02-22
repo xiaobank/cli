@@ -8,9 +8,12 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
+	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/trail"
 
 	"github.com/charmbracelet/huh"
+	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/spf13/cobra"
 )
 
@@ -328,7 +331,24 @@ func runTrailCreate(cmd *cobra.Command, title, branch, baseBranch string, labels
 }
 
 func runTrailCreateInteractive() (title, description, branch, baseBranch string, err error) {
-	form := NewAccessibleForm(
+	// Get current branch and available branches for selection
+	repo, err := openRepository()
+	if err != nil {
+		return "", "", "", "", fmt.Errorf("failed to open repository: %w", err)
+	}
+
+	currentBranch, defaultBranch, allBranches := getBranchInfo(repo)
+
+	// Build base branch options
+	var baseBranchChoice string
+	baseOptions := []huh.Option[string]{
+		huh.NewOption("Current branch ("+currentBranch+")", "current"),
+		huh.NewOption("Default branch ("+defaultBranch+")", "default"),
+		huh.NewOption("Pick from branches...", "pick"),
+	}
+
+	// First form: title, description, base branch choice
+	form1 := NewAccessibleForm(
 		huh.NewGroup(
 			huh.NewInput().
 				Title("Title").
@@ -341,16 +361,17 @@ func runTrailCreateInteractive() (title, description, branch, baseBranch string,
 				CharLimit(4000),
 			huh.NewInput().
 				Title("Branch").
-				Description("Branch name (leave empty for default)").
+				Description("Branch name for this trail (leave empty for auto-generated)").
 				Value(&branch),
-			huh.NewInput().
+			huh.NewSelect[string]().
 				Title("Base Branch").
-				Description("Base branch to create from (leave empty for main)").
-				Value(&baseBranch),
+				Description("Which branch should the trail start from?").
+				Options(baseOptions...).
+				Value(&baseBranchChoice),
 		),
 	)
 
-	if err := form.Run(); err != nil {
+	if err := form1.Run(); err != nil {
 		return "", "", "", "", fmt.Errorf("cancelled: %w", err)
 	}
 
@@ -358,7 +379,66 @@ func runTrailCreateInteractive() (title, description, branch, baseBranch string,
 		return "", "", "", "", errors.New("title is required")
 	}
 
+	// Resolve base branch choice
+	switch baseBranchChoice {
+	case "current":
+		baseBranch = currentBranch
+	case "default":
+		baseBranch = defaultBranch
+	case "pick":
+		// Show branch picker with autocomplete
+		branchOptions := make([]huh.Option[string], len(allBranches))
+		for i, b := range allBranches {
+			branchOptions[i] = huh.NewOption(b, b)
+		}
+
+		form2 := NewAccessibleForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Select Branch").
+					Description("Choose the base branch").
+					Options(branchOptions...).
+					Value(&baseBranch).
+					Filtering(true).
+					Height(10),
+			),
+		)
+
+		if err := form2.Run(); err != nil {
+			return "", "", "", "", fmt.Errorf("cancelled: %w", err)
+		}
+	}
+
 	return title, description, branch, baseBranch, nil
+}
+
+// getBranchInfo returns current branch, default branch, and all branch names.
+func getBranchInfo(repo *git.Repository) (current, defaultBr string, all []string) {
+	// Get current branch
+	head, err := repo.Head()
+	if err == nil && head.Name().IsBranch() {
+		current = head.Name().Short()
+	} else {
+		current = "HEAD"
+	}
+
+	// Get all branches
+	branches, err := repo.Branches()
+	if err == nil {
+		_ = branches.ForEach(func(ref *plumbing.Reference) error { //nolint:errcheck // Collecting branches best-effort; partial list is acceptable
+			name := ref.Name().Short()
+			all = append(all, name)
+			return nil
+		})
+	}
+
+	// Determine default branch from origin/HEAD
+	defaultBr = strategy.GetDefaultBranchName(repo)
+	if defaultBr == "" {
+		defaultBr = "main" // Fallback if no remote configured
+	}
+
+	return current, defaultBr, all
 }
 
 func runTrailDelete(cmd *cobra.Command, idStr string, force bool) error {
