@@ -119,7 +119,7 @@ func (s *Store) Create(ctx context.Context, trail *Trail) error {
 	}
 
 	authorName, authorEmail := checkpoint.GetGitAuthorFromRepo(s.repo)
-	commitMsg := fmt.Sprintf("Create trail: %s\n\n%s", trail.ID.Short(), trail.Title)
+	commitMsg := fmt.Sprintf("Create trail: %s\n\n%s", trail.ID, trail.Title)
 	newCommitHash, err := s.createCommit(newTreeHash, ref.Hash(), commitMsg, authorName, authorEmail)
 	if err != nil {
 		return fmt.Errorf("failed to create commit: %w", err)
@@ -270,7 +270,7 @@ func (s *Store) Update(ctx context.Context, trail *Trail) error {
 	}
 
 	authorName, authorEmail := checkpoint.GetGitAuthorFromRepo(s.repo)
-	commitMsg := fmt.Sprintf("Update trail: %s\n\n%s", trail.ID.Short(), trail.Title)
+	commitMsg := fmt.Sprintf("Update trail: %s\n\n%s", trail.ID, trail.Title)
 	newCommitHash, err := s.createCommit(newTreeHash, ref.Hash(), commitMsg, authorName, authorEmail)
 	if err != nil {
 		return fmt.Errorf("failed to create commit: %w", err)
@@ -316,7 +316,7 @@ func (s *Store) Delete(ctx context.Context, id TrailID) error {
 	}
 
 	authorName, authorEmail := checkpoint.GetGitAuthorFromRepo(s.repo)
-	commitMsg := "Delete trail: " + id.Short()
+	commitMsg := "Delete trail: " + id.String()
 	newCommitHash, err := s.createCommit(newTreeHash, ref.Hash(), commitMsg, authorName, authorEmail)
 	if err != nil {
 		return fmt.Errorf("failed to create commit: %w", err)

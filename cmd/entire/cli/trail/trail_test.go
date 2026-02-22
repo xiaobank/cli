@@ -64,15 +64,6 @@ func TestTrailID_Generate(t *testing.T) {
 	}
 }
 
-func TestTrailID_Short(t *testing.T) {
-	t.Parallel()
-
-	id := TrailID("a1b2c3d4e5f6")
-	if got := id.Short(); got != "a1b2c3d4" {
-		t.Errorf("Short() = %q, want %q", got, "a1b2c3d4")
-	}
-}
-
 func TestTrail_Validate(t *testing.T) {
 	t.Parallel()
 

@@ -15,6 +15,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
+	"github.com/entireio/cli/cmd/entire/cli/settings"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
@@ -51,7 +52,7 @@ type RunnerConfig struct {
 	MaxAttempts int
 
 	// EntireCLI is the path to the entire CLI binary for running validation.
-	// Defaults to "entire".
+	// Defaults to "entire". If settings.local_dev is true, uses "go run ./cmd/entire".
 	EntireCLI string
 }
 
@@ -304,7 +305,7 @@ func (r *Runner) RunTrail(ctx context.Context, trail *Trail) RunResult {
 			validationStatus = "FAILED"
 		}
 		commitMsg := fmt.Sprintf("Trail %s attempt %d: %s\n\nValidation: %s",
-			trail.ID.Short(), attempt, trail.Title, validationStatus)
+			trail.ID, attempt, trail.Title, validationStatus)
 		if commitErr := r.commitAttempt(ctx, worktreePath, commitMsg, validationOutput); commitErr != nil {
 			logging.Warn(ctx, "failed to commit attempt",
 				slog.String("trail_id", trail.ID.String()),
@@ -464,13 +465,20 @@ func (r *Runner) runValidation(ctx context.Context, worktreePath string) (bool, 
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 
-	entireCLI := r.config.EntireCLI
-	if entireCLI == "" {
-		entireCLI = "entire"
+	// Check settings for local_dev mode
+	var cmd *exec.Cmd
+	if s, err := settings.Load(); err == nil && s.LocalDev {
+		// Use "go run ./cmd/entire" for local development
+		// The worktree is a complete checkout of the repo, so ./cmd/entire exists there
+		cmd = exec.CommandContext(ctx, "go", "run", "./cmd/entire", "validate", "--json")
+	} else {
+		entireCLI := r.config.EntireCLI
+		if entireCLI == "" {
+			entireCLI = "entire"
+		}
+		//nolint:gosec // entireCLI is from trusted config
+		cmd = exec.CommandContext(ctx, entireCLI, "validate", "--json")
 	}
-
-	//nolint:gosec // entireCLI is from trusted config
-	cmd := exec.CommandContext(ctx, entireCLI, "validate", "--json")
 	cmd.Dir = worktreePath
 
 	var stdout, stderr bytes.Buffer

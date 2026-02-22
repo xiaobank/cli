@@ -226,10 +226,10 @@ func runTrailRunnerRunOnce(cmd *cobra.Command, agentName, model string, timeout 
 	for _, result := range results {
 		if result.Success {
 			fmt.Fprintf(cmd.OutOrStdout(), "Trail %s completed successfully (%s, %d attempts)\n",
-				result.Trail.ID.Short(), result.Duration.Round(time.Second), result.Attempts)
+				result.Trail.ID, result.Duration.Round(time.Second), result.Attempts)
 		} else {
 			fmt.Fprintf(cmd.OutOrStdout(), "Trail %s failed after %d attempts: %v\n",
-				result.Trail.ID.Short(), result.Attempts, result.Error)
+				result.Trail.ID, result.Attempts, result.Error)
 		}
 	}
 

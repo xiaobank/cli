@@ -188,8 +188,8 @@ func runTrailList(cmd *cobra.Command, statusFilter string, jsonOutput bool) erro
 	}
 
 	// Print table
-	fmt.Fprintln(cmd.OutOrStdout(), "ID          STATUS        BRANCH                    TITLE")
-	fmt.Fprintln(cmd.OutOrStdout(), strings.Repeat("-", 80))
+	fmt.Fprintln(cmd.OutOrStdout(), "ID            STATUS        BRANCH                    TITLE")
+	fmt.Fprintln(cmd.OutOrStdout(), strings.Repeat("-", 85))
 
 	for _, t := range trails {
 		status := formatTrailState(t.State)
@@ -201,8 +201,8 @@ func runTrailList(cmd *cobra.Command, statusFilter string, jsonOutput bool) erro
 		if len(title) > 30 {
 			title = title[:27] + "..."
 		}
-		fmt.Fprintf(cmd.OutOrStdout(), "%-11s %-13s %-25s %s\n",
-			t.ID.Short(), status, branch, title)
+		fmt.Fprintf(cmd.OutOrStdout(), "%-13s %-13s %-25s %s\n",
+			t.ID, status, branch, title)
 	}
 
 	return nil
@@ -390,7 +390,7 @@ func runTrailDelete(cmd *cobra.Command, idStr string, force bool) error {
 		form := NewAccessibleForm(
 			huh.NewGroup(
 				huh.NewConfirm().
-					Title(fmt.Sprintf("Delete trail %s?", id.Short())).
+					Title(fmt.Sprintf("Delete trail %s?", id)).
 					Description(t.Title).
 					Value(&confirm),
 			),

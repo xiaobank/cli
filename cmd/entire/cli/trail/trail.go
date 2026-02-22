@@ -78,14 +78,6 @@ func (id TrailID) IsEmpty() bool {
 	return id == EmptyTrailID
 }
 
-// Short returns the first 8 characters of the trail ID for display.
-func (id TrailID) Short() string {
-	if len(id) >= 8 {
-		return string(id[:8])
-	}
-	return string(id)
-}
-
 // MarshalJSON implements json.Marshaler.
 func (id TrailID) MarshalJSON() ([]byte, error) {
 	data, err := json.Marshal(string(id))
