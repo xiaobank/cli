@@ -1,0 +1,13 @@
+{
+  "trail_id": "e97cfe6194d9",
+  "branch": "this-is-a-test",
+  "base": "main",
+  "title": "This is a test",
+  "description": "",
+  "status": "draft",
+  "author": "Daniel Adams",
+  "assignees": [],
+  "labels": [],
+  "created_at": "2026-02-23T15:30:23.616114+01:00",
+  "updated_at": "2026-02-23T15:30:23.616114+01:00"
+}
