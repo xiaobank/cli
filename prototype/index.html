@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Checkpoint Viewer</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-card: #161b22;
+    --bg-card-hover: #1c2333;
+    --bg-detail: #0d1117;
+    --bg-code: #0b0e14;
+    --border: #30363d;
+    --border-focus: #58a6ff;
+    --text: #e6edf3;
+    --text-muted: #8b949e;
+    --text-dim: #6e7681;
+    --accent: #58a6ff;
+    --accent-dim: #1f6feb;
+    --green: #3fb950;
+    --orange: #d29922;
+    --red: #f85149;
+    --purple: #bc8cff;
+    --yellow: #e3b341;
+    --pill-bg: #1f2937;
+    --pill-border: #374151;
+    --radius: 8px;
+    --font-mono: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+    --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: var(--font-sans); font-size: 14px; line-height: 1.5; }
+
+  /* Header */
+  header { position: sticky; top: 0; z-index: 100; background: var(--bg-card); border-bottom: 1px solid var(--border); padding: 0 24px; }
+  .header-top { display: flex; align-items: center; gap: 12px; height: 44px; }
+  header h1 { font-size: 15px; font-weight: 600; }
+  .branch-badge { font-family: var(--font-mono); font-size: 12px; color: var(--accent); background: rgba(88,166,255,.1); border: 1px solid rgba(88,166,255,.2); padding: 2px 10px; border-radius: 12px; }
+  .refresh-indicator { margin-left: auto; font-size: 11px; color: var(--text-dim); display: flex; align-items: center; gap: 5px; }
+  .refresh-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: pulse 3s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+  /* Tabs */
+  .tabs { display: flex; gap: 0; margin-top: -1px; }
+  .tab { padding: 8px 18px; font-size: 13px; font-weight: 500; color: var(--text-muted); cursor: pointer; border-bottom: 2px solid transparent; transition: color .15s, border-color .15s; user-select: none; display: flex; align-items: center; gap: 6px; }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+  .tab-count { font-family: var(--font-mono); font-size: 11px; background: var(--pill-bg); border: 1px solid var(--pill-border); padding: 0 6px; border-radius: 10px; color: var(--text-dim); min-width: 18px; text-align: center; }
+
+  /* Main */
+  main { max-width: 1000px; margin: 0 auto; padding: 20px 24px; }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  /* Shared card styles */
+  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 8px; transition: background .15s, border-color .15s; }
+  .card:hover { background: var(--bg-card-hover); }
+  .card.expanded { border-color: var(--accent-dim); }
+  .card-row { display: flex; align-items: center; gap: 8px; padding: 10px 14px; cursor: pointer; }
+  .card-detail { display: none; border-top: 1px solid var(--border); background: var(--bg-detail); border-radius: 0 0 var(--radius) var(--radius); padding: 16px; }
+  .card.expanded .card-detail { display: block; }
+
+  /* Chevron */
+  .chevron { color: var(--text-dim); font-size: 11px; transition: transform .2s; flex-shrink: 0; width: 14px; text-align: center; }
+  .card.expanded .chevron { transform: rotate(90deg); }
+
+  /* Badges */
+  .badge { font-family: var(--font-mono); font-size: 10px; padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
+  .badge-accent { color: var(--accent); background: rgba(88,166,255,.1); }
+  .badge-purple { color: var(--purple); background: rgba(188,140,255,.1); border: 1px solid rgba(188,140,255,.2); }
+  .badge-green  { color: var(--green); background: rgba(63,185,80,.15); border: 1px solid rgba(63,185,80,.3); }
+  .badge-orange { color: var(--orange); background: rgba(210,153,34,.15); border: 1px solid rgba(210,153,34,.3); }
+  .badge-dim    { color: var(--text-muted); background: rgba(139,148,158,.12); border: 1px solid rgba(139,148,158,.25); }
+  .badge-muted  { color: var(--text-dim); background: var(--pill-bg); border: 1px solid var(--pill-border); }
+
+  /* Phase badges */
+  .phase-active  { color: var(--green); background: rgba(63,185,80,.15); border: 1px solid rgba(63,185,80,.3); }
+  .phase-idle    { color: var(--orange); background: rgba(210,153,34,.15); border: 1px solid rgba(210,153,34,.3); }
+  .phase-ended   { color: var(--text-muted); background: rgba(139,148,158,.12); border: 1px solid rgba(139,148,158,.25); }
+
+  /* Truncated text */
+  .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .flex-fill { flex: 1; min-width: 0; }
+  .ml-auto { margin-left: auto; }
+  .text-dim { color: var(--text-dim); }
+  .text-muted { color: var(--text-muted); }
+  .text-sm { font-size: 12px; }
+  .text-xs { font-size: 11px; }
+  .mono { font-family: var(--font-mono); }
+  .gap-6 { gap: 6px; }
+  .gap-8 { gap: 8px; }
+  .mt-8 { margin-top: 8px; }
+  .mt-12 { margin-top: 12px; }
+  .mb-8 { margin-bottom: 8px; }
+
+  /* Detail sections */
+  .detail-section { margin-bottom: 14px; }
+  .detail-section:last-child { margin-bottom: 0; }
+  .section-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim); margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+
+  /* Key-value table */
+  .kv-table { width: 100%; border-collapse: collapse; }
+  .kv-table tr { border-bottom: 1px solid rgba(48,54,61,.5); }
+  .kv-table tr:last-child { border-bottom: none; }
+  .kv-table td { padding: 4px 0; font-size: 12px; vertical-align: top; }
+  .kv-table td:first-child { color: var(--text-dim); width: 200px; padding-right: 12px; font-family: var(--font-mono); font-size: 11px; }
+  .kv-table td:last-child { color: var(--text); word-break: break-all; }
+  .kv-table .nested { padding-left: 16px; }
+
+  /* File list / pills */
+  .file-list { display: flex; flex-wrap: wrap; gap: 4px; }
+  .file-pill { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); background: var(--pill-bg); border: 1px solid var(--pill-border); padding: 1px 8px; border-radius: 10px; max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* Token stats */
+  .token-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(90px, 1fr)); gap: 6px; }
+  .token-stat { text-align: center; padding: 6px; background: var(--bg); border-radius: 4px; border: 1px solid var(--border); }
+  .token-stat-value { font-family: var(--font-mono); font-size: 15px; font-weight: 600; color: var(--text); }
+  .token-stat-label { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .03em; margin-top: 1px; }
+
+  /* Attribution bar */
+  .attr-labels { font-size: 11px; color: var(--text-dim); display: flex; justify-content: space-between; margin-bottom: 3px; }
+  .attr-track { height: 7px; background: var(--pill-bg); border-radius: 4px; overflow: hidden; display: flex; }
+  .attr-agent-fill { background: var(--accent); height: 100%; }
+  .attr-human-fill { background: var(--green); height: 100%; }
+
+  /* Summary box */
+  .summary-box { background: rgba(88,166,255,.04); border: 1px solid rgba(88,166,255,.1); border-radius: 6px; padding: 10px 12px; }
+  .summary-box .intent { font-size: 13px; color: var(--text); margin-bottom: 4px; }
+  .summary-box .outcome { font-size: 12px; color: var(--text-muted); }
+
+  /* Code / blob viewer */
+  .blob-viewer { background: var(--bg-code); border: 1px solid var(--border); border-radius: 6px; max-height: 500px; overflow: auto; margin-top: 8px; }
+  .blob-content { font-family: var(--font-mono); font-size: 11px; line-height: 1.6; color: var(--text-muted); padding: 12px; white-space: pre-wrap; word-break: break-all; }
+  .blob-loading { padding: 20px; color: var(--text-dim); font-size: 12px; text-align: center; }
+
+  /* File browser */
+  .file-browser { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .file-entry { display: flex; align-items: center; gap: 6px; padding: 6px 12px; font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); border-bottom: 1px solid rgba(48,54,61,.3); cursor: pointer; transition: background .1s; }
+  .file-entry:last-child { border-bottom: none; }
+  .file-entry:hover { background: var(--bg-card-hover); color: var(--text); }
+  .file-entry.active { background: rgba(88,166,255,.08); color: var(--accent); }
+  .file-icon { font-size: 12px; width: 16px; text-align: center; flex-shrink: 0; }
+
+  /* Learnings list */
+  .learning-item { font-size: 12px; color: var(--text-muted); padding: 4px 0; border-bottom: 1px solid rgba(48,54,61,.3); }
+  .learning-item:last-child { border-bottom: none; }
+  .learning-path { font-family: var(--font-mono); font-size: 11px; color: var(--accent); }
+  .learning-finding { margin-top: 2px; }
+
+  /* Timeline dots */
+  .timeline { position: relative; padding-left: 24px; }
+  .timeline::before { content: ''; position: absolute; left: 7px; top: 0; bottom: 0; width: 2px; background: var(--border); }
+  .timeline .card::before { content: ''; position: absolute; left: -21px; top: 16px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent-dim); border: 2px solid var(--accent); }
+  .timeline .card { position: relative; }
+
+  /* Sub-session cards in checkpoint detail */
+  .sub-session { background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 8px; }
+  .sub-session-header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; font-size: 12px; }
+  .sub-session-detail { display: none; border-top: 1px solid var(--border); padding: 12px; }
+  .sub-session.expanded .sub-session-detail { display: block; }
+  .sub-session .chevron { font-size: 10px; }
+  .sub-session.expanded .chevron { transform: rotate(90deg); }
+
+  /* Raw JSON toggle */
+  .raw-toggle { font-size: 11px; color: var(--text-dim); cursor: pointer; padding: 2px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); transition: color .15s, border-color .15s; user-select: none; }
+  .raw-toggle:hover { color: var(--text-muted); border-color: var(--text-dim); }
+  .raw-toggle.active { color: var(--accent); border-color: var(--accent-dim); }
+
+  /* Empty state */
+  .empty-state { text-align: center; padding: 48px 20px; color: var(--text-dim); font-size: 14px; }
+  .empty-icon { font-size: 28px; margin-bottom: 8px; opacity: .4; }
+
+  .error-banner { background: rgba(248,81,73,.1); border: 1px solid rgba(248,81,73,.3); color: var(--red); padding: 8px 16px; border-radius: var(--radius); font-size: 13px; margin-bottom: 12px; display: none; }
+
+  /* Prompt attributions */
+  .prompt-attr-grid { display: grid; grid-template-columns: auto 1fr 1fr 1fr 1fr; gap: 0; font-size: 11px; font-family: var(--font-mono); }
+  .prompt-attr-grid .cell { padding: 3px 8px; border-bottom: 1px solid rgba(48,54,61,.3); }
+  .prompt-attr-grid .cell-header { font-weight: 600; color: var(--text-dim); text-transform: uppercase; font-size: 10px; letter-spacing: .03em; }
+</style>
+</head>
+<body>
+<header>
+  <div class="header-top">
+    <h1>Checkpoint Viewer</h1>
+    <span class="branch-badge" id="branch">...</span>
+    <div class="refresh-indicator"><span class="refresh-dot"></span><span>auto-refresh 3s</span></div>
+  </div>
+  <nav class="tabs">
+    <div class="tab active" data-tab="sessions">Tracked Sessions <span class="tab-count" id="tc-sessions">0</span></div>
+    <div class="tab" data-tab="checkpoints">Checkpoints <span class="tab-count" id="tc-checkpoints">0</span></div>
+    <div class="tab" data-tab="shadow">Shadow Branches <span class="tab-count" id="tc-shadow">0</span></div>
+  </nav>
+</header>
+
+<main>
+  <div class="error-banner" id="error-banner"></div>
+  <div id="panel-sessions" class="tab-panel active"></div>
+  <div id="panel-checkpoints" class="tab-panel"></div>
+  <div id="panel-shadow" class="tab-panel"></div>
+</main>
+
+<script>
+/* ---- Helpers ---- */
+const rtf = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
+function relTime(d) {
+  if (!d) return '';
+  const ms = new Date(d).getTime() - Date.now();
+  const s = Math.round(ms/1000), m = Math.round(ms/60000), h = Math.round(ms/3600000), dy = Math.round(ms/86400000);
+  if (Math.abs(s)<60) return rtf.format(s,'second');
+  if (Math.abs(m)<60) return rtf.format(m,'minute');
+  if (Math.abs(h)<24) return rtf.format(h,'hour');
+  return rtf.format(dy,'day');
+}
+function esc(s) { return s == null ? '' : String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function fmtNum(n) { if(n==null)return'0'; if(n>=1e6)return(n/1e6).toFixed(1)+'M'; if(n>=1e3)return(n/1e3).toFixed(1)+'K'; return n.toString(); }
+
+function kvRow(key, val) {
+  if (val === undefined || val === null || val === '') return '';
+  if (typeof val === 'object') val = JSON.stringify(val);
+  return `<tr><td>${esc(key)}</td><td>${esc(String(val))}</td></tr>`;
+}
+
+function filePills(files, max) {
+  if (!files || !files.length) return '';
+  const shown = files.slice(0, max||10);
+  let h = '<div class="file-list">' + shown.map(f=>`<span class="file-pill">${esc(f)}</span>`).join('');
+  if (files.length > shown.length) h += `<span class="file-pill">+${files.length-shown.length} more</span>`;
+  return h + '</div>';
+}
+
+function tokenGrid(tu) {
+  if (!tu) return '';
+  const stats = [
+    [tu.input_tokens, 'Input'],
+    [tu.output_tokens, 'Output'],
+    [tu.api_call_count, 'API Calls'],
+    [tu.cache_read_tokens, 'Cache Read'],
+    [tu.cache_creation_tokens, 'Cache Write'],
+  ];
+  return '<div class="token-grid">' + stats.filter(([v])=>v).map(([v,l])=>`<div class="token-stat"><div class="token-stat-value">${fmtNum(v)}</div><div class="token-stat-label">${l}</div></div>`).join('') + '</div>';
+}
+
+function subagentTokens(tu) {
+  if (!tu || !tu.subagent_tokens) return '';
+  const st = tu.subagent_tokens;
+  return `<div class="mt-8"><div class="section-title">Subagent Tokens</div>${tokenGrid(st)}</div>`;
+}
+
+function attrBar(a) {
+  if (!a || a.total_committed <= 0) return '';
+  const p = Math.round(a.agent_percentage);
+  return `<div><div class="attr-labels"><span>Agent ${p}% (${a.agent_lines} lines)</span><span>Human ${100-p}% (${a.human_added + a.human_modified} lines)</span></div><div class="attr-track"><div class="attr-agent-fill" style="width:${p}%"></div><div class="attr-human-fill" style="width:${100-p}%"></div></div></div>`;
+}
+
+function summaryBox(s) {
+  if (!s) return '';
+  let h = '<div class="summary-box">';
+  if (s.intent) h += `<div class="intent">${esc(s.intent)}</div>`;
+  if (s.outcome) h += `<div class="outcome">${esc(s.outcome)}</div>`;
+  h += '</div>';
+  // Learnings
+  const lrn = s.learnings;
+  if (lrn) {
+    if (lrn.repo && lrn.repo.length) h += `<div class="mt-8"><div class="section-title">Repo Learnings</div>${lrn.repo.map(r=>`<div class="learning-item">${esc(r)}</div>`).join('')}</div>`;
+    if (lrn.code && lrn.code.length) h += `<div class="mt-8"><div class="section-title">Code Learnings</div>${lrn.code.map(c=>`<div class="learning-item"><span class="learning-path">${esc(c.path)}${c.line?':'+c.line:''}</span><div class="learning-finding">${esc(c.finding)}</div></div>`).join('')}</div>`;
+    if (lrn.workflow && lrn.workflow.length) h += `<div class="mt-8"><div class="section-title">Workflow Learnings</div>${lrn.workflow.map(w=>`<div class="learning-item">${esc(w)}</div>`).join('')}</div>`;
+  }
+  if (s.friction && s.friction.length) h += `<div class="mt-8"><div class="section-title">Friction</div>${s.friction.map(f=>`<div class="learning-item">${esc(f)}</div>`).join('')}</div>`;
+  if (s.open_items && s.open_items.length) h += `<div class="mt-8"><div class="section-title">Open Items</div>${s.open_items.map(o=>`<div class="learning-item">${esc(o)}</div>`).join('')}</div>`;
+  return h;
+}
+
+function promptAttributions(attrs) {
+  if (!attrs || !attrs.length) return '';
+  let h = '<div class="prompt-attr-grid">';
+  h += '<div class="cell cell-header">#</div><div class="cell cell-header">User +</div><div class="cell cell-header">User -</div><div class="cell cell-header">Agent +</div><div class="cell cell-header">Agent -</div>';
+  attrs.forEach(a => {
+    h += `<div class="cell">${a.checkpoint_number}</div><div class="cell" style="color:var(--green)">${a.user_lines_added}</div><div class="cell" style="color:var(--red)">${a.user_lines_removed}</div><div class="cell" style="color:var(--accent)">${a.agent_lines_added}</div><div class="cell" style="color:var(--orange)">${a.agent_lines_removed}</div>`;
+  });
+  return h + '</div>';
+}
+
+/* Build a full key-value table from any JSON object, showing ALL fields */
+function fullKvTable(obj, exclude) {
+  if (!obj) return '';
+  const ex = new Set(exclude || []);
+  let rows = '';
+  for (const [k, v] of Object.entries(obj)) {
+    if (ex.has(k)) continue;
+    if (v === null || v === undefined) continue;
+    if (Array.isArray(v) && v.length === 0) continue;
+    if (typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0) continue;
+
+    let display;
+    if (Array.isArray(v)) {
+      if (v.every(x => typeof x === 'string')) display = v.join(', ');
+      else display = JSON.stringify(v, null, 2);
+    } else if (typeof v === 'object') {
+      display = JSON.stringify(v, null, 2);
+    } else {
+      display = String(v);
+    }
+    rows += `<tr><td>${esc(k)}</td><td>${esc(display)}</td></tr>`;
+  }
+  return rows ? `<table class="kv-table">${rows}</table>` : '';
+}
+
+/* ---- Tabs ---- */
+document.querySelector('.tabs').addEventListener('click', e => {
+  const tab = e.target.closest('.tab');
+  if (!tab) return;
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  tab.classList.add('active');
+  document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
+  if (tab.dataset.tab === 'shadow' && !shadowLoaded) fetchShadowBranches();
+});
+
+/* ---- Toggle helpers ---- */
+function toggle(el) {
+  el.classList.toggle('expanded');
+}
+
+/* ---- Render: Tracked Sessions (raw JSON, all fields) ---- */
+const sessionExpanded = new Set();
+const sessionRawMode = new Set();
+
+function renderSessions(sessions) {
+  const el = document.getElementById('panel-sessions');
+  document.getElementById('tc-sessions').textContent = sessions.length;
+  if (!sessions.length) { el.innerHTML = '<div class="empty-state"><div class="empty-icon">&#x1f4cb;</div>No tracked sessions</div>'; return; }
+
+  // Sort: active first, then idle, then ended, then by started_at desc
+  const phaseOrder = { active: 0, idle: 1, ended: 2 };
+  sessions.sort((a, b) => {
+    const pa = phaseOrder[(a.phase||'').toLowerCase()] ?? 3;
+    const pb = phaseOrder[(b.phase||'').toLowerCase()] ?? 3;
+    if (pa !== pb) return pa - pb;
+    return new Date(b.started_at||0) - new Date(a.started_at||0);
+  });
+
+  el.innerHTML = sessions.map((s, i) => {
+    const sid = s.session_id || `session-${i}`;
+    const phase = (s.phase || 'unknown').toLowerCase();
+    const expanded = sessionExpanded.has(sid);
+    const rawMode = sessionRawMode.has(sid);
+
+    // Compact row
+    let row = `<div class="card-row" onclick="toggleSession('${esc(sid)}')">
+      <span class="badge phase-${esc(phase)}" style="font-size:10px;font-weight:600;text-transform:uppercase">${esc(s.phase||'?')}</span>
+      <span class="text-sm" style="font-weight:500">${esc(s.agent_type||'Unknown')}</span>
+      <span class="text-xs text-dim truncate flex-fill">${esc(s.first_prompt ? s.first_prompt.substring(0,100) : '')}</span>
+      <span class="text-xs text-dim">steps:${s.checkpoint_count||0}</span>
+      <span class="text-xs text-dim">${relTime(s.started_at)}</span>
+      <span class="text-xs mono text-dim">${esc(sid.substring(0,8))}...</span>
+      <span class="chevron">&#x25B8;</span>
+    </div>`;
+
+    // Detail
+    let detail = '<div class="card-detail">';
+    detail += `<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+      <div class="section-title" style="margin:0">Session State</div>
+      <span class="raw-toggle ${rawMode?'active':''}" onclick="event.stopPropagation();toggleSessionRaw('${esc(sid)}')">RAW JSON</span>
+      <span class="text-xs mono text-dim ml-auto">.git/entire-sessions/${esc(sid)}.json</span>
+    </div>`;
+
+    if (rawMode) {
+      detail += `<div class="blob-viewer"><pre class="blob-content">${esc(JSON.stringify(s, null, 2))}</pre></div>`;
+    } else {
+      // Structured view - show ALL fields
+      const specialKeys = ['token_usage', 'prompt_attributions', 'pending_prompt_attribution', 'files_touched', 'untracked_files_at_start', 'first_prompt'];
+      detail += `<div class="detail-section">${fullKvTable(s, specialKeys)}</div>`;
+
+      if (s.first_prompt) {
+        detail += `<div class="detail-section"><div class="section-title">First Prompt</div><div class="blob-viewer" style="max-height:200px"><pre class="blob-content">${esc(s.first_prompt)}</pre></div></div>`;
+      }
+
+      if (s.token_usage) {
+        detail += `<div class="detail-section"><div class="section-title">Token Usage</div>${tokenGrid(s.token_usage)}${subagentTokens(s.token_usage)}</div>`;
+      }
+
+      if (s.files_touched && s.files_touched.length) {
+        detail += `<div class="detail-section"><div class="section-title">Files Touched (${s.files_touched.length})</div>${filePills(s.files_touched, 30)}</div>`;
+      }
+
+      if (s.untracked_files_at_start && s.untracked_files_at_start.length) {
+        detail += `<div class="detail-section"><div class="section-title">Untracked Files at Start (${s.untracked_files_at_start.length})</div>${filePills(s.untracked_files_at_start, 20)}</div>`;
+      }
+
+      if (s.prompt_attributions && s.prompt_attributions.length) {
+        detail += `<div class="detail-section"><div class="section-title">Prompt Attributions (${s.prompt_attributions.length})</div>${promptAttributions(s.prompt_attributions)}</div>`;
+      }
+
+      if (s.pending_prompt_attribution) {
+        detail += `<div class="detail-section"><div class="section-title">Pending Prompt Attribution</div>${fullKvTable(s.pending_prompt_attribution)}</div>`;
+      }
+    }
+
+    detail += '</div>';
+    return `<div class="card${expanded?' expanded':''}" id="sess-${esc(sid)}">${row}${detail}</div>`;
+  }).join('');
+}
+
+function toggleSession(sid) {
+  sessionExpanded.has(sid) ? sessionExpanded.delete(sid) : sessionExpanded.add(sid);
+  renderSessions(lastSessions);
+}
+
+function toggleSessionRaw(sid) {
+  sessionRawMode.has(sid) ? sessionRawMode.delete(sid) : sessionRawMode.add(sid);
+  renderSessions(lastSessions);
+}
+
+/* ---- Render: Checkpoints ---- */
+const cpExpanded = new Set();
+const cpSessionExpanded = new Set();
+const cpRawMode = new Set();
+const cpBlobCache = {};  // key: path -> content
+const cpBlobActive = {};  // key: cpid+idx -> path
+
+function renderCheckpoints(checkpoints) {
+  const el = document.getElementById('panel-checkpoints');
+  document.getElementById('tc-checkpoints').textContent = checkpoints.length;
+  if (!checkpoints.length) { el.innerHTML = '<div class="empty-state"><div class="empty-icon">&#x1f50d;</div>No checkpoints found</div>'; return; }
+
+  el.innerHTML = '<div class="timeline">' + checkpoints.map(cp => {
+    const expanded = cpExpanded.has(cp.checkpoint_id);
+    const sessionCount = (cp.sessions||[]).length;
+
+    let row = `<div class="card-row" onclick="toggleCp('${esc(cp.checkpoint_id)}')">
+      <span class="badge badge-accent" style="font-size:12px">${esc(cp.short_hash)}</span>
+      <span class="text-sm truncate flex-fill" style="font-weight:500">${esc(cp.subject)}</span>
+      <span class="badge badge-purple">${esc(cp.checkpoint_id)}</span>
+      ${sessionCount > 0 ? `<span class="badge badge-muted">${sessionCount} sess</span>` : ''}
+      <span class="text-xs text-dim">${relTime(cp.date)}</span>
+      <span class="chevron">&#x25B8;</span>
+    </div>`;
+
+    let detail = '';
+    if (expanded) {
+      detail = `<div class="card-detail">${renderCpDetail(cp)}</div>`;
+    } else {
+      detail = '<div class="card-detail"></div>';
+    }
+
+    return `<div class="card${expanded?' expanded':''}">${row}${detail}</div>`;
+  }).join('') + '</div>';
+}
+
+function toggleCp(cpid) {
+  cpExpanded.has(cpid) ? cpExpanded.delete(cpid) : cpExpanded.add(cpid);
+  renderCheckpoints(lastCheckpoints);
+}
+
+function renderCpDetail(cp) {
+  const root = cp.root_metadata;
+  const sessions = cp.sessions || [];
+  const rawMode = cpRawMode.has(cp.checkpoint_id);
+  let h = '';
+
+  h += `<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+    <div class="section-title" style="margin:0">Checkpoint Detail</div>
+    <span class="raw-toggle ${rawMode?'active':''}" onclick="event.stopPropagation();toggleCpRaw('${esc(cp.checkpoint_id)}')">RAW JSON</span>
+  </div>`;
+
+  if (rawMode) {
+    h += `<div class="blob-viewer"><pre class="blob-content">${esc(JSON.stringify({commit:{hash:cp.hash,subject:cp.subject,date:cp.date},root_metadata:root,sessions:sessions.map(s=>s.metadata)}, null, 2))}</pre></div>`;
+    return h;
+  }
+
+  // Commit info
+  h += `<div class="detail-section"><div class="section-title">Commit</div><table class="kv-table">
+    ${kvRow('hash', cp.hash)}${kvRow('subject', cp.subject)}${kvRow('date', cp.date)}${kvRow('checkpoint_id', cp.checkpoint_id)}
+  </table></div>`;
+
+  // Root metadata
+  if (root) {
+    h += `<div class="detail-section"><div class="section-title">Root Metadata <span class="text-xs mono text-dim">${esc(cp.checkpoint_id.substring(0,2))}/${esc(cp.checkpoint_id.substring(2))}/metadata.json</span></div>`;
+    h += fullKvTable(root, ['token_usage', 'files_touched', 'sessions']);
+    if (root.token_usage) h += `<div class="mt-8">${tokenGrid(root.token_usage)}${subagentTokens(root.token_usage)}</div>`;
+    if (root.files_touched && root.files_touched.length) h += `<div class="mt-8">${filePills(root.files_touched, 30)}</div>`;
+    if (root.sessions && root.sessions.length) {
+      h += `<div class="mt-8"><div class="section-title">Session File Paths</div>`;
+      root.sessions.forEach((sp, i) => {
+        h += `<table class="kv-table" style="margin-bottom:6px"><tr><td colspan="2" style="color:var(--accent);font-weight:600">Session ${i}</td></tr>`;
+        for (const [k, v] of Object.entries(sp)) { if (v) h += kvRow(k, v); }
+        h += '</table>';
+      });
+      h += '</div>';
+    }
+    h += '</div>';
+  }
+
+  // Sessions
+  if (sessions.length) {
+    h += `<div class="detail-section"><div class="section-title">Sessions <span class="tab-count">${sessions.length}</span></div>`;
+    sessions.forEach((sess, idx) => {
+      const sessKey = cp.checkpoint_id + '-' + idx;
+      const sessExpanded = cpSessionExpanded.has(sessKey);
+      const meta = sess.metadata || {};
+      const files = sess.files || [];
+
+      h += `<div class="sub-session${sessExpanded?' expanded':''}" id="sub-${esc(sessKey)}">`;
+      h += `<div class="sub-session-header" onclick="toggleCpSession('${esc(sessKey)}')">
+        <span class="chevron">&#x25B8;</span>
+        <span class="badge badge-muted">#${idx}</span>
+        ${meta.agent ? `<span style="font-weight:500">${esc(meta.agent)}</span>` : ''}
+        ${meta.strategy ? `<span class="badge badge-muted">${esc(meta.strategy)}</span>` : ''}
+        ${meta.session_id ? `<span class="mono text-dim ml-auto">${esc(meta.session_id)}</span>` : ''}
+      </div>`;
+
+      if (sessExpanded) {
+        h += '<div class="sub-session-detail">';
+
+        // All metadata fields
+        const metaSpecial = ['token_usage', 'files_touched', 'summary', 'initial_attribution'];
+        h += `<div class="detail-section"><div class="section-title">Metadata <span class="text-xs mono text-dim">${esc(cp.checkpoint_id.substring(0,2))}/${esc(cp.checkpoint_id.substring(2))}/${idx}/metadata.json</span></div>`;
+        h += fullKvTable(meta, metaSpecial);
+        h += '</div>';
+
+        if (meta.token_usage) {
+          h += `<div class="detail-section"><div class="section-title">Token Usage</div>${tokenGrid(meta.token_usage)}${subagentTokens(meta.token_usage)}</div>`;
+        }
+
+        if (meta.initial_attribution) {
+          h += `<div class="detail-section"><div class="section-title">Attribution</div>${attrBar(meta.initial_attribution)}
+            <table class="kv-table mt-8">${fullKvTable(meta.initial_attribution).replace(/<\/?table[^>]*>/g,'')}</table></div>`;
+        }
+
+        if (meta.files_touched && meta.files_touched.length) {
+          h += `<div class="detail-section"><div class="section-title">Files Touched (${meta.files_touched.length})</div>${filePills(meta.files_touched, 30)}</div>`;
+        }
+
+        if (meta.summary) {
+          h += `<div class="detail-section"><div class="section-title">Summary</div>${summaryBox(meta.summary)}</div>`;
+        }
+
+        // File browser
+        if (files.length) {
+          const activeBlob = cpBlobActive[sessKey] || null;
+          h += `<div class="detail-section"><div class="section-title">Files on Branch (${files.length})</div>`;
+          h += '<div class="file-browser">';
+          files.forEach(f => {
+            const shortName = f.split('/').pop();
+            const isActive = activeBlob === f;
+            const icon = shortName.endsWith('.jsonl') ? '&#x1f4dc;' : shortName.endsWith('.json') ? '&#x1f4cb;' : shortName.endsWith('.md') ? '&#x1f4dd;' : shortName.endsWith('.txt') ? '&#x1f4c4;' : '&#x1f4c1;';
+            h += `<div class="file-entry${isActive?' active':''}" onclick="event.stopPropagation();loadBlob('${esc(sessKey)}','${esc(f)}')">${icon} <span class="truncate">${esc(f)}</span></div>`;
+          });
+          h += '</div>';
+
+          if (activeBlob && cpBlobCache[activeBlob] !== undefined) {
+            const content = cpBlobCache[activeBlob];
+            h += `<div class="blob-viewer"><pre class="blob-content">${esc(content)}</pre></div>`;
+          } else if (activeBlob) {
+            h += '<div class="blob-viewer"><div class="blob-loading">Loading...</div></div>';
+          }
+          h += '</div>';
+        }
+
+        h += '</div>'; // sub-session-detail
+      }
+      h += '</div>'; // sub-session
+    });
+    h += '</div>';
+  } else {
+    h += '<div class="no-metadata text-dim text-sm" style="padding:8px 0">No session metadata on entire/checkpoints/v1</div>';
+  }
+
+  return h;
+}
+
+function toggleCpRaw(cpid) {
+  cpRawMode.has(cpid) ? cpRawMode.delete(cpid) : cpRawMode.add(cpid);
+  renderCheckpoints(lastCheckpoints);
+}
+
+function toggleCpSession(key) {
+  cpSessionExpanded.has(key) ? cpSessionExpanded.delete(key) : cpSessionExpanded.add(key);
+  renderCheckpoints(lastCheckpoints);
+}
+
+async function loadBlob(sessKey, path) {
+  cpBlobActive[sessKey] = path;
+  renderCheckpoints(lastCheckpoints);
+
+  if (cpBlobCache[path] !== undefined) return;
+
+  try {
+    const res = await fetch('/api/blob?path=' + encodeURIComponent(path));
+    if (!res.ok) throw new Error(res.statusText);
+    const text = await res.text();
+    // Truncate very large blobs for display
+    cpBlobCache[path] = text.length > 200000 ? text.substring(0, 200000) + '\n\n... (truncated at 200KB) ...' : text;
+  } catch (e) {
+    cpBlobCache[path] = 'Error loading: ' + e.message;
+  }
+  renderCheckpoints(lastCheckpoints);
+}
+
+/* ---- Render: Shadow Branches ---- */
+let shadowLoaded = false;
+let lastShadowBranches = [];
+const shadowExpanded = new Set();
+const shadowFiles = {};  // branch -> files array
+const shadowBlobActive = {};  // branch -> path
+const shadowBlobCache = {};
+
+async function fetchShadowBranches() {
+  try {
+    const res = await fetch('/api/shadow-branches');
+    lastShadowBranches = await res.json();
+    shadowLoaded = true;
+    renderShadowBranches();
+  } catch(e) { console.error(e); }
+}
+
+function renderShadowBranches() {
+  const el = document.getElementById('panel-shadow');
+  document.getElementById('tc-shadow').textContent = lastShadowBranches.length;
+  if (!lastShadowBranches.length) { el.innerHTML = '<div class="empty-state"><div class="empty-icon">&#x1f333;</div>No shadow branches</div>'; return; }
+
+  el.innerHTML = lastShadowBranches.map(b => {
+    const expanded = shadowExpanded.has(b.name);
+    let row = `<div class="card-row" onclick="toggleShadow('${esc(b.name)}')">
+      <span class="badge badge-accent" style="font-size:11px">${esc(b.name)}</span>
+      <span class="text-xs text-dim">${esc(b.short_hash)}</span>
+      <span class="text-xs text-dim truncate flex-fill">${esc(b.subject)}</span>
+      <span class="text-xs text-dim">${relTime(b.date)}</span>
+      <span class="chevron">&#x25B8;</span>
+    </div>`;
+
+    let detail = '';
+    if (expanded) {
+      const files = shadowFiles[b.name] || [];
+      const activeBlob = shadowBlobActive[b.name] || null;
+      detail = '<div class="card-detail">';
+      detail += `<table class="kv-table">${kvRow('branch', b.name)}${kvRow('commit', b.short_hash)}${kvRow('date', b.date)}${kvRow('subject', b.subject)}</table>`;
+
+      if (files.length) {
+        detail += `<div class="mt-12"><div class="section-title">Files (${files.length})</div><div class="file-browser" style="max-height:400px;overflow:auto">`;
+        // Show metadata files first, then others
+        const metaFiles = files.filter(f => f.includes('.entire/metadata/'));
+        const otherFiles = files.filter(f => !f.includes('.entire/metadata/'));
+        const sorted = [...metaFiles, ...otherFiles];
+        sorted.forEach(f => {
+          const isActive = activeBlob === f;
+          const shortName = f.split('/').pop();
+          const isMeta = f.includes('.entire/metadata/');
+          detail += `<div class="file-entry${isActive?' active':''}" onclick="event.stopPropagation();loadShadowBlob('${esc(b.name)}','${esc(f)}')">${isMeta?'&#x1f4dc;':'&#x1f4c4;'} <span class="truncate">${esc(f)}</span></div>`;
+        });
+        detail += '</div>';
+
+        if (activeBlob && shadowBlobCache[b.name+':'+activeBlob] !== undefined) {
+          detail += `<div class="blob-viewer"><pre class="blob-content">${esc(shadowBlobCache[b.name+':'+activeBlob])}</pre></div>`;
+        } else if (activeBlob) {
+          detail += '<div class="blob-viewer"><div class="blob-loading">Loading...</div></div>';
+        }
+        detail += '</div>';
+      } else {
+        detail += '<div class="blob-loading">Loading file list...</div>';
+      }
+      detail += '</div>';
+    }
+
+    return `<div class="card${expanded?' expanded':''}">${row}${detail}</div>`;
+  }).join('');
+}
+
+async function toggleShadow(name) {
+  if (shadowExpanded.has(name)) { shadowExpanded.delete(name); }
+  else {
+    shadowExpanded.add(name);
+    if (!shadowFiles[name]) {
+      try {
+        const res = await fetch('/api/shadow-tree?branch=' + encodeURIComponent(name));
+        shadowFiles[name] = await res.json();
+      } catch(e) { shadowFiles[name] = []; }
+    }
+  }
+  renderShadowBranches();
+}
+
+async function loadShadowBlob(branch, path) {
+  shadowBlobActive[branch] = path;
+  renderShadowBranches();
+
+  const cacheKey = branch + ':' + path;
+  if (shadowBlobCache[cacheKey] !== undefined) return;
+
+  try {
+    const res = await fetch('/api/shadow-blob?branch=' + encodeURIComponent(branch) + '&path=' + encodeURIComponent(path));
+    if (!res.ok) throw new Error(res.statusText);
+    const text = await res.text();
+    shadowBlobCache[cacheKey] = text.length > 200000 ? text.substring(0, 200000) + '\n\n... (truncated) ...' : text;
+  } catch(e) { shadowBlobCache[cacheKey] = 'Error: ' + e.message; }
+  renderShadowBranches();
+}
+
+/* ---- Data fetching ---- */
+let lastCheckpoints = [];
+let lastSessions = [];
+let lastError = null;
+
+async function fetchAll() {
+  const banner = document.getElementById('error-banner');
+  try {
+    const [cpRes, sessRes, brRes] = await Promise.all([
+      fetch('/api/checkpoints'),
+      fetch('/api/sessions'),
+      fetch('/api/branch'),
+    ]);
+    lastCheckpoints = await cpRes.json();
+    lastSessions = await sessRes.json();
+    const brData = await brRes.json();
+    document.getElementById('branch').textContent = brData.branch || 'unknown';
+    renderSessions(lastSessions);
+    renderCheckpoints(lastCheckpoints);
+    banner.style.display = 'none';
+    lastError = null;
+  } catch (err) {
+    if (lastError !== err.message) { banner.textContent = 'Failed to fetch: ' + err.message; banner.style.display = 'block'; lastError = err.message; }
+  }
+}
+
+fetchAll();
+setInterval(fetchAll, 3000);
+</script>
+</body>
+</html>
