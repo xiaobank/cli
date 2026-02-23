@@ -1,0 +1,13 @@
+{
+  "trail_id": "247b47f901d4",
+  "branch": "feat/trails",
+  "base": "main",
+  "title": "Is the branch up to date with main?",
+  "description": "",
+  "status": "in_progress",
+  "author": "Daniel Adams",
+  "assignees": [],
+  "labels": [],
+  "created_at": "2026-02-23T11:29:33.654614+01:00",
+  "updated_at": "2026-02-23T11:29:33.654614+01:00"
+}
