@@ -2,12 +2,12 @@
   "trail_id": "247b47f901d4",
   "branch": "feat/trails",
   "base": "main",
-  "title": "Is the branch up to date with main?",
-  "description": "Trails PoC implementation",
+  "title": "Add trails feature: branch-centric work tracking",
+  "description": "Implements the trails feature for branch-centric work tracking. Trails are metadata objects stored on the entire/trails orphan branch that track the lifecycle of feature branches.\n\nCore changes:\n- trail package (cmd/entire/cli/trail/): Store with CRUD operations on entire/trails orphan branch, sharded storage (metadata.json, discussion.json, checkpoints.json per trail)\n- trail commands: list, create, update with interactive and flag-based modes\n- Interactive trail create: title-first flow that derives branch name via slugification, creates the git branch, pushes both branch and trail data to origin\n- Interactive trail update: pre-filled form with current values when no flags provided\n- Trail auto-creation on TurnStart for non-main branches without a trail\n- Checkpoint linking after each condensation/save (appended to checkpoints.json, newest first)\n- Pre-push hooks push entire/trails branch alongside entire/checkpoints/v1\n- Trail title generation from first user prompt via TextGenerator agent interface\n- Remote trail fetching before listing so collaborators' trails are visible\n- GitHub username resolution for trail author (gh api user fallback to git user.name)\n- Removed trail enable/disable commands (trails are always active)\n- Status lifecycle: draft → open → in_progress → in_review → done → closed",
   "status": "in_progress",
   "author": "Daniel Adams",
   "assignees": [],
   "labels": [],
   "created_at": "2026-02-23T11:29:33.654614+01:00",
-  "updated_at": "2026-02-23T11:38:57.171078+01:00"
+  "updated_at": "2026-02-23T20:00:12.987414+01:00"
 }
