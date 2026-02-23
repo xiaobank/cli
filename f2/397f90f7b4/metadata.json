@@ -1,0 +1,13 @@
+{
+  "trail_id": "f2397f90f7b4",
+  "branch": "remove-trail-enable-disable",
+  "base": "main",
+  "title": "Rename the branch, it's actually about adding trail functionality not removin...",
+  "description": "",
+  "status": "in_progress",
+  "author": "Daniel Adams",
+  "assignees": [],
+  "labels": [],
+  "created_at": "2026-02-23T11:20:15.601065+01:00",
+  "updated_at": "2026-02-23T11:20:15.601065+01:00"
+}
