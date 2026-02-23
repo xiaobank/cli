@@ -37,6 +37,7 @@ func BenchmarkHookSessionStart(b *testing.B) {
 	b.Run("SessionsXRefs", benchSessionsXRefs)
 	b.Run("PackedRefs", benchPackedRefs)
 	b.Run("GitObjects", benchGitObjects)
+	b.Run("Subprocess", benchSubprocessOverhead)
 }
 
 // benchSessions scales session state files in .git/entire-sessions/.
@@ -142,6 +143,73 @@ func benchGitObjects(b *testing.B) {
 			runSessionStartHook(b, repo)
 		})
 	}
+}
+
+// benchSubprocessOverhead isolates the cost of subprocess spawns that happen
+// during session-start. The hook calls git rev-parse 7-8 times (mostly uncached)
+// plus spawns the entire binary itself. This benchmark measures each component
+// so we can see what fraction of the ~80ms floor is subprocess overhead.
+func benchSubprocessOverhead(b *testing.B) {
+	repo := benchutil.NewBenchRepo(b, benchutil.RepoOpts{
+		FileCount:     10,
+		FeatureBranch: "feature/bench",
+	})
+
+	// 1. Bare git rev-parse round-trip (called 7-8x in the real hook)
+	b.Run("GitRevParse_1x", func(b *testing.B) {
+		b.ResetTimer()
+		for range b.N {
+			start := time.Now()
+			cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+			cmd.Dir = repo.Dir
+			if output, err := cmd.CombinedOutput(); err != nil {
+				b.Fatalf("git rev-parse failed: %v\n%s", err, output)
+			}
+			b.ReportMetric(float64(time.Since(start).Milliseconds()), "ms/op")
+		}
+	})
+
+	// 2. Seven sequential git rev-parse calls (simulates the real pattern)
+	b.Run("GitRevParse_7x", func(b *testing.B) {
+		b.ResetTimer()
+		for range b.N {
+			start := time.Now()
+			for range 7 {
+				cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+				cmd.Dir = repo.Dir
+				if output, err := cmd.CombinedOutput(); err != nil {
+					b.Fatalf("git rev-parse failed: %v\n%s", err, output)
+				}
+			}
+			b.ReportMetric(float64(time.Since(start).Milliseconds()), "ms/op")
+		}
+	})
+
+	// 3. Bare `entire` binary spawn (version command — minimal work, no git)
+	b.Run("EntireBinary_version", func(b *testing.B) {
+		binary := getTestBinary()
+		b.ResetTimer()
+		for range b.N {
+			start := time.Now()
+			cmd := exec.Command(binary, "version")
+			cmd.Dir = repo.Dir
+			if output, err := cmd.CombinedOutput(); err != nil {
+				b.Fatalf("entire version failed: %v\n%s", err, output)
+			}
+			b.ReportMetric(float64(time.Since(start).Milliseconds()), "ms/op")
+		}
+	})
+
+	// 4. Full session-start hook (for direct comparison)
+	b.Run("FullHook", func(b *testing.B) {
+		for range 5 {
+			repo.CreateSessionState(b, benchutil.SessionOpts{
+				StepCount:    3,
+				FilesTouched: []string{"src/file_000.go"},
+			})
+		}
+		runSessionStartHook(b, repo)
+	})
 }
 
 // runSessionStartHook is the shared benchmark loop that invokes the session-start
