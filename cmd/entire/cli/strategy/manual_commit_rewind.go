@@ -327,57 +327,35 @@ func (s *ManualCommitStrategy) Rewind(point RewindPoint) error {
 		repoRoot = "." // Fallback to current directory
 	}
 
-	// Find and delete untracked files that aren't in the checkpoint
-	// These are likely files created by the agent in later checkpoints
-	err = filepath.Walk(repoRoot, func(path string, info os.FileInfo, walkErr error) error {
-		if walkErr != nil {
-			return nil //nolint:nilerr // Skip filesystem errors during walk
-		}
-
-		// Get path relative to repo root
-		relPath, relErr := filepath.Rel(repoRoot, path)
-		if relErr != nil {
-			return nil //nolint:nilerr // Skip paths we can't make relative
-		}
-
-		// Skip directories and protected paths
-		if info.IsDir() {
-			if isProtectedPath(relPath) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		// Skip files in protected directories
-		if isProtectedPath(relPath) {
-			return nil
-		}
-
+	// Find and delete untracked files that aren't in the checkpoint.
+	// Uses git ls-files to only consider non-ignored files, avoiding walks through
+	// large ignored directories like node_modules/.
+	untrackedNow, err := collectUntrackedFiles()
+	if err != nil {
+		// Non-fatal - continue with restoration
+		fmt.Fprintf(os.Stderr, "Warning: error listing untracked files: %v\n", err)
+	}
+	for _, relPath := range untrackedNow {
 		// If file is in checkpoint, it will be restored
 		if checkpointFiles[relPath] {
-			return nil
+			continue
 		}
 
 		// If file is tracked in HEAD, don't delete (user's committed work)
 		if trackedFiles[relPath] {
-			return nil
+			continue
 		}
 
 		// If file existed at session start, preserve it (untracked user files)
 		if preservedUntrackedFiles[relPath] {
-			return nil
+			continue
 		}
 
-		// File is untracked and not in checkpoint - delete it (use absolute path)
-		if removeErr := os.Remove(path); removeErr == nil {
+		// File is untracked and not in checkpoint - delete it
+		absPath := filepath.Join(repoRoot, relPath)
+		if removeErr := os.Remove(absPath); removeErr == nil {
 			fmt.Fprintf(os.Stderr, "  Deleted: %s\n", relPath)
 		}
-
-		return nil
-	})
-	if err != nil {
-		// Non-fatal - continue with restoration
-		fmt.Fprintf(os.Stderr, "Warning: error walking directory: %v\n", err)
 	}
 
 	// Restore files from checkpoint
@@ -543,62 +521,28 @@ func (s *ManualCommitStrategy) PreviewRewind(point RewindPoint) (*RewindPreview,
 		return nil
 	})
 
-	// Get repository root to walk from there
-	repoRoot, err := GetWorktreePath()
-	if err != nil {
-		repoRoot = "."
-	}
-
-	// Find untracked files that would be deleted
+	// Find untracked files that would be deleted.
+	// Uses git ls-files to only consider non-ignored files.
 	var filesToDelete []string
-	err = filepath.Walk(repoRoot, func(path string, info os.FileInfo, walkErr error) error {
-		if walkErr != nil {
-			return nil //nolint:nilerr // Skip filesystem errors during walk
-		}
-
-		relPath, relErr := filepath.Rel(repoRoot, path)
-		if relErr != nil {
-			return nil //nolint:nilerr // Skip paths we can't make relative
-		}
-
-		// Skip directories and protected paths
-		if info.IsDir() {
-			if isProtectedPath(relPath) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		// Skip files in protected directories
-		if isProtectedPath(relPath) {
-			return nil
-		}
-
-		// If file is in checkpoint, it will be restored (not deleted)
-		if checkpointFiles[relPath] {
-			return nil
-		}
-
-		// If file is tracked in HEAD, don't delete (user's committed work)
-		if trackedFiles[relPath] {
-			return nil
-		}
-
-		// If file existed at session start, preserve it (untracked user files)
-		if preservedUntrackedFiles[relPath] {
-			return nil
-		}
-
-		// File is untracked and not in checkpoint - will be deleted
-		filesToDelete = append(filesToDelete, relPath)
-		return nil
-	})
-	if err != nil {
-		// Non-fatal, return what we have
-		return &RewindPreview{ //nolint:nilerr // Partial result is still useful
+	untrackedNow, untrackedErr := collectUntrackedFiles()
+	if untrackedErr != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not list untracked files for preview: %v\n", untrackedErr)
+		return &RewindPreview{
 			FilesToRestore: filesToRestore,
 			FilesToDelete:  filesToDelete,
 		}, nil
+	}
+	for _, relPath := range untrackedNow {
+		if checkpointFiles[relPath] {
+			continue
+		}
+		if trackedFiles[relPath] {
+			continue
+		}
+		if preservedUntrackedFiles[relPath] {
+			continue
+		}
+		filesToDelete = append(filesToDelete, relPath)
 	}
 
 	// Sort for consistent output
@@ -735,18 +679,26 @@ func (s *ManualCommitStrategy) RestoreLogsOnly(point RewindPoint, force bool) ([
 			continue
 		}
 
-		if writeErr := os.WriteFile(sessionFile, content.Transcript, 0o600); writeErr != nil {
+		agentSession := &agent.AgentSession{
+			SessionID:  sessionID,
+			AgentName:  sessionAgent.Name(),
+			RepoPath:   repoRoot,
+			SessionRef: sessionFile,
+			NativeData: content.Transcript,
+		}
+		if writeErr := sessionAgent.WriteSession(agentSession); writeErr != nil {
 			if totalSessions > 1 {
-				fmt.Fprintf(os.Stderr, "    Warning: failed to write transcript: %v\n", writeErr)
+				fmt.Fprintf(os.Stderr, "    Warning: failed to write session: %v\n", writeErr)
 				continue
 			}
-			return nil, fmt.Errorf("failed to write transcript: %w", writeErr)
+			return nil, fmt.Errorf("failed to write session: %w", writeErr)
 		}
 
 		restored = append(restored, RestoredSession{
 			SessionID: sessionID,
 			Agent:     sessionAgent.Type(),
 			Prompt:    promptPreview,
+			CreatedAt: content.Metadata.CreatedAt,
 		})
 	}
 

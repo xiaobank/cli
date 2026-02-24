@@ -473,6 +473,7 @@ type RestoredSession struct {
 	SessionID string
 	Agent     agent.AgentType
 	Prompt    string
+	CreatedAt time.Time // From session metadata; used by resume to determine most recent
 }
 
 // LogsOnlyRestorer is an optional interface for strategies that support

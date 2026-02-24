@@ -1,6 +1,6 @@
 # Entire CLI
 
-Entire hooks into your git workflow to capture AI agent sessions on every push. Sessions are indexed alongside commits, creating a searchable record of how code was written in your repo.
+Entire hooks into your Git workflow to capture AI agent sessions as you work. Sessions are indexed alongside commits, creating a searchable record of how code was written in your repo.
 
 With Entire, you can:
 
@@ -56,7 +56,7 @@ entire status
 entire enable
 ```
 
-This installs agent and git hooks to work with your AI agent (Claude Code or Gemini CLI). The hooks capture session data at specific points in your workflow. Your code commits stay clean—all session metadata is stored on a separate `entire/checkpoints/v1` branch.
+This installs agent and git hooks to work with your AI agent (Claude Code, Gemini CLI or OpenCode). The hooks capture session data at specific points in your workflow. Your code commits stay clean—all session metadata is stored on a separate `entire/checkpoints/v1` branch.
 
 **When checkpoints are created** depends on your chosen strategy (default is `manual-commit`):
 - **Manual-commit**: Checkpoints are created when you or the agent make a git commit
@@ -64,7 +64,7 @@ This installs agent and git hooks to work with your AI agent (Claude Code or Gem
 
 ### 2. Work with Your AI Agent
 
-Just use Claude Code or Gemini CLI normally. Entire runs in the background, tracking your session:
+Just use Claude Code, Gemini CLI, or OpenCode normally. Entire runs in the background, tracking your session:
 
 ```
 entire status  # Check current session status anytime
@@ -180,7 +180,7 @@ Multiple AI sessions can run on the same commit. If you start a second session w
 
 | Flag                   | Description                                                        |
 |------------------------|--------------------------------------------------------------------|
-| `--agent <name>`       | AI agent to setup hooks for: `claude-code` (default) or `gemini`   |
+| `--agent <name>`       | AI agent to install hooks for: `claude-code` (default) or `gemini` |
 | `--force`, `-f`        | Force reinstall hooks (removes existing Entire hooks first)        |
 | `--local`              | Write settings to `settings.local.json` instead of `settings.json` |
 | `--project`            | Write settings to `settings.json` even if it already exists        |
@@ -291,7 +291,7 @@ Entire automatically redacts detected secrets (API keys, tokens, credentials) wh
 |--------------------------|-------------------------------------------------------------------------------------------|
 | "Not a git repository"   | Navigate to a Git repository first                                                        |
 | "Entire is disabled"     | Run `entire enable`                                                                       |
-| "No rewind points found" | Work with Claude Code and commit (manual-commit) or wait for agent response (auto-commit) |
+| "No rewind points found" | Work with your configured agent and commit (manual-commit) or wait for an agent response (auto-commit) |
 | "shadow branch conflict" | Run `entire reset --force`                                                                |
 
 ### SSH Authentication Errors

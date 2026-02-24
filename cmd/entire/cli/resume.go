@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
@@ -420,6 +421,12 @@ func resumeSession(sessionID string, checkpointID id.CheckpointID, force bool) e
 			return resumeSingleSession(ctx, ag, sessionID, checkpointID, repoRoot, force)
 		}
 
+		// Sort sessions by CreatedAt so the most recent is last (for display).
+		// This fixes ordering when subdirectory index doesn't reflect activity order.
+		sort.Slice(sessions, func(i, j int) bool {
+			return sessions[i].CreatedAt.Before(sessions[j].CreatedAt)
+		})
+
 		logging.Debug(ctx, "resume session completed",
 			slog.String("checkpoint_id", checkpointID.String()),
 			slog.Int("session_count", len(sessions)),
@@ -537,7 +544,6 @@ func resumeSingleSession(ctx context.Context, ag agent.Agent, sessionID string, 
 		return fmt.Errorf("failed to create session directory: %w", err)
 	}
 
-	// Create an AgentSession with the native data
 	agentSession := &agent.AgentSession{
 		SessionID:  sessionID,
 		AgentName:  ag.Name(),
