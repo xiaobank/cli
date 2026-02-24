@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -17,6 +18,18 @@ var (
 	_ agent.TokenCalculator    = (*OpenCodeAgent)(nil)
 )
 
+// invalidJSONEscape matches a backslash followed by a character that is NOT a valid JSON escape.
+// Valid JSON escapes: \" \\ \/ \b \f \n \r \t \uXXXX
+var invalidJSONEscape = regexp.MustCompile(`\\([^"\\/bfnrtu])`)
+
+// sanitizeJSONEscapes fixes invalid JSON escape sequences in OpenCode export data.
+// LLMs sometimes generate content with backslash sequences like \React or \Path
+// that aren't valid JSON escapes. This converts them to escaped backslashes (e.g., \\R)
+// so json.Unmarshal can parse the data.
+func sanitizeJSONEscapes(data []byte) []byte {
+	return invalidJSONEscape.ReplaceAll(data, []byte(`\\$1`))
+}
+
 // ParseExportSession parses export JSON content into an ExportSession structure.
 func ParseExportSession(data []byte) (*ExportSession, error) {
 	if len(data) == 0 {
@@ -25,7 +38,11 @@ func ParseExportSession(data []byte) (*ExportSession, error) {
 
 	var session ExportSession
 	if err := json.Unmarshal(data, &session); err != nil {
-		return nil, fmt.Errorf("failed to parse export session: %w", err)
+		// Retry with sanitized escapes — LLM output may contain invalid sequences like \React
+		sanitized := sanitizeJSONEscapes(data)
+		if err2 := json.Unmarshal(sanitized, &session); err2 != nil {
+			return nil, fmt.Errorf("failed to parse export session: %w", err)
+		}
 	}
 
 	return &session, nil

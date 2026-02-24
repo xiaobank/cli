@@ -119,6 +119,25 @@ func TestParseExportSession_InvalidJSON(t *testing.T) {
 	}
 }
 
+func TestParseExportSession_InvalidEscapes(t *testing.T) {
+	t.Parallel()
+
+	// Simulate what happens when an LLM generates content containing \React, \Resources, etc.
+	// opencode export stores these literally, producing invalid JSON escapes.
+	input := `{"info":{"id":"test"},"messages":[{"info":{"id":"m1","role":"assistant","time":{"created":1}},"parts":[{"type":"text","text":"Use \React and \Path\\to\\file"}]}]}`
+
+	session, err := ParseExportSession([]byte(input))
+	if err != nil {
+		t.Fatalf("expected ParseExportSession to handle invalid escapes, got error: %v", err)
+	}
+	if session == nil {
+		t.Fatal("expected non-nil session")
+	}
+	if len(session.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(session.Messages))
+	}
+}
+
 func TestGetTranscriptPosition(t *testing.T) {
 	t.Parallel()
 	ag := &OpenCodeAgent{}
