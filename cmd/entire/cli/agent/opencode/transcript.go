@@ -18,8 +18,8 @@ var (
 	_ agent.TokenCalculator    = (*OpenCodeAgent)(nil)
 )
 
-// invalidJSONEscape matches a backslash followed by a character that is NOT a valid JSON escape.
-// Valid JSON escapes: \" \\ \/ \b \f \n \r \t \uXXXX
+// invalidJSONEscape matches a backslash followed by a character that is NOT a simple JSON escape.
+// This intentionally only handles single-character escapes like \R or \Q; any \u sequence is left as-is.
 var invalidJSONEscape = regexp.MustCompile(`\\([^"\\/bfnrtu])`)
 
 // sanitizeJSONEscapes fixes invalid JSON escape sequences in OpenCode export data.
@@ -41,7 +41,7 @@ func ParseExportSession(data []byte) (*ExportSession, error) {
 		// Retry with sanitized escapes — LLM output may contain invalid sequences like \React
 		sanitized := sanitizeJSONEscapes(data)
 		if err2 := json.Unmarshal(sanitized, &session); err2 != nil {
-			return nil, fmt.Errorf("failed to parse export session: %w", err)
+			return nil, fmt.Errorf("failed to parse export session (sanitized retry: %v): %w", err2, err)
 		}
 	}
 

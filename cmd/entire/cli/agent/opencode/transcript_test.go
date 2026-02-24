@@ -136,6 +136,16 @@ func TestParseExportSession_InvalidEscapes(t *testing.T) {
 	if len(session.Messages) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(session.Messages))
 	}
+
+	// Verify content was preserved correctly after sanitization
+	msg := session.Messages[0]
+	if len(msg.Parts) != 1 {
+		t.Fatalf("expected 1 part, got %d", len(msg.Parts))
+	}
+	expected := `Use \React and \Path\to\file`
+	if msg.Parts[0].Text != expected {
+		t.Fatalf("unexpected text.\nexpected: %q\ngot:      %q", expected, msg.Parts[0].Text)
+	}
 }
 
 func TestGetTranscriptPosition(t *testing.T) {
