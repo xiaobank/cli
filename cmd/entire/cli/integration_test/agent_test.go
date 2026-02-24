@@ -18,7 +18,6 @@ import (
 // TestAgentDetection verifies agent detection and default behavior.
 // Not parallel - contains subtests that use os.Chdir which is process-global.
 func TestAgentDetection(t *testing.T) {
-
 	t.Run("defaults to claude-code when nothing configured", func(t *testing.T) {
 		t.Parallel()
 		env := NewTestEnv(t)
@@ -411,13 +410,11 @@ func TestClaudeCodeHelperMethods(t *testing.T) {
 			t.Errorf("FindCheckpointUUID() uuid = %q, want %q", uuid, "u1")
 		}
 	})
-
 }
 
 // TestGeminiCLIAgentDetection verifies Gemini CLI agent detection.
 // Not parallel - contains subtests that use os.Chdir which is process-global.
 func TestGeminiCLIAgentDetection(t *testing.T) {
-
 	t.Run("gemini agent is registered", func(t *testing.T) {
 		t.Parallel()
 
@@ -817,14 +814,12 @@ func TestGeminiCLIHelperMethods(t *testing.T) {
 			t.Errorf("FormatResumeCommand() = %q, want %q", cmd, "gemini --resume abc123")
 		}
 	})
-
 }
 
 // --- OpenCode Agent Tests ---
 
 // TestOpenCodeAgentDetection verifies OpenCode agent detection and default behavior.
 func TestOpenCodeAgentDetection(t *testing.T) {
-
 	t.Run("opencode agent is registered", func(t *testing.T) {
 		t.Parallel()
 
@@ -909,7 +904,6 @@ func TestOpenCodeAgentDetection(t *testing.T) {
 // TestOpenCodeHookInstallation verifies hook installation via OpenCode agent interface.
 // Not parallel - uses os.Chdir which is process-global.
 func TestOpenCodeHookInstallation(t *testing.T) {
-
 	t.Run("installs plugin file", func(t *testing.T) {
 		// Not parallel - uses os.Chdir
 		env := NewTestEnv(t)

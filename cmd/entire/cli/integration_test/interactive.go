@@ -4,6 +4,7 @@ package integration
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -71,7 +72,7 @@ func (env *TestEnv) RunCommandInteractive(args []string, respond func(ptyFile *o
 		// process completed
 	case <-time.After(10 * time.Second):
 		_ = cmd.Process.Kill()
-		cmdErr = fmt.Errorf("process timed out")
+		cmdErr = errors.New("process timed out")
 	}
 
 	// Give remaining output goroutine time to finish after process exits

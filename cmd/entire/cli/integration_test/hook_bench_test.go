@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"testing"
 	"time"
 
@@ -47,7 +48,7 @@ func BenchmarkHookSessionStart(b *testing.B) {
 // ReadDir + (ReadFile + JSON unmarshal + repo.Reference) per file.
 func benchSessions(b *testing.B) {
 	for _, n := range []int{0, 1, 5, 10, 25, 50, 100, 200} {
-		b.Run(fmt.Sprintf("%d", n), func(b *testing.B) {
+		b.Run(strconv.Itoa(n), func(b *testing.B) {
 			repo := benchutil.NewBenchRepo(b, benchutil.RepoOpts{
 				FileCount:     10,
 				FeatureBranch: "feature/bench",
@@ -102,7 +103,7 @@ func benchSessionsXRefs(b *testing.B) {
 // scans it. Session count held constant at 5.
 func benchPackedRefs(b *testing.B) {
 	for _, n := range []int{0, 50, 200, 500, 1000, 2000} {
-		b.Run(fmt.Sprintf("%d", n), func(b *testing.B) {
+		b.Run(strconv.Itoa(n), func(b *testing.B) {
 			repo := benchutil.NewBenchRepo(b, benchutil.RepoOpts{
 				FileCount:     10,
 				FeatureBranch: "feature/bench",
@@ -127,7 +128,7 @@ func benchPackedRefs(b *testing.B) {
 // This also affects repo.Head() and repo.Reference() indirectly.
 func benchGitObjects(b *testing.B) {
 	for _, n := range []int{0, 1000, 5000, 10000} {
-		b.Run(fmt.Sprintf("%d", n), func(b *testing.B) {
+		b.Run(strconv.Itoa(n), func(b *testing.B) {
 			repo := benchutil.NewBenchRepo(b, benchutil.RepoOpts{
 				FileCount:     10,
 				FeatureBranch: "feature/bench",

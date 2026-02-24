@@ -125,6 +125,9 @@ func handleLifecycleTurnStart(ag agent.Agent, event *agent.Event) error {
 		return fmt.Errorf("invalid %s event: %w", event.Type, err)
 	}
 
+	// Check for pre-existing #456 corruption before doing any work
+	validateConfigNotCorrupted(logCtx)
+
 	// Capture pre-prompt state (including transcript position via TranscriptAnalyzer)
 	if err := CapturePrePromptState(ag, sessionID, event.SessionRef); err != nil {
 		return err
@@ -394,9 +397,13 @@ func handleLifecycleTurnEnd(ag agent.Agent, event *agent.Event) error {
 		TokenUsage:               tokenUsage,
 	}
 
+	configBefore := snapshotLocalGitConfig()
+
 	if err := strat.SaveStep(ctx); err != nil {
 		return fmt.Errorf("failed to save step: %w", err)
 	}
+
+	checkConfigIntegrity(logCtx, "turn-end/SaveStep", configBefore, snapshotLocalGitConfig())
 
 	// Update session state transcript position for auto-commit strategy
 	if strat.Name() == strategy.StrategyNameAutoCommit && newTranscriptPosition > 0 {
@@ -608,9 +615,13 @@ func handleLifecycleSubagentEnd(ag agent.Agent, event *agent.Event) error {
 		AgentType:              agentType,
 	}
 
+	configBeforeTask := snapshotLocalGitConfig()
+
 	if err := strat.SaveTaskStep(ctx); err != nil {
 		return fmt.Errorf("failed to save task step: %w", err)
 	}
+
+	checkConfigIntegrity(logCtx, "subagent-end/SaveTaskStep", configBeforeTask, snapshotLocalGitConfig())
 
 	_ = CleanupPreTaskState(event.ToolUseID) //nolint:errcheck // best-effort cleanup
 	return nil

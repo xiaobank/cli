@@ -435,7 +435,6 @@ func TestRewind_MultipleConsecutive(t *testing.T) {
 			t.Errorf("after rewind to v1: got %q, want %q", content, "version 1")
 		}
 	})
-
 }
 
 // TestRewind_DifferentSessions tests that commit and auto-commit strategies support
@@ -447,7 +446,7 @@ func TestRewind_DifferentSessions(t *testing.T) {
 	t.Run("auto_commit_supports_different_sessions", func(t *testing.T) {
 		t.Parallel()
 		for _, strategyName := range []string{"auto-commit"} {
-			strategyName := strategyName // capture for parallel
+			// capture for parallel
 			t.Run(strategyName, func(t *testing.T) {
 				t.Parallel()
 				env := NewFeatureBranchEnv(t, strategyName)
