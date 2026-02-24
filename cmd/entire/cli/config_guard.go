@@ -11,6 +11,9 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 )
 
+// corruptedUserName is the literal string that #456 sets user.name to.
+const corruptedUserName = "user.email"
+
 // configSnapshot captures user.name and user.email from the LOCAL .git/config only.
 type configSnapshot struct {
 	name  string
@@ -43,34 +46,15 @@ func getLocalGitConfigValue(key string) string {
 // and warns if user.name or user.email changed during an operation.
 // Specifically detects the #456 pattern: user.name set to literal "user.email".
 func checkConfigIntegrity(ctx context.Context, operation string, before, after configSnapshot) {
-	changed := false
-	attrs := []any{
-		slog.String("operation", operation),
-	}
+	nameChanged := before.name != after.name
+	emailChanged := before.email != after.email
 
-	if before.name != after.name {
-		changed = true
-		attrs = append(attrs,
-			slog.String("user_name_before", before.name),
-			slog.String("user_name_after", after.name),
-		)
-	}
-	if before.email != after.email {
-		changed = true
-		attrs = append(attrs,
-			slog.String("user_email_before", before.email),
-			slog.String("user_email_after", after.email),
-		)
-	}
-
-	if !changed {
+	if !nameChanged && !emailChanged {
 		return
 	}
 
-	logging.Warn(ctx, "local git config changed during operation", attrs...)
-
-	// Detect #456 pattern: user.name set to the literal string "user.email"
-	if after.name == "user.email" {
+	// Detect #456 pattern first: user.name changed to the literal string "user.email"
+	if nameChanged && after.name == corruptedUserName {
 		fmt.Fprintf(os.Stderr,
 			"WARNING: .git/config user.name was set to the literal string \"user.email\" during %s. "+
 				"This is a known corruption pattern (see https://github.com/entireio/cli/issues/456). "+
@@ -83,7 +67,13 @@ func checkConfigIntegrity(ctx context.Context, operation string, before, after c
 		return
 	}
 
-	// Generic warning for any unexpected change
+	// Generic warning for any unexpected change (log booleans, not PII)
+	logging.Warn(ctx, "local git config changed during operation",
+		slog.String("operation", operation),
+		slog.Bool("user_name_changed", nameChanged),
+		slog.Bool("user_email_changed", emailChanged),
+	)
+
 	fmt.Fprintf(os.Stderr,
 		"WARNING: local .git/config was modified during %s (user.name: %q→%q, user.email: %q→%q). "+
 			"If unexpected, please report at https://github.com/entireio/cli/issues/456\n",
@@ -97,7 +87,7 @@ func checkConfigIntegrity(ctx context.Context, operation string, before, after c
 // running `git config user.name user.email` as a standalone command).
 func validateConfigNotCorrupted(ctx context.Context) {
 	snap := snapshotLocalGitConfig()
-	if snap.name == "user.email" {
+	if snap.name == corruptedUserName {
 		fmt.Fprintf(os.Stderr,
 			"WARNING: .git/config user.name is the literal string \"user.email\" — this is a known "+
 				"corruption pattern (see https://github.com/entireio/cli/issues/456). "+

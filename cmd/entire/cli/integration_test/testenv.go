@@ -207,7 +207,6 @@ func AllStrategies() []string {
 func RunForAllStrategies(t *testing.T, testFn func(t *testing.T, env *TestEnv, strategyName string)) {
 	t.Helper()
 	for _, strat := range AllStrategies() {
-		// capture for parallel
 		t.Run(strat, func(t *testing.T) {
 			t.Parallel()
 			env := NewFeatureBranchEnv(t, strat)
@@ -222,7 +221,6 @@ func RunForAllStrategies(t *testing.T, testFn func(t *testing.T, env *TestEnv, s
 func RunForAllStrategiesWithRepoEnv(t *testing.T, testFn func(t *testing.T, env *TestEnv, strategyName string)) {
 	t.Helper()
 	for _, strat := range AllStrategies() {
-		// capture for parallel
 		t.Run(strat, func(t *testing.T) {
 			t.Parallel()
 			env := NewRepoWithCommit(t, strat)
@@ -237,7 +235,6 @@ func RunForAllStrategiesWithRepoEnv(t *testing.T, testFn func(t *testing.T, env 
 func RunForAllStrategiesWithBasicEnv(t *testing.T, testFn func(t *testing.T, env *TestEnv, strategyName string)) {
 	t.Helper()
 	for _, strat := range AllStrategies() {
-		// capture for parallel
 		t.Run(strat, func(t *testing.T) {
 			t.Parallel()
 			env := NewRepoEnv(t, strat)

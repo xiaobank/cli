@@ -54,6 +54,7 @@ func captureStderr(t *testing.T, fn func()) string {
 	if err != nil {
 		t.Fatalf("Failed to create pipe: %v", err)
 	}
+	defer r.Close()
 	os.Stderr = w
 
 	fn()
@@ -159,6 +160,27 @@ func TestCheckConfigIntegrity_Detects456Pattern(t *testing.T) {
 	}
 	if !strings.Contains(output, "literal string") {
 		t.Errorf("expected 'literal string' in stderr output, got: %s", output)
+	}
+}
+
+func TestCheckConfigIntegrity_EmailOnlyChangeWithPreExistingCorruption(t *testing.T) {
+	// Cursor Bugbot catch: if user.name was already "user.email" and only email changed,
+	// the #456 warning should NOT fire (name didn't change during this operation).
+	before := configSnapshot{name: "user.email", email: "old@example.com"}
+	after := configSnapshot{name: "user.email", email: "new@example.com"}
+
+	output := captureStderr(t, func() {
+		checkConfigIntegrity(context.Background(), "test-op", before, after)
+	})
+
+	if len(output) == 0 {
+		t.Fatal("expected generic warning on stderr for email change, got nothing")
+	}
+	if strings.Contains(output, "literal string") {
+		t.Errorf("should NOT fire #456 warning when name didn't change, got: %s", output)
+	}
+	if !strings.Contains(output, "WARNING") {
+		t.Errorf("expected generic WARNING for email change, got: %s", output)
 	}
 }
 

@@ -446,7 +446,6 @@ func TestRewind_DifferentSessions(t *testing.T) {
 	t.Run("auto_commit_supports_different_sessions", func(t *testing.T) {
 		t.Parallel()
 		for _, strategyName := range []string{"auto-commit"} {
-			// capture for parallel
 			t.Run(strategyName, func(t *testing.T) {
 				t.Parallel()
 				env := NewFeatureBranchEnv(t, strategyName)
