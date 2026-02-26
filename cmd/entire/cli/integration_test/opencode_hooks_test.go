@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
-	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 )
 
@@ -65,9 +64,8 @@ func TestOpenCodeHookFlow(t *testing.T) {
 	}
 
 	// 10. Verify condensed data
-	transcriptPath := SessionFilePath(checkpointID, paths.TranscriptFileName)
-	_, found := env.ReadFileFromBranch(paths.MetadataBranchName, transcriptPath)
-	if !found {
+	content := env.readTranscriptContent(checkpointID)
+	if content == "" {
 		t.Error("condensed transcript should exist on metadata branch")
 	}
 }
@@ -320,9 +318,8 @@ func TestOpenCodeMidTurnCommit(t *testing.T) {
 	t.Logf("Mid-turn commit has checkpoint ID: %s", checkpointID)
 
 	// 8. CRITICAL: Verify checkpoint data was written to entire/checkpoints/v1
-	transcriptPath := SessionFilePath(checkpointID, paths.TranscriptFileName)
-	_, found := env.ReadFileFromBranch(paths.MetadataBranchName, transcriptPath)
-	if !found {
+	transcriptContent := env.readTranscriptContent(checkpointID)
+	if transcriptContent == "" {
 		t.Error("checkpoint transcript should exist on metadata branch after mid-turn commit")
 	}
 

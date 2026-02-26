@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/compression"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -337,39 +338,44 @@ func (s *GitStore) addTaskMetadataToTree(baseTreeHash plumbing.Hash, opts WriteT
 	} else {
 		// Final checkpoint: add transcripts and checkpoint.json
 
-		// Add session transcript (with chunking support for large transcripts)
+		// Add session transcript (compressed, with chunking support for large transcripts)
 		if opts.TranscriptPath != "" {
 			if transcriptContent, readErr := os.ReadFile(opts.TranscriptPath); readErr == nil {
-				agentType := agent.DetectAgentTypeFromContent(transcriptContent)
-
-				chunks, chunkErr := agent.ChunkTranscript(transcriptContent, agentType)
-				if chunkErr != nil {
-					logging.Warn(context.Background(), "failed to chunk transcript, checkpoint will be saved without transcript",
-						slog.String("error", chunkErr.Error()),
+				// Compress the transcript
+				compressed, compressErr := compression.Compress(transcriptContent)
+				if compressErr != nil {
+					logging.Warn(context.Background(), "failed to compress transcript, storing uncompressed",
+						slog.String("error", compressErr.Error()),
 						slog.String("session_id", opts.SessionID),
 					)
-				} else {
-					for i, chunk := range chunks {
-						chunkPath := sessionMetadataDir + "/" + agent.ChunkFileName(paths.TranscriptFileName, i)
-						blobHash, blobErr := CreateBlobFromContent(s.repo, chunk)
-						if blobErr != nil {
-							logging.Warn(context.Background(), "failed to create blob for transcript chunk",
-								slog.String("error", blobErr.Error()),
-								slog.String("session_id", opts.SessionID),
-								slog.Int("chunk_index", i),
-							)
-							continue
-						}
-						changes = append(changes, TreeChange{
-							Path:  chunkPath,
-							Entry: &object.TreeEntry{Mode: filemode.Regular, Hash: blobHash},
-						})
+					compressed = transcriptContent
+				}
+
+				chunks := agent.ChunkCompressed(compressed, agent.MaxChunkSize)
+				baseName := paths.TranscriptCompressedFileName
+				if compressErr != nil {
+					baseName = paths.TranscriptFileName
+				}
+				for i, chunk := range chunks {
+					chunkPath := sessionMetadataDir + "/" + agent.ChunkFileName(baseName, i)
+					blobHash, blobErr := CreateBlobFromContent(s.repo, chunk)
+					if blobErr != nil {
+						logging.Warn(context.Background(), "failed to create blob for transcript chunk",
+							slog.String("error", blobErr.Error()),
+							slog.String("session_id", opts.SessionID),
+							slog.Int("chunk_index", i),
+						)
+						continue
 					}
+					changes = append(changes, TreeChange{
+						Path:  chunkPath,
+						Entry: &object.TreeEntry{Mode: filemode.Regular, Hash: blobHash},
+					})
 				}
 			}
 		}
 
-		// Add subagent transcript if available
+		// Add subagent transcript if available (compressed)
 		if opts.SubagentTranscriptPath != "" && opts.AgentID != "" {
 			if agentContent, readErr := os.ReadFile(opts.SubagentTranscriptPath); readErr == nil {
 				redacted, jsonlErr := redact.JSONLBytes(agentContent)
@@ -381,8 +387,22 @@ func (s *GitStore) addTaskMetadataToTree(baseTreeHash plumbing.Hash, opts WriteT
 					redacted = redact.Bytes(agentContent)
 				}
 				agentContent = redacted
-				if blobHash, blobErr := CreateBlobFromContent(s.repo, agentContent); blobErr == nil {
-					agentPath := taskMetadataDir + "/agent-" + opts.AgentID + ".jsonl"
+
+				// Compress the redacted subagent transcript
+				compressed, compressErr := compression.Compress(agentContent)
+				if compressErr != nil {
+					logging.Warn(context.Background(), "failed to compress subagent transcript, storing uncompressed",
+						slog.String("error", compressErr.Error()),
+					)
+					compressed = agentContent
+				}
+
+				if blobHash, blobErr := CreateBlobFromContent(s.repo, compressed); blobErr == nil {
+					suffix := paths.CompressedSuffix
+					if compressErr != nil {
+						suffix = ""
+					}
+					agentPath := taskMetadataDir + "/agent-" + opts.AgentID + ".jsonl" + suffix
 					changes = append(changes, TreeChange{
 						Path:  agentPath,
 						Entry: &object.TreeEntry{Mode: filemode.Regular, Hash: blobHash},
@@ -577,6 +597,18 @@ func (s *GitStore) GetTranscriptFromCommit(commitHash plumbing.Hash, metadataDir
 	}
 
 	// Fall back to direct file access (for backwards compatibility)
+	// Try compressed first
+	compressedPath := metadataDir + "/" + paths.TranscriptCompressedFileName
+	if file, fileErr := tree.File(compressedPath); fileErr == nil {
+		content, contentErr := file.Contents()
+		if contentErr == nil {
+			decompressed, decompressErr := compression.Decompress([]byte(content))
+			if decompressErr == nil {
+				return decompressed, nil
+			}
+		}
+	}
+
 	transcriptPath := metadataDir + "/" + paths.TranscriptFileName
 	if file, fileErr := tree.File(transcriptPath); fileErr == nil {
 		content, contentErr := file.Contents()
@@ -865,6 +897,7 @@ func createBlobFromFile(repo *git.Repository, filePath string) (plumbing.Hash, f
 }
 
 // addDirectoryToEntriesWithAbsPath recursively adds all files in a directory to the entries map.
+// JSONL files are compressed with zstd and stored with .zst suffix.
 func addDirectoryToEntriesWithAbsPath(repo *git.Repository, dirPathAbs, dirPathRel string, entries map[string]object.TreeEntry) error {
 	err := filepath.Walk(dirPathAbs, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -906,12 +939,12 @@ func addDirectoryToEntriesWithAbsPath(repo *git.Repository, dirPathAbs, dirPathR
 
 		treePath := filepath.ToSlash(filepath.Join(dirPathRel, relWithinDir))
 
-		blobHash, mode, err := createRedactedBlobFromFile(repo, path, treePath)
+		blobHash, mode, effectivePath, err := createRedactedBlobFromFileWithCompression(repo, path, treePath)
 		if err != nil {
 			return fmt.Errorf("failed to create blob for %s: %w", path, err)
 		}
-		entries[treePath] = object.TreeEntry{
-			Name: treePath,
+		entries[effectivePath] = object.TreeEntry{
+			Name: effectivePath,
 			Mode: mode,
 			Hash: blobHash,
 		}
@@ -932,6 +965,7 @@ type treeNode struct {
 // addDirectoryToChanges walks a filesystem directory and returns TreeChange entries
 // for each file, suitable for use with ApplyTreeChanges.
 // dirPathAbs is the absolute filesystem path; dirPathRel is the git tree-relative path.
+// JSONL files are compressed with zstd and stored with .zst suffix.
 func addDirectoryToChanges(repo *git.Repository, dirPathAbs, dirPathRel string) ([]TreeChange, error) {
 	var changes []TreeChange
 	err := filepath.Walk(dirPathAbs, func(path string, info os.FileInfo, err error) error {
@@ -965,12 +999,12 @@ func addDirectoryToChanges(repo *git.Repository, dirPathAbs, dirPathRel string) 
 
 		treePath := filepath.ToSlash(filepath.Join(dirPathRel, relWithinDir))
 
-		blobHash, mode, blobErr := createRedactedBlobFromFile(repo, path, treePath)
+		blobHash, mode, effectivePath, blobErr := createRedactedBlobFromFileWithCompression(repo, path, treePath)
 		if blobErr != nil {
 			return fmt.Errorf("failed to create blob for %s: %w", path, blobErr)
 		}
 		changes = append(changes, TreeChange{
-			Path:  treePath,
+			Path:  effectivePath,
 			Entry: &object.TreeEntry{Mode: mode, Hash: blobHash},
 		})
 		return nil

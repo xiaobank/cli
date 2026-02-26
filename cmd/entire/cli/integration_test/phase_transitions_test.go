@@ -298,9 +298,11 @@ func TestShadow_AmendPreservesTrailer(t *testing.T) {
 		t.Errorf("Checkpoint metadata should still exist at %s after amend", summaryPath)
 	}
 
-	transcriptPath := SessionFilePath(originalCheckpointID, paths.TranscriptFileName)
-	if !env.FileExistsInBranch(paths.MetadataBranchName, transcriptPath) {
-		t.Errorf("Transcript should still exist at %s after amend", transcriptPath)
+	// Try compressed first, fall back to uncompressed
+	compressedPath := SessionFilePath(originalCheckpointID, paths.TranscriptCompressedFileName)
+	uncompressedPath := SessionFilePath(originalCheckpointID, paths.TranscriptFileName)
+	if !env.FileExistsInBranch(paths.MetadataBranchName, compressedPath) && !env.FileExistsInBranch(paths.MetadataBranchName, uncompressedPath) {
+		t.Errorf("Transcript should still exist (compressed or uncompressed) after amend")
 	}
 
 	t.Log("AmendPreservesTrailer test completed successfully")

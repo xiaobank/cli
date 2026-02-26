@@ -15,6 +15,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/opencode"
 	cpkg "github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/compression"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
@@ -466,14 +467,23 @@ func (s *ManualCommitStrategy) extractSessionData(repo *git.Repository, shadowRe
 		}
 	}
 	if fullTranscript == "" {
-		// Fall back to shadow branch copy
-		if file, fileErr := tree.File(metadataDir + "/" + paths.TranscriptFileName); fileErr == nil {
+		// Fall back to shadow branch copy — try compressed first, then uncompressed
+		if file, fileErr := tree.File(metadataDir + "/" + paths.TranscriptCompressedFileName); fileErr == nil {
 			if content, contentErr := file.Contents(); contentErr == nil {
-				fullTranscript = content
+				if decompressed, decompressErr := compression.Decompress([]byte(content)); decompressErr == nil {
+					fullTranscript = string(decompressed)
+				}
 			}
-		} else if file, fileErr := tree.File(metadataDir + "/" + paths.TranscriptFileNameLegacy); fileErr == nil {
-			if content, contentErr := file.Contents(); contentErr == nil {
-				fullTranscript = content
+		}
+		if fullTranscript == "" {
+			if file, fileErr := tree.File(metadataDir + "/" + paths.TranscriptFileName); fileErr == nil {
+				if content, contentErr := file.Contents(); contentErr == nil {
+					fullTranscript = content
+				}
+			} else if file, fileErr := tree.File(metadataDir + "/" + paths.TranscriptFileNameLegacy); fileErr == nil {
+				if content, contentErr := file.Contents(); contentErr == nil {
+					fullTranscript = content
+				}
 			}
 		}
 	}

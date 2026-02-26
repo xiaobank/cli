@@ -157,6 +157,47 @@ func SortChunkFiles(files []string, baseName string) []string {
 	return sorted
 }
 
+// ChunkCompressed splits compressed (binary) data into chunks at raw byte boundaries.
+// Unlike ChunkJSONL which respects line boundaries, this splits at arbitrary byte offsets
+// since the consumer will reassemble the raw bytes before decompression.
+func ChunkCompressed(data []byte, maxSize int) [][]byte {
+	if len(data) <= maxSize {
+		return [][]byte{data}
+	}
+
+	var chunks [][]byte
+	for len(data) > 0 {
+		end := maxSize
+		if end > len(data) {
+			end = len(data)
+		}
+		chunk := make([]byte, end)
+		copy(chunk, data[:end])
+		chunks = append(chunks, chunk)
+		data = data[end:]
+	}
+	return chunks
+}
+
+// ReassembleCompressed concatenates raw byte chunks back into a single buffer.
+func ReassembleCompressed(chunks [][]byte) []byte {
+	if len(chunks) == 0 {
+		return nil
+	}
+	if len(chunks) == 1 {
+		return chunks[0]
+	}
+	total := 0
+	for _, c := range chunks {
+		total += len(c)
+	}
+	result := make([]byte, 0, total)
+	for _, c := range chunks {
+		result = append(result, c...)
+	}
+	return result
+}
+
 // geminiTranscriptDetect is used for detecting Gemini JSON format.
 type geminiTranscriptDetect struct {
 	Messages []interface{} `json:"messages"`

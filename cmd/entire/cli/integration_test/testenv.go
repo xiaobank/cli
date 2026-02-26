@@ -18,6 +18,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/compression"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
@@ -1327,6 +1328,28 @@ func SessionFilePath(checkpointID string, fileName string) string {
 	return id.CheckpointID(checkpointID).Path() + "/0/" + fileName
 }
 
+// readTranscriptContent reads the transcript content for a checkpoint, trying compressed first.
+func (env *TestEnv) readTranscriptContent(checkpointID string) string {
+	env.T.Helper()
+
+	// Try compressed format first
+	compressedPath := SessionFilePath(checkpointID, paths.TranscriptCompressedFileName)
+	if compressedContent, found := env.ReadFileFromBranch(paths.MetadataBranchName, compressedPath); found {
+		decompressed, err := compression.Decompress([]byte(compressedContent))
+		if err == nil {
+			return string(decompressed)
+		}
+	}
+
+	// Fall back to uncompressed
+	transcriptPath := SessionFilePath(checkpointID, paths.TranscriptFileName)
+	if content, found := env.ReadFileFromBranch(paths.MetadataBranchName, transcriptPath); found {
+		return content
+	}
+
+	return ""
+}
+
 // CheckpointSummaryPath returns the path to the root metadata.json (CheckpointSummary) for a checkpoint.
 func CheckpointSummaryPath(checkpointID string) string {
 	return id.CheckpointID(checkpointID).Path() + "/" + paths.MetadataFileName
@@ -1492,17 +1515,17 @@ func (env *TestEnv) validateSessionMetadata(v CheckpointValidation) {
 	}
 }
 
-// validateTranscriptJSONL validates that full.jsonl exists and is valid JSON or JSONL.
+// validateTranscriptJSONL validates that a transcript exists and is valid JSON or JSONL.
+// Tries compressed format first (.zst), falls back to uncompressed.
 // It supports both:
 // - JSON format (single document, used by OpenCode and Gemini CLI)
 // - JSONL format (one JSON object per line, used by Claude Code)
 func (env *TestEnv) validateTranscriptJSONL(checkpointID string, expectedContent []string) {
 	env.T.Helper()
 
-	transcriptPath := SessionFilePath(checkpointID, paths.TranscriptFileName)
-	content, found := env.ReadFileFromBranch(paths.MetadataBranchName, transcriptPath)
-	if !found {
-		env.T.Fatalf("Transcript not found at %s", transcriptPath)
+	content := env.readTranscriptContent(checkpointID)
+	if content == "" {
+		env.T.Fatalf("Transcript not found for checkpoint %s", checkpointID)
 	}
 
 	// First try to parse as a single JSON document (OpenCode/Gemini format)
@@ -1542,11 +1565,10 @@ func (env *TestEnv) validateTranscriptJSONL(checkpointID string, expectedContent
 func (env *TestEnv) validateContentHash(checkpointID string) {
 	env.T.Helper()
 
-	// Read transcript
-	transcriptPath := SessionFilePath(checkpointID, paths.TranscriptFileName)
-	transcript, found := env.ReadFileFromBranch(paths.MetadataBranchName, transcriptPath)
-	if !found {
-		env.T.Fatalf("Transcript not found at %s", transcriptPath)
+	// Read transcript (tries compressed first, falls back to uncompressed)
+	transcript := env.readTranscriptContent(checkpointID)
+	if transcript == "" {
+		env.T.Fatalf("Transcript not found for checkpoint %s", checkpointID)
 	}
 
 	// Read content hash

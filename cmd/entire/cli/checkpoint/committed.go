@@ -17,6 +17,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/compression"
 	"github.com/entireio/cli/cmd/entire/cli/jsonutil"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
@@ -241,7 +242,7 @@ func (s *GitStore) writeFinalTaskCheckpoint(opts WriteCommittedOptions, taskPath
 		Hash: blobHash,
 	}
 
-	// Write subagent transcript if available
+	// Write subagent transcript if available (compressed)
 	if opts.SubagentTranscriptPath != "" && opts.AgentID != "" {
 		agentContent, readErr := os.ReadFile(opts.SubagentTranscriptPath)
 		if readErr == nil {
@@ -257,9 +258,18 @@ func (s *GitStore) writeFinalTaskCheckpoint(opts WriteCommittedOptions, taskPath
 			}
 			agentContent = redacted
 
-			agentBlobHash, agentBlobErr := CreateBlobFromContent(s.repo, agentContent)
+			// Compress the redacted subagent transcript
+			compressed, compressErr := compression.Compress(agentContent)
+			if compressErr != nil {
+				logging.Warn(context.Background(), "failed to compress subagent transcript, storing uncompressed",
+					slog.String("error", compressErr.Error()),
+				)
+				compressed = agentContent
+			}
+
+			agentBlobHash, agentBlobErr := CreateBlobFromContent(s.repo, compressed)
 			if agentBlobErr == nil {
-				agentPath := taskPath + "agent-" + opts.AgentID + ".jsonl"
+				agentPath := taskPath + "agent-" + opts.AgentID + ".jsonl" + paths.CompressedSuffix
 				entries[agentPath] = object.TreeEntry{
 					Name: agentPath,
 					Mode: filemode.Regular,
@@ -557,7 +567,9 @@ func aggregateTokenUsage(a, b *agent.TokenUsage) *agent.TokenUsage {
 }
 
 // writeTranscript writes the transcript file from in-memory content or file path.
-// If the transcript exceeds MaxChunkSize, it's split into multiple chunk files.
+// Transcripts are compressed with zstd before storage. If the compressed data
+// exceeds MaxChunkSize, it's split into multiple chunk files.
+// Content hash is computed on the redacted (uncompressed) data for dedup consistency.
 func (s *GitStore) writeTranscript(opts WriteCommittedOptions, basePath string, entries map[string]object.TreeEntry) error {
 	transcript := opts.Transcript
 	if len(transcript) == 0 && opts.TranscriptPath != "" {
@@ -572,21 +584,36 @@ func (s *GitStore) writeTranscript(opts WriteCommittedOptions, basePath string, 
 		return nil
 	}
 
-	// Redact secrets before chunking so content hash reflects redacted content
+	// Redact secrets before compression so content hash reflects redacted content
 	transcript, err := redact.JSONLBytes(transcript)
 	if err != nil {
 		return fmt.Errorf("failed to redact transcript secrets: %w", err)
 	}
 
-	// Chunk the transcript if it's too large
-	chunks, err := agent.ChunkTranscript(transcript, opts.Agent)
+	// Content hash for deduplication (hash of redacted, uncompressed transcript)
+	contentHash := fmt.Sprintf("sha256:%x", sha256.Sum256(transcript))
+	hashBlob, err := CreateBlobFromContent(s.repo, []byte(contentHash))
 	if err != nil {
-		return fmt.Errorf("failed to chunk transcript: %w", err)
+		return err
+	}
+	entries[basePath+paths.ContentHashFileName] = object.TreeEntry{
+		Name: basePath + paths.ContentHashFileName,
+		Mode: filemode.Regular,
+		Hash: hashBlob,
 	}
 
-	// Write chunk files
+	// Compress the transcript
+	compressed, err := compression.Compress(transcript)
+	if err != nil {
+		return fmt.Errorf("failed to compress transcript: %w", err)
+	}
+
+	// Chunk the compressed data if it's too large
+	chunks := agent.ChunkCompressed(compressed, agent.MaxChunkSize)
+
+	// Write chunk files using compressed filename
 	for i, chunk := range chunks {
-		chunkPath := basePath + agent.ChunkFileName(paths.TranscriptFileName, i)
+		chunkPath := basePath + agent.ChunkFileName(paths.TranscriptCompressedFileName, i)
 		blobHash, err := CreateBlobFromContent(s.repo, chunk)
 		if err != nil {
 			return err
@@ -598,17 +625,6 @@ func (s *GitStore) writeTranscript(opts WriteCommittedOptions, basePath string, 
 		}
 	}
 
-	// Content hash for deduplication (hash of full transcript)
-	contentHash := fmt.Sprintf("sha256:%x", sha256.Sum256(transcript))
-	hashBlob, err := CreateBlobFromContent(s.repo, []byte(contentHash))
-	if err != nil {
-		return err
-	}
-	entries[basePath+paths.ContentHashFileName] = object.TreeEntry{
-		Name: basePath + paths.ContentHashFileName,
-		Mode: filemode.Regular,
-		Hash: hashBlob,
-	}
 	return nil
 }
 
@@ -1248,37 +1264,22 @@ func (s *GitStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOpti
 }
 
 // replaceTranscript writes the full transcript content, replacing any existing transcript.
-// Also removes any chunk files from a previous write and updates the content hash.
-func (s *GitStore) replaceTranscript(transcript []byte, agentType agent.AgentType, sessionPath string, entries map[string]object.TreeEntry) error {
-	// Remove existing transcript files (base + any chunks)
-	transcriptBase := sessionPath + paths.TranscriptFileName
+// Also removes any chunk files from a previous write (both compressed and uncompressed)
+// and updates the content hash. New transcripts are stored compressed with zstd.
+func (s *GitStore) replaceTranscript(transcript []byte, _ agent.AgentType, sessionPath string, entries map[string]object.TreeEntry) error {
+	// Remove existing transcript files — both compressed (.zst) and uncompressed formats
+	uncompressedBase := sessionPath + paths.TranscriptFileName
+	compressedBase := sessionPath + paths.TranscriptCompressedFileName
 	for key := range entries {
-		if key == transcriptBase || strings.HasPrefix(key, transcriptBase+".") {
+		if key == uncompressedBase || strings.HasPrefix(key, uncompressedBase+".") {
+			delete(entries, key)
+		}
+		if key == compressedBase || strings.HasPrefix(key, compressedBase+".") {
 			delete(entries, key)
 		}
 	}
 
-	// Chunk the transcript (matches writeTranscript behavior)
-	chunks, err := agent.ChunkTranscript(transcript, agentType)
-	if err != nil {
-		return fmt.Errorf("failed to chunk transcript: %w", err)
-	}
-
-	// Write chunk files
-	for i, chunk := range chunks {
-		chunkPath := sessionPath + agent.ChunkFileName(paths.TranscriptFileName, i)
-		blobHash, err := CreateBlobFromContent(s.repo, chunk)
-		if err != nil {
-			return fmt.Errorf("failed to create transcript blob: %w", err)
-		}
-		entries[chunkPath] = object.TreeEntry{
-			Name: chunkPath,
-			Mode: filemode.Regular,
-			Hash: blobHash,
-		}
-	}
-
-	// Update content hash
+	// Update content hash (on uncompressed data for dedup consistency)
 	contentHash := fmt.Sprintf("sha256:%x", sha256.Sum256(transcript))
 	hashBlob, err := CreateBlobFromContent(s.repo, []byte(contentHash))
 	if err != nil {
@@ -1289,6 +1290,29 @@ func (s *GitStore) replaceTranscript(transcript []byte, agentType agent.AgentTyp
 		Name: hashPath,
 		Mode: filemode.Regular,
 		Hash: hashBlob,
+	}
+
+	// Compress the transcript
+	compressed, err := compression.Compress(transcript)
+	if err != nil {
+		return fmt.Errorf("failed to compress transcript: %w", err)
+	}
+
+	// Chunk compressed data
+	chunks := agent.ChunkCompressed(compressed, agent.MaxChunkSize)
+
+	// Write chunk files using compressed filename
+	for i, chunk := range chunks {
+		chunkPath := sessionPath + agent.ChunkFileName(paths.TranscriptCompressedFileName, i)
+		blobHash, err := CreateBlobFromContent(s.repo, chunk)
+		if err != nil {
+			return fmt.Errorf("failed to create transcript blob: %w", err)
+		}
+		entries[chunkPath] = object.TreeEntry{
+			Name: chunkPath,
+			Mode: filemode.Regular,
+			Hash: blobHash,
+		}
 	}
 
 	return nil
@@ -1441,10 +1465,21 @@ func (s *GitStore) copyMetadataDir(metadataDir, basePath string, entries map[str
 
 // createRedactedBlobFromFile reads a file, applies secrets redaction, and creates a git blob.
 // JSONL files get JSONL-aware redaction; all other files get plain string redaction.
+// createRedactedBlobFromFile reads a file, redacts secrets, and creates a git blob.
+// For .jsonl files, the content is also compressed with zstd and the returned treePath
+// is updated via the compressedTreePath output parameter (if non-nil).
 func createRedactedBlobFromFile(repo *git.Repository, filePath, treePath string) (plumbing.Hash, filemode.FileMode, error) {
+	hash, mode, _, err := createRedactedBlobFromFileWithCompression(repo, filePath, treePath)
+	return hash, mode, err
+}
+
+// createRedactedBlobFromFileWithCompression reads a file, redacts secrets, compresses .jsonl files,
+// and creates a git blob. Returns the blob hash, file mode, and the effective tree path
+// (which may have .zst suffix for compressed files).
+func createRedactedBlobFromFileWithCompression(repo *git.Repository, filePath, treePath string) (plumbing.Hash, filemode.FileMode, string, error) {
 	info, err := os.Stat(filePath)
 	if err != nil {
-		return plumbing.ZeroHash, 0, fmt.Errorf("failed to stat file: %w", err)
+		return plumbing.ZeroHash, 0, "", fmt.Errorf("failed to stat file: %w", err)
 	}
 
 	mode := filemode.Regular
@@ -1454,7 +1489,7 @@ func createRedactedBlobFromFile(repo *git.Repository, filePath, treePath string)
 
 	content, err := os.ReadFile(filePath) //nolint:gosec // filePath comes from walking the metadata directory
 	if err != nil {
-		return plumbing.ZeroHash, 0, fmt.Errorf("failed to read file: %w", err)
+		return plumbing.ZeroHash, 0, "", fmt.Errorf("failed to read file: %w", err)
 	}
 
 	// Skip redaction for binary files — they can't contain text secrets and
@@ -1463,26 +1498,34 @@ func createRedactedBlobFromFile(repo *git.Repository, filePath, treePath string)
 	if binErr != nil || isBin {
 		hash, err := CreateBlobFromContent(repo, content)
 		if err != nil {
-			return plumbing.ZeroHash, 0, fmt.Errorf("failed to create blob: %w", err)
+			return plumbing.ZeroHash, 0, "", fmt.Errorf("failed to create blob: %w", err)
 		}
-		return hash, mode, nil
+		return hash, mode, treePath, nil
 	}
 
+	effectivePath := treePath
 	if strings.HasSuffix(treePath, ".jsonl") {
 		redacted, jsonlErr := redact.JSONLBytes(content)
 		if jsonlErr != nil {
 			redacted = redact.Bytes(content)
 		}
 		content = redacted
+
+		// Compress JSONL content
+		compressed, compressErr := compression.Compress(content)
+		if compressErr == nil {
+			content = compressed
+			effectivePath = treePath + paths.CompressedSuffix
+		}
 	} else {
 		content = redact.Bytes(content)
 	}
 
 	hash, err := CreateBlobFromContent(repo, content)
 	if err != nil {
-		return plumbing.ZeroHash, 0, fmt.Errorf("failed to create blob: %w", err)
+		return plumbing.ZeroHash, 0, "", fmt.Errorf("failed to create blob: %w", err)
 	}
-	return hash, mode, nil
+	return hash, mode, effectivePath, nil
 }
 
 // GetGitAuthorFromRepo retrieves the git user.name and user.email,
@@ -1519,36 +1562,58 @@ func GetGitAuthorFromRepo(repo *git.Repository) (name, email string) {
 	return name, email
 }
 
-// readTranscriptFromTree reads a transcript from a git tree, handling both chunked and non-chunked formats.
-// It checks for chunk files first (.001, .002, etc.), then falls back to the base file.
-// The agentType is used for reassembling chunks in the correct format.
+// readTranscriptFromTree reads a transcript from a git tree, handling compressed, chunked, and legacy formats.
+// It checks for compressed (.zst) files first, then falls back to uncompressed and legacy formats.
+// The agentType is used for reassembling uncompressed chunks in the correct format.
 func readTranscriptFromTree(tree *object.Tree, agentType agent.AgentType) ([]byte, error) {
-	// Collect all transcript-related files
-	var chunkFiles []string
-	var hasBaseFile bool
+	// First, try compressed format (full.jsonl.zst and chunks)
+	var compressedChunkFiles []string
+	var hasCompressedBase bool
+
+	var uncompressedChunkFiles []string
+	var hasUncompressedBase bool
 
 	for _, entry := range tree.Entries {
-		if entry.Name == paths.TranscriptFileName || entry.Name == paths.TranscriptFileNameLegacy {
-			hasBaseFile = true
+		// Compressed files
+		if entry.Name == paths.TranscriptCompressedFileName {
+			hasCompressedBase = true
 		}
-		// Check for chunk files (full.jsonl.001, full.jsonl.002, etc.)
+		if strings.HasPrefix(entry.Name, paths.TranscriptCompressedFileName+".") {
+			idx := agent.ParseChunkIndex(entry.Name, paths.TranscriptCompressedFileName)
+			if idx > 0 {
+				compressedChunkFiles = append(compressedChunkFiles, entry.Name)
+			}
+		}
+
+		// Uncompressed files
+		if entry.Name == paths.TranscriptFileName || entry.Name == paths.TranscriptFileNameLegacy {
+			hasUncompressedBase = true
+		}
 		if strings.HasPrefix(entry.Name, paths.TranscriptFileName+".") {
 			idx := agent.ParseChunkIndex(entry.Name, paths.TranscriptFileName)
 			if idx > 0 {
-				chunkFiles = append(chunkFiles, entry.Name)
+				uncompressedChunkFiles = append(uncompressedChunkFiles, entry.Name)
 			}
 		}
 	}
 
-	// If we have chunk files, read and reassemble them
-	if len(chunkFiles) > 0 {
-		// Sort chunk files by index
-		chunkFiles = agent.SortChunkFiles(chunkFiles, paths.TranscriptFileName)
+	// Try compressed format first
+	if hasCompressedBase || len(compressedChunkFiles) > 0 {
+		result, err := readCompressedTranscript(tree, hasCompressedBase, compressedChunkFiles)
+		if err == nil && result != nil {
+			return result, nil
+		}
+		if err != nil {
+			logging.Warn(context.Background(), "failed to read compressed transcript, falling back to uncompressed",
+				slog.String("error", err.Error()),
+			)
+		}
+	}
 
-		// Check if base file should be included as chunk 0.
-		// NOTE: This assumes the chunking convention where the unsuffixed file
-		// (full.jsonl) is chunk 0, and numbered files (.001, .002) are chunks 1+.
-		if hasBaseFile {
+	// Fall back to uncompressed chunked format
+	if len(uncompressedChunkFiles) > 0 {
+		chunkFiles := agent.SortChunkFiles(uncompressedChunkFiles, paths.TranscriptFileName)
+		if hasUncompressedBase {
 			chunkFiles = append([]string{paths.TranscriptFileName}, chunkFiles...)
 		}
 
@@ -1594,6 +1659,56 @@ func readTranscriptFromTree(tree *object.Tree, agentType agent.AgentType) ([]byt
 		if content, err := file.Contents(); err == nil {
 			return []byte(content), nil
 		}
+	}
+
+	return nil, nil
+}
+
+// readCompressedTranscript reads and decompresses a zstd-compressed transcript from a tree.
+func readCompressedTranscript(tree *object.Tree, hasBase bool, chunkFiles []string) ([]byte, error) {
+	if len(chunkFiles) > 0 {
+		// Chunked compressed data
+		sorted := agent.SortChunkFiles(chunkFiles, paths.TranscriptCompressedFileName)
+		if hasBase {
+			sorted = append([]string{paths.TranscriptCompressedFileName}, sorted...)
+		}
+
+		var chunks [][]byte
+		for _, chunkFile := range sorted {
+			file, err := tree.File(chunkFile)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read compressed chunk %s: %w", chunkFile, err)
+			}
+			content, err := file.Contents()
+			if err != nil {
+				return nil, fmt.Errorf("failed to read compressed chunk contents %s: %w", chunkFile, err)
+			}
+			chunks = append(chunks, []byte(content))
+		}
+
+		compressed := agent.ReassembleCompressed(chunks)
+		result, err := compression.Decompress(compressed)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decompress transcript: %w", err)
+		}
+		return result, nil
+	}
+
+	// Single compressed file
+	if hasBase {
+		file, err := tree.File(paths.TranscriptCompressedFileName)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read compressed transcript: %w", err)
+		}
+		content, err := file.Contents()
+		if err != nil {
+			return nil, fmt.Errorf("failed to read compressed transcript contents: %w", err)
+		}
+		result, err := compression.Decompress([]byte(content))
+		if err != nil {
+			return nil, fmt.Errorf("failed to decompress transcript: %w", err)
+		}
+		return result, nil
 	}
 
 	return nil, nil

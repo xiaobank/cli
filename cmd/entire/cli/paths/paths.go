@@ -22,15 +22,17 @@ const (
 
 // Metadata file names
 const (
-	ContextFileName          = "context.md"
-	PromptFileName           = "prompt.txt"
-	SummaryFileName          = "summary.txt"
-	TranscriptFileName       = "full.jsonl"
-	TranscriptFileNameLegacy = "full.log"
-	MetadataFileName         = "metadata.json"
-	CheckpointFileName       = "checkpoint.json"
-	ContentHashFileName      = "content_hash.txt"
-	SettingsFileName         = "settings.json"
+	ContextFileName              = "context.md"
+	PromptFileName               = "prompt.txt"
+	SummaryFileName              = "summary.txt"
+	TranscriptFileName           = "full.jsonl"
+	TranscriptCompressedFileName = "full.jsonl.zst"
+	TranscriptFileNameLegacy     = "full.log"
+	MetadataFileName             = "metadata.json"
+	CheckpointFileName           = "checkpoint.json"
+	ContentHashFileName          = "content_hash.txt"
+	SettingsFileName             = "settings.json"
+	CompressedSuffix             = ".zst"
 )
 
 // MetadataBranchName is the orphan branch used by manual-commit strategy to store metadata

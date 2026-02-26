@@ -130,18 +130,10 @@ func TestShadow_DeferredTranscriptFinalization(t *testing.T) {
 		t.Fatal("entire/checkpoints/v1 branch should exist")
 	}
 
-	// Read the provisional transcript
-	transcriptPath := SessionFilePath(checkpointID, paths.TranscriptFileName)
-
-	// Verify the path structure matches expected sharded format: <id[:2]>/<id[2:]>/0/full.jsonl
-	expectedPrefix := checkpointID[:2] + "/" + checkpointID[2:] + "/0/"
-	if !strings.HasPrefix(transcriptPath, expectedPrefix) {
-		t.Errorf("Unexpected path structure: got %s, expected prefix %s", transcriptPath, expectedPrefix)
-	}
-
-	provisionalContent, found := env.ReadFileFromBranch(paths.MetadataBranchName, transcriptPath)
-	if !found {
-		t.Fatalf("Provisional transcript should exist at %s", transcriptPath)
+	// Read the provisional transcript (compressed or uncompressed)
+	provisionalContent := env.readTranscriptContent(checkpointID)
+	if provisionalContent == "" {
+		t.Fatal("Provisional transcript should exist")
 	}
 	t.Logf("Provisional transcript length: %d bytes", len(provisionalContent))
 
@@ -175,9 +167,9 @@ func TestShadow_DeferredTranscriptFinalization(t *testing.T) {
 	}
 
 	// Read the finalized transcript
-	finalContent, found := env.ReadFileFromBranch(paths.MetadataBranchName, transcriptPath)
-	if !found {
-		t.Fatalf("Finalized transcript should exist at %s", transcriptPath)
+	finalContent := env.readTranscriptContent(checkpointID)
+	if finalContent == "" {
+		t.Fatal("Finalized transcript should exist")
 	}
 	t.Logf("Finalized transcript length: %d bytes", len(finalContent))
 

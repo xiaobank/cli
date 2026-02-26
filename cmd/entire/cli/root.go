@@ -83,6 +83,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(newExplainCmd())
 	cmd.AddCommand(newDoctorCmd())
 	cmd.AddCommand(newSendAnalyticsCmd())
+	cmd.AddCommand(newOptimizeCmd())
 	cmd.AddCommand(newCurlBashPostInstallCmd())
 
 	// Replace default help command with custom one that supports -t flag

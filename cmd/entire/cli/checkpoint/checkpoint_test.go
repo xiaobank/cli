@@ -15,6 +15,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/compression"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
@@ -3264,16 +3265,23 @@ func TestWriteCommitted_SubagentTranscript_JSONLFallback(t *testing.T) {
 		t.Fatalf("failed to get tree: %v", err)
 	}
 
-	agentPath := checkpointID.Path() + "/tasks/toolu_test123/agent-agent1.jsonl"
+	agentPath := checkpointID.Path() + "/tasks/toolu_test123/agent-agent1.jsonl" + paths.CompressedSuffix
 	file, err := tree.File(agentPath)
 	if err != nil {
 		t.Fatalf("subagent transcript should exist at %s (JSONL fallback should not drop it): %v", agentPath, err)
 	}
 
-	content, err := file.Contents()
+	compressedContent, err := file.Contents()
 	if err != nil {
 		t.Fatalf("failed to read subagent transcript: %v", err)
 	}
+
+	// Decompress the content
+	decompressed, err := compression.Decompress([]byte(compressedContent))
+	if err != nil {
+		t.Fatalf("failed to decompress subagent transcript: %v", err)
+	}
+	content := string(decompressed)
 
 	// Verify the transcript was stored (not dropped) and secret was redacted
 	if content == "" {
@@ -3356,16 +3364,23 @@ func TestWriteTemporaryTask_SubagentTranscript_RedactsSecrets(t *testing.T) {
 		t.Fatalf("failed to get tree: %v", err)
 	}
 
-	agentPath := paths.EntireMetadataDir + "/test-session/tasks/toolu_test456/agent-agent1.jsonl"
+	agentPath := paths.EntireMetadataDir + "/test-session/tasks/toolu_test456/agent-agent1.jsonl" + paths.CompressedSuffix
 	file, err := tree.File(agentPath)
 	if err != nil {
 		t.Fatalf("subagent transcript should exist at %s: %v", agentPath, err)
 	}
 
-	content, err := file.Contents()
+	compressedContent, err := file.Contents()
 	if err != nil {
 		t.Fatalf("failed to read subagent transcript: %v", err)
 	}
+
+	// Decompress the content
+	decompressed, err := compression.Decompress([]byte(compressedContent))
+	if err != nil {
+		t.Fatalf("failed to decompress subagent transcript: %v", err)
+	}
+	content := string(decompressed)
 
 	// Verify the transcript was stored (not dropped) and secret was redacted
 	if content == "" {

@@ -15,6 +15,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/compression"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
@@ -1064,7 +1065,15 @@ func (s *ManualCommitStrategy) sessionHasNewContent(repo *git.Repository, state 
 	var transcriptLines int
 	var hasTranscriptFile bool
 
-	if file, fileErr := tree.File(metadataDir + "/" + paths.TranscriptFileName); fileErr == nil {
+	// Try compressed format first, then uncompressed, then legacy
+	if file, fileErr := tree.File(metadataDir + "/" + paths.TranscriptCompressedFileName); fileErr == nil {
+		hasTranscriptFile = true
+		if content, contentErr := file.Contents(); contentErr == nil {
+			if decompressed, decompressErr := compression.Decompress([]byte(content)); decompressErr == nil {
+				transcriptLines = countTranscriptItems(state.AgentType, string(decompressed))
+			}
+		}
+	} else if file, fileErr := tree.File(metadataDir + "/" + paths.TranscriptFileName); fileErr == nil {
 		hasTranscriptFile = true
 		if content, contentErr := file.Contents(); contentErr == nil {
 			transcriptLines = countTranscriptItems(state.AgentType, content)

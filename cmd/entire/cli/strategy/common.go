@@ -16,6 +16,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/compression"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 
@@ -1091,7 +1092,19 @@ func getTaskTranscriptFromTree(point RewindPoint) ([]byte, error) {
 	// Session transcript is at: .entire/metadata/<session>/<TranscriptFileName>
 	sessionDir := filepath.Dir(filepath.Dir(point.MetadataDir))
 
-	// Try current format first, then legacy
+	// Try compressed format first
+	compressedPath := sessionDir + "/" + paths.TranscriptCompressedFileName
+	if file, fileErr := tree.File(compressedPath); fileErr == nil {
+		content, contentErr := file.Contents()
+		if contentErr == nil {
+			decompressed, decompressErr := compression.Decompress([]byte(content))
+			if decompressErr == nil {
+				return decompressed, nil
+			}
+		}
+	}
+
+	// Try current uncompressed format, then legacy
 	transcriptPath := sessionDir + "/" + paths.TranscriptFileName
 	file, err := tree.File(transcriptPath)
 	if err != nil {
