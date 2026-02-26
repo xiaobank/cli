@@ -113,7 +113,7 @@ const (
 // Agent type constants (type identifiers stored in metadata/trailers)
 const (
 	AgentTypeClaudeCode AgentType = "Claude Code"
-	AgentTypeCursor     AgentType = "Cursor IDE"
+	AgentTypeCursor     AgentType = "Cursor"
 	AgentTypeGemini     AgentType = "Gemini CLI"
 	AgentTypeOpenCode   AgentType = "OpenCode"
 	AgentTypeUnknown    AgentType = "Agent" // Fallback for backwards compatibility
