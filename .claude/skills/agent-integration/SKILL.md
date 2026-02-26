@@ -55,7 +55,7 @@ Read and follow the write-tests procedure from `.claude/skills/agent-integration
 
 ### Phase 3: Implement
 
-Build the Go agent package using test-driven development.
+Build the Go agent package using E2E-driven development.
 
 Read and follow the implement procedure from `.claude/skills/agent-integration/implementer.md`.
 
