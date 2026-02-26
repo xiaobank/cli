@@ -3,6 +3,7 @@ package checkpoint
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	gogit "github.com/go-git/go-git/v5"
@@ -106,6 +107,70 @@ func TestAddTaskMetadataToTree_EquivalenceWithFlattenRebuild(t *testing.T) {
 
 	if newHash != oldHash {
 		t.Errorf("tree hash mismatch: new=%s old=%s", newHash, oldHash)
+	}
+}
+
+// TestAddTaskMetadataToTree_IncrementalPath verifies the incremental checkpoint
+// branch of addTaskMetadataToTree produces a valid tree with the expected entry.
+// We can't do exact hash comparison because the incremental checkpoint embeds
+// time.Now(), so instead we verify the file exists at the correct path in the tree.
+func TestAddTaskMetadataToTree_IncrementalPath(t *testing.T) {
+	t.Parallel()
+
+	repo, _ := setupTestRepo(t)
+	store := NewGitStore(repo)
+
+	head, err := repo.Head()
+	if err != nil {
+		t.Fatalf("head: %v", err)
+	}
+	commit, err := repo.CommitObject(head.Hash())
+	if err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	opts := WriteTemporaryTaskOptions{
+		SessionID:           "sess-002",
+		ToolUseID:           "tool-002",
+		IsIncremental:       true,
+		IncrementalType:     "todo_update",
+		IncrementalSequence: 3,
+		IncrementalData:     []byte(`{"items":["task1","task2"]}`),
+	}
+
+	newTreeHash, err := store.addTaskMetadataToTree(commit.TreeHash, opts)
+	if err != nil {
+		t.Fatalf("addTaskMetadataToTree (incremental): %v", err)
+	}
+
+	// Verify the checkpoint file exists at the expected path
+	newTree, err := repo.TreeObject(newTreeHash)
+	if err != nil {
+		t.Fatalf("read new tree: %v", err)
+	}
+
+	expectedPath := ".entire/metadata/sess-002/tasks/tool-002/checkpoints/003-tool-002.json"
+	file, err := newTree.File(expectedPath)
+	if err != nil {
+		t.Fatalf("file not found at %s: %v", expectedPath, err)
+	}
+
+	content, err := file.Contents()
+	if err != nil {
+		t.Fatalf("read file contents: %v", err)
+	}
+
+	// Verify it's valid JSON with expected fields
+	if !strings.Contains(content, `"type": "todo_update"`) {
+		t.Errorf("expected type field in content, got: %s", content)
+	}
+	if !strings.Contains(content, `"tool_use_id": "tool-002"`) {
+		t.Errorf("expected tool_use_id field in content, got: %s", content)
+	}
+
+	// Verify original files are still present (tree surgery didn't destroy them)
+	if _, err := newTree.File("file1.txt"); err != nil {
+		t.Errorf("original file1.txt missing from tree after incremental update")
 	}
 }
 
