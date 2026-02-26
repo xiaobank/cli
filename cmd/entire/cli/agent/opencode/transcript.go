@@ -117,10 +117,11 @@ func (a *OpenCodeAgent) ExtractModifiedFilesFromOffset(path string, startOffset 
 			if !slices.Contains(FileModificationTools, part.Tool) {
 				continue
 			}
-			filePath := extractFilePathFromInput(part.State.Input)
-			if filePath != "" && !seen[filePath] {
-				seen[filePath] = true
-				files = append(files, filePath)
+			for _, filePath := range extractFilePaths(part.State) {
+				if !seen[filePath] {
+					seen[filePath] = true
+					files = append(files, filePath)
+				}
 			}
 		}
 	}
@@ -153,10 +154,11 @@ func ExtractModifiedFiles(data []byte) ([]string, error) {
 			if !slices.Contains(FileModificationTools, part.Tool) {
 				continue
 			}
-			filePath := extractFilePathFromInput(part.State.Input)
-			if filePath != "" && !seen[filePath] {
-				seen[filePath] = true
-				files = append(files, filePath)
+			for _, filePath := range extractFilePaths(part.State) {
+				if !seen[filePath] {
+					seen[filePath] = true
+					files = append(files, filePath)
+				}
 			}
 		}
 	}
@@ -164,17 +166,36 @@ func ExtractModifiedFiles(data []byte) ([]string, error) {
 	return files, nil
 }
 
-// extractFilePathFromInput extracts the file path from an OpenCode tool's input map.
-// OpenCode uses camelCase keys (e.g., "filePath"), with "path" as a fallback.
-func extractFilePathFromInput(input map[string]any) string {
+// extractFilePaths extracts file paths from an OpenCode tool's state.
+// For standard tools (edit, write), the path is in input.filePath or input.path.
+// For apply_patch (codex models), the paths are in state.metadata.files[].filePath.
+func extractFilePaths(state *ToolState) []string {
+	if state == nil {
+		return nil
+	}
+
+	// Check metadata.files first (used by apply_patch / codex models).
+	if state.Metadata != nil {
+		var paths []string
+		for _, f := range state.Metadata.Files {
+			if f.FilePath != "" {
+				paths = append(paths, f.FilePath)
+			}
+		}
+		if len(paths) > 0 {
+			return paths
+		}
+	}
+
+	// Fall back to input keys (used by edit, write).
 	for _, key := range []string{"filePath", "path"} {
-		if v, ok := input[key]; ok {
+		if v, ok := state.Input[key]; ok {
 			if s, ok := v.(string); ok && s != "" {
-				return s
+				return []string{s}
 			}
 		}
 	}
-	return ""
+	return nil
 }
 
 // ExtractPrompts extracts user prompt strings from the transcript starting at the given offset.

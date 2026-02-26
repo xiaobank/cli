@@ -297,6 +297,12 @@ func handleLifecycleTurnEnd(ctx context.Context, ag agent.Agent, event *agent.Ev
 	if changes != nil {
 		relNewFiles = FilterAndNormalizePaths(changes.New, repoRoot)
 		relDeletedFiles = FilterAndNormalizePaths(changes.Deleted, repoRoot)
+
+		// Merge git-status modified files as a fallback for transcript parsing.
+		// Transcript parsing is the primary source for modified files, but it can miss
+		// files if the agent uses an unrecognized tool or the transcript format changes.
+		// Git status catches any tracked file with working-tree changes.
+		relModifiedFiles = mergeUnique(relModifiedFiles, FilterAndNormalizePaths(changes.Modified, repoRoot))
 	}
 
 	// Filter transcript-extracted files to exclude files already committed to HEAD.
@@ -533,6 +539,7 @@ func handleLifecycleSubagentEnd(ctx context.Context, ag agent.Agent, event *agen
 	if changes != nil {
 		relNewFiles = FilterAndNormalizePaths(changes.New, repoRoot)
 		relDeletedFiles = FilterAndNormalizePaths(changes.Deleted, repoRoot)
+		relModifiedFiles = mergeUnique(relModifiedFiles, FilterAndNormalizePaths(changes.Modified, repoRoot))
 	}
 
 	// If no changes, skip
