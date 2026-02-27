@@ -285,6 +285,7 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 		TokenUsage:                  sessionData.TokenUsage,
 		InitialAttribution:          attribution,
 		Summary:                     summary,
+		ExtraFiles:                  sessionData.ExtraFiles,
 	}); err != nil {
 		return nil, fmt.Errorf("failed to write checkpoint metadata: %w", err)
 	}
@@ -495,6 +496,10 @@ func (s *ManualCommitStrategy) extractSessionData(ctx context.Context, repo *git
 		data.TokenUsage = agent.CalculateTokenUsage(ag, data.Transcript, checkpointTranscriptStart, "") //TODO: why do we not use here subagents dir?
 	}
 
+	// Extract agent-contributed extra files from the shadow branch metadata directory.
+	// These are files not part of the standard set (transcript, prompt, context, summary).
+	data.ExtraFiles = extractExtraFilesFromTree(tree, metadataDir)
+
 	return data, nil
 }
 
@@ -540,6 +545,51 @@ func (s *ManualCommitStrategy) extractSessionDataFromLiveTranscript(ctx context.
 	}
 
 	return data, nil
+}
+
+// standardMetadataFiles is the set of files written by the framework during SaveStep.
+// Any other file in the metadata directory is considered an agent-contributed extra file.
+var standardMetadataFiles = map[string]bool{
+	paths.TranscriptFileName:       true,
+	paths.TranscriptFileNameLegacy: true,
+	paths.PromptFileName:           true,
+	paths.ContextFileName:          true,
+	paths.SummaryFileName:          true,
+	paths.MetadataFileName:         true,
+	paths.ContentHashFileName:      true,
+}
+
+// extractExtraFilesFromTree walks the shadow branch tree under metadataDir and
+// returns any files that are not part of the standard metadata set. These are
+// agent-contributed files (e.g., .cursor-chat.json archives).
+func extractExtraFilesFromTree(tree *object.Tree, metadataDir string) map[string][]byte {
+	prefix := metadataDir + "/"
+	extras := make(map[string][]byte)
+
+	_ = tree.Files().ForEach(func(f *object.File) error { //nolint:errcheck // best-effort: extra files are optional
+		if !strings.HasPrefix(f.Name, prefix) {
+			return nil
+		}
+		relPath := strings.TrimPrefix(f.Name, prefix)
+		// Skip subdirectories (tasks/) and standard files
+		if strings.Contains(relPath, "/") {
+			return nil
+		}
+		if standardMetadataFiles[relPath] {
+			return nil
+		}
+		content, err := f.Contents()
+		if err != nil {
+			return nil //nolint:nilerr // best-effort: skip files we can't read
+		}
+		extras[relPath] = []byte(content)
+		return nil
+	})
+
+	if len(extras) == 0 {
+		return nil
+	}
+	return extras
 }
 
 // countTranscriptItems counts lines (JSONL) or messages (JSON) in a transcript.

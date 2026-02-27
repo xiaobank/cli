@@ -285,6 +285,11 @@ type WriteCommittedOptions struct {
 	//   - the transcript was empty or too short to summarize
 	//   - the checkpoint predates the summarization feature
 	Summary *Summary
+
+	// ExtraFiles contains agent-contributed files to include in the committed checkpoint.
+	// Keys are relative paths within the session subdirectory (e.g., "abc123.cursor-chat.json").
+	// Values are the raw file contents.
+	ExtraFiles map[string][]byte
 }
 
 // UpdateCommittedOptions contains options for updating an existing committed checkpoint.
