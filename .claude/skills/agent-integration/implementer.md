@@ -4,9 +4,9 @@ Build the agent Go package using E2E-driven development. E2E tests are the prima
 
 ## Prerequisites
 
-- The research command's findings (hook events, transcript format, config mechanism)
+- The research command's one-pager at `cmd/entire/cli/agent/$AGENT_PACKAGE/AGENT.md`
 - The E2E test runner already added (from `write-tests` command)
-- If neither exists, read the agent's docs and ask the user about hook events, transcript format, and config
+- If no one-pager exists, read the agent's docs and ask the user about hook events, transcript format, and config
 
 ## Procedure
 
@@ -21,28 +21,29 @@ Read these files thoroughly before writing any code:
 
 ### Step 2: Read Reference Implementation
 
-Run `Glob("cmd/entire/cli/agent/*/")` to find all existing agent packages. Pick the closest match based on research findings — read a few agents' `hooks.go` files to find one with a similar hook mechanism to your target. Read all `*.go` files (skip `*_test.go` on first pass) in the chosen reference.
+Read `cmd/entire/cli/agent/$AGENT_PACKAGE/AGENT.md` (the one-pager from the research phase) for the agent's hook mechanism, transcript format, and config structure.
+
+Run `Glob("cmd/entire/cli/agent/*/")` to find all existing agent packages. Check the one-pager's "Hook Mechanism" and "Gaps & Limitations" sections to pick the best reference — choose an agent with a similar hook mechanism to your target. Read all `*.go` files (skip `*_test.go` on first pass) in the chosen reference.
 
 ### Step 3: Create Bare-Minimum Compiling Package
 
 Create the agent package directory and stub out every required interface method so the project compiles.
 
 ```
-cmd/entire/cli/agent/$AGENT_SLUG/
+cmd/entire/cli/agent/$AGENT_PACKAGE/
 ```
 
 **What to create:**
 
-1. **`${AGENT_SLUG}.go`** — Struct definition, `init()` with `agent.Register(agent.AgentName("$AGENT_SLUG"), New)`, and stub implementations for all `Agent` interface methods (Name, Type, Description, IsPreview, DetectPresence, ProtectedDirs, GetSessionDir, ResolveSessionFile, ReadTranscript, ChunkTranscript, ReassembleTranscript).
-2. **`types.go`** — Hook input struct(s) with JSON tags matching the research captures.
-3. **`lifecycle.go`** — Stub `ParseHookEvent()` that returns `nil, nil` for all inputs.
-4. **`hooks.go`** — Stub `InstallHooks()`, `UninstallHooks()`, `AreHooksInstalled()` that return nil/false.
-5. **`transcript.go`** — Stub `TranscriptAnalyzer` methods if the research report says the agent supports transcript analysis.
+1. **`${AGENT_PACKAGE}.go`** — Struct definition, `init()` with `agent.Register(agent.AgentName("$AGENT_KEY"), New)`, and stub implementations for every method in the `Agent` interface — refer to `agent.go` from Step 1. Include `HookSupport` methods in `lifecycle.go` and `hooks.go`.
+2. **`types.go`** — Hook input struct(s) with JSON tags matching the one-pager's "Hook input (stdin JSON)" section.
+3. **`lifecycle.go`** — Stub `ParseHookEvent()` that returns `nil, nil` for all inputs. Use the one-pager's "Hook names" table for the native hook name → Entire EventType mapping.
+4. **`hooks.go`** — Stub `InstallHooks()`, `UninstallHooks()`, `AreHooksInstalled()` that return nil/false. Use the one-pager's "Config file" and "Hook registration" sections for the config path and format.
+5. **`transcript.go`** — Stub `TranscriptAnalyzer` methods if the one-pager's "Transcript" section indicates the agent supports transcript analysis. Use the one-pager for transcript location and format.
 
 **Wire up blank imports:**
 
-- Add `_ "github.com/entireio/cli/cmd/entire/cli/agent/$AGENT_SLUG"` to `cmd/entire/cli/agent/hooks_cmd.go`
-- Add the agent to the config map in `cmd/entire/cli/agent/config.go`
+- Ensure the blank import `_ "github.com/entireio/cli/cmd/entire/cli/agent/$AGENT_PACKAGE"` exists in `cmd/entire/cli/hooks_cmd.go`
 
 **Verify compilation:**
 
@@ -52,6 +53,8 @@ mise run fmt && mise run lint && mise run test
 
 Everything must pass before proceeding. Fix any issues.
 
+**Standing instruction for Steps 4-12:** If you need agent-specific information (hook format, transcript location, config structure), check `AGENT.md` first. If `AGENT.md` doesn't cover what you need, you may search external docs — but always update `AGENT.md` with anything new you discover so future steps don't need to re-search.
+
 ### Step 4: E2E Tier 1 — `TestHumanOnlyChangesAndCommits`
 
 This test requires no agent prompts — it only exercises hooks, so it's the fastest feedback loop.
@@ -59,7 +62,7 @@ This test requires no agent prompts — it only exercises hooks, so it's the fas
 **What it exercises:**
 - `InstallHooks()` — real hook installation in the agent's config
 - `AreHooksInstalled()` — detection that hooks are present
-- `ParseHookEvent()` — at minimum, the `SessionStart` and `Stop` event types
+- `ParseHookEvent()` — at minimum, the event types needed for session start and turn end (see `EventType` constants in `event.go`)
 - Basic hook invocation flow (the test calls hooks directly via the CLI)
 
 **Cycle:**
@@ -73,7 +76,7 @@ This test requires no agent prompts — it only exercises hooks, so it's the fas
 **After passing, write unit tests:**
 
 - `hooks_test.go` — Test `InstallHooks` (creates config, idempotent), `UninstallHooks` (removes hooks), `AreHooksInstalled` (detects presence). Use a temp directory to avoid touching real config.
-- `lifecycle_test.go` (initial) — Test `ParseHookEvent` for the event types exercised so far (`SessionStart`, `Stop`). Include nil return for unknown hook names and malformed JSON input.
+- `lifecycle_test.go` (initial) — Test `ParseHookEvent` for the event types exercised so far. Include nil return for unknown hook names and malformed JSON input. **Important:** Test against `EventType` constants from `event.go`, not native hook names — the agent's native hook verbs (e.g., "stop") map to normalized EventTypes (e.g., `TurnEnd`).
 
 Run: `mise run fmt && mise run lint && mise run test`
 
@@ -82,10 +85,10 @@ Run: `mise run fmt && mise run lint && mise run test`
 The foundational test. This exercises the full agent lifecycle: start session → agent prompt → agent produces files → user commits → session ends.
 
 **What it exercises:**
-- Complete `ParseHookEvent()` for all 4 basic events: `SessionStart`, `UserPromptSubmit`, `SubagentTaskStart`/`SubagentTaskEnd` (if applicable), `Stop`
+- Complete `ParseHookEvent()` for all lifecycle event types from `event.go`. Use the one-pager's hook mapping table to translate native hook names to `EventType` constants.
 - `GetSessionDir` / `ResolveSessionFile` — finding the agent's session/transcript files
 - `ReadTranscript` / `ChunkTranscript` / `ReassembleTranscript` — reading native transcript format
-- `TranscriptAnalyzer` methods: `ExtractFilesTouched`, `ExtractUserPrompts`, `GenerateContext`
+- `TranscriptAnalyzer` methods (see `agent.go` for current method signatures)
 
 **Cycle:**
 
@@ -97,9 +100,9 @@ The foundational test. This exercises the full agent lifecycle: start session �
 
 **After passing, write unit tests:**
 
-- `types_test.go` — Test hook input struct parsing with actual JSON payloads from research captures.
+- `types_test.go` — Test hook input struct parsing with actual JSON payloads from `AGENT.md` examples or captured payloads.
 - `lifecycle_test.go` (complete) — Test `ParseHookEvent` for all 4 event types. Use actual JSON payloads. Test every `EventType` mapping, nil returns for pass-through hooks, empty input, and malformed JSON.
-- `transcript_test.go` — Test `ReadTranscript`, `ChunkTranscript`, `ReassembleTranscript` with sample data in the agent's native format. Test `ExtractFilesTouched`, `ExtractUserPrompts`, `GenerateContext` if `TranscriptAnalyzer` is implemented.
+- `transcript_test.go` — Test `ReadTranscript`, `ChunkTranscript`, `ReassembleTranscript` with sample data in the agent's native format. Test all `TranscriptAnalyzer` methods (from `agent.go`) if implemented.
 
 Run: `mise run fmt && mise run lint && mise run test`
 
@@ -178,7 +181,7 @@ Run: `mise run fmt && mise run lint && mise run test`
 
 ### Step 10: Optional Interfaces
 
-Read `cmd/entire/cli/agent/agent.go` for all optional interfaces. For each one the research report marked as feasible:
+Read `cmd/entire/cli/agent/agent.go` for all optional interfaces. For each one the one-pager's "Gaps & Limitations" or "Transcript" sections suggest is feasible:
 
 - **`TranscriptPreparer`** — If the agent needs pre-processing before transcript storage
 - **`TokenCalculator`** — If the agent provides token usage data
@@ -186,7 +189,7 @@ Read `cmd/entire/cli/agent/agent.go` for all optional interfaces. For each one t
 
 For each optional interface:
 
-1. Implement the methods based on research findings
+1. Implement the methods based on `AGENT.md` and reference implementation
 2. Write unit tests for the new methods
 3. Run relevant E2E tests to verify integration
 
@@ -220,11 +223,13 @@ Run the remaining edge case and stress tests:
 
 Run: `mise run fmt && mise run lint && mise run test`
 
-### Step 13: Register and Wire Up
+### Step 13: Verify Registration
 
-1. **Register hook commands**: Search `cmd/entire/cli/` for where hook subcommands are registered and add the new agent
-2. **Verify registration**: The `init()` function in `${AGENT_SLUG}.go` should call `agent.Register(agent.AgentName("$AGENT_SLUG"), New)`
-3. **Run full test suite**: `mise run test:ci`
+Verify that registration from Step 3 is correct and complete:
+
+1. The `init()` function in `${AGENT_PACKAGE}.go` calls `agent.Register(agent.AgentName("$AGENT_KEY"), New)`
+2. The blank import in `cmd/entire/cli/hooks_cmd.go` is present
+3. Run the full test suite: `mise run test:ci`
 
 ### Step 14: Final Validation
 

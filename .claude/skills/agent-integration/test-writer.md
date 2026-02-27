@@ -1,17 +1,19 @@
 # Write-Tests Command
 
-Generate the E2E test suite for a new agent integration. Uses the research report's findings and the existing E2E test infrastructure.
+Generate the E2E test suite for a new agent integration. Uses the implementation one-pager (`AGENT.md`) and the existing E2E test infrastructure.
 
 ## Prerequisites
 
-- The research command should have been run first (or equivalent knowledge of the agent's hook model)
-- If no research report exists, ask the user about the agent's hook events, transcript format, and config mechanism
+- The research command's one-pager at `cmd/entire/cli/agent/$AGENT_PACKAGE/AGENT.md`
+- If no one-pager exists, ask the user for: binary name, prompt CLI flags, interactive mode support, and hook event names
 
 ## Procedure
 
 ### Step 1: Read E2E Test Infrastructure
 
-Read these files to understand the existing test patterns:
+Read these files to understand the existing test patterns.
+
+**Most critical:** Focus on items 3 (`agent.go` — the interface you must implement) and read one existing agent implementation (e.g., `e2e/agents/claude.go`) as a reference. Skim the rest for context.
 
 1. `e2e/tests/main_test.go` — `TestMain` builds the CLI binary (via `entire.BinPath()`), runs preflight checks for required binaries (git, tmux, agent CLIs), sets up artifact directories, and configures env
 2. `e2e/testutil/repo.go` — `RepoState` struct (holds agent, dir, artifact dir, head/checkpoint refs), `SetupRepo` (creates temp git repo, runs `entire enable`, patches settings), `ForEachAgent` (runs a test per registered agent with repo setup, concurrency gating, and timeout scaling)
@@ -35,6 +37,15 @@ Run `Glob("e2e/tests/*_test.go")` to find all existing test files. Read a few to
 Read `docs/architecture/checkpoint-scenarios.md` for the state machine and scenarios the tests should cover.
 
 ### Step 4: Create Agent Implementation
+
+Read `cmd/entire/cli/agent/$AGENT_PACKAGE/AGENT.md` (the one-pager from the research phase) for all agent-specific information:
+- Binary name → "Binary" section
+- Prompt flags → "CLI Flags" section
+- Interactive mode → "CLI Flags" section
+- Transient error patterns → "Gaps & Limitations" section (use defaults if not listed)
+- Bootstrap setup → "Config Preservation" section
+
+**If something is missing from the one-pager**, you may search external docs — but update `AGENT.md` with anything new you discover.
 
 Add a new `Agent` implementation in `e2e/agents/${agent_slug}.go`:
 
@@ -147,7 +158,7 @@ Key implementation details:
 - `IsTransientError()` identifies retryable API failures — `RepoState.RunPrompt` retries once on transient errors
 - `RunPrompt()` uses `exec.CommandContext` with `Setpgid: true` and process-group kill for clean cancellation
 - `StartSession()` uses `NewTmuxSession` for interactive PTY tests; return `nil` if interactive mode isn't supported
-- Use the research report to determine CLI flags, prompt passing mechanism, and env vars
+- Use `AGENT.md` (the one-pager) for CLI flags, prompt passing mechanism, and env vars
 
 ### Step 5: Update SetupRepo (if needed)
 
