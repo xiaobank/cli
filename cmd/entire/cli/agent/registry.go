@@ -99,7 +99,6 @@ const (
 	AgentNameClaudeCode types.AgentName = "claude-code"
 	AgentNameCursor     types.AgentName = "cursor"
 	AgentNameGemini     types.AgentName = "gemini"
-	AgentNameKiro       types.AgentName = "kiro"
 	AgentNameOpenCode   types.AgentName = "opencode"
 )
 
@@ -108,7 +107,6 @@ const (
 	AgentTypeClaudeCode types.AgentType = "Claude Code"
 	AgentTypeCursor     types.AgentType = "Cursor"
 	AgentTypeGemini     types.AgentType = "Gemini CLI"
-	AgentTypeKiro       types.AgentType = "Kiro"
 	AgentTypeOpenCode   types.AgentType = "OpenCode"
 	AgentTypeUnknown    types.AgentType = "Agent" // Fallback for backwards compatibility
 )
