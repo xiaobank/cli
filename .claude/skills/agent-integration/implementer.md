@@ -1,12 +1,24 @@
 # Implement Command
 
-Build the agent Go package using E2E-driven development. E2E tests are the primary spec — unit tests are written *after* each E2E test passes to lock in behavior.
+Build the agent Go package using strict E2E-first TDD. Unit tests are written ONLY after all E2E tests pass.
 
 ## Prerequisites
 
 - The research command's one-pager at `cmd/entire/cli/agent/$AGENT_PACKAGE/AGENT.md`
 - The E2E test runner already added (from `write-tests` command)
 - If no one-pager exists, read the agent's docs and ask the user about hook events, transcript format, and config
+
+## Core Principle: E2E-First TDD
+
+1. **E2E tests are the spec.** The existing `ForEachAgent` test scenarios define "working". You implement until they pass.
+2. **Watch it fail first.** Every E2E tier starts by running the test and observing the failure. If you haven't seen the failure, you don't understand what needs fixing.
+3. **Minimum viable fix.** At each failure, implement only the code needed to make that specific assertion pass. Don't anticipate future tiers.
+4. **`/debug-e2e` is your debugger.** When an E2E test fails, use the artifact directory with `/debug-e2e` before guessing at fixes.
+5. **No unit tests during Steps 4-13.** Unit tests are written in Step 14 after all E2E tiers pass, using real data from E2E runs as golden fixtures.
+6. **Format and lint, don't unit test.** Between E2E tiers, run `mise run fmt && mise run lint` to keep code clean. No `mise run test` until Step 14.
+7. **If you didn't watch it fail, you don't know if it tests the right thing.**
+
+**Do NOT write unit tests during Steps 4-13.** All test writing is consolidated in Step 14.
 
 ## Procedure
 
@@ -67,18 +79,13 @@ This test requires no agent prompts — it only exercises hooks, so it's the fas
 
 **Cycle:**
 
-1. Run: `mise run test:e2e:$AGENT_SLUG TestHumanOnlyChangesAndCommits`
-2. Read the failure output carefully
+1. Run: `mise run test:e2e --agent $AGENT_SLUG TestHumanOnlyChangesAndCommits`
+2. **Watch it fail** — read the failure output carefully
 3. If there are artifact dirs, use `/debug-e2e {artifact-dir}` to understand what happened
 4. Implement the minimum code to fix the first failure
 5. Repeat until the test passes
 
-**After passing, write unit tests:**
-
-- `hooks_test.go` — Test `InstallHooks` (creates config, idempotent), `UninstallHooks` (removes hooks), `AreHooksInstalled` (detects presence). Use a temp directory to avoid touching real config.
-- `lifecycle_test.go` (initial) — Test `ParseHookEvent` for the event types exercised so far. Include nil return for unknown hook names and malformed JSON input. **Important:** Test against `EventType` constants from `event.go`, not native hook names — the agent's native hook verbs (e.g., "stop") map to normalized EventTypes (e.g., `TurnEnd`).
-
-Run: `mise run fmt && mise run lint && mise run test`
+Run: `mise run fmt && mise run lint`
 
 ### Step 5: E2E Tier 2 — `TestSingleSessionManualCommit`
 
@@ -92,19 +99,13 @@ The foundational test. This exercises the full agent lifecycle: start session �
 
 **Cycle:**
 
-1. Run: `mise run test:e2e:$AGENT_SLUG TestSingleSessionManualCommit`
-2. Read the failure output carefully
+1. Run: `mise run test:e2e -agent $AGENT_SLUG TestSingleSessionManualCommit`
+2. **Watch it fail** — read the failure output carefully
 3. Use `/debug-e2e {artifact-dir}` to understand what happened
 4. Implement the minimum code to fix the first failure
 5. Repeat until the test passes
 
-**After passing, write unit tests:**
-
-- `types_test.go` — Test hook input struct parsing with actual JSON payloads from `AGENT.md` examples or captured payloads.
-- `lifecycle_test.go` (complete) — Test `ParseHookEvent` for all 4 event types. Use actual JSON payloads. Test every `EventType` mapping, nil returns for pass-through hooks, empty input, and malformed JSON.
-- `transcript_test.go` — Test `ReadTranscript`, `ChunkTranscript`, `ReassembleTranscript` with sample data in the agent's native format. Test all `TranscriptAnalyzer` methods (from `agent.go`) if implemented.
-
-Run: `mise run fmt && mise run lint && mise run test`
+Run: `mise run fmt && mise run lint`
 
 ### Step 6: E2E Tier 2b — `TestCheckpointMetadataDeepValidation`
 
@@ -118,13 +119,12 @@ Validates transcript quality: JSONL validity, content hash correctness, prompt e
 
 **Cycle:**
 
-1. Run: `mise run test:e2e:$AGENT_SLUG TestCheckpointMetadataDeepValidation`
-2. Use `/debug-e2e {artifact-dir}` on any failures — this test often exposes subtle transcript formatting bugs
-3. Fix and repeat
+1. Run: `mise run test:e2e --agent $AGENT_SLUG TestCheckpointMetadataDeepValidation`
+2. **Watch it fail** — this test often exposes subtle transcript formatting bugs
+3. Use `/debug-e2e {artifact-dir}` on any failures
+4. Fix and repeat
 
-**After passing:** Update `transcript_test.go` if any edge cases were discovered.
-
-Run: `mise run fmt && mise run lint && mise run test`
+Run: `mise run fmt && mise run lint`
 
 ### Step 7: E2E Tier 3 — `TestSingleSessionAgentCommitInTurn`
 
@@ -137,13 +137,11 @@ Agent creates files and commits them within a single prompt turn. Tests the in-t
 
 **Cycle:**
 
-1. Run: `mise run test:e2e:$AGENT_SLUG TestSingleSessionAgentCommitInTurn`
-2. Use `/debug-e2e {artifact-dir}` on failures
+1. Run: `mise run test:e2e --agent $AGENT_SLUG TestSingleSessionAgentCommitInTurn`
+2. **Watch it fail** — use `/debug-e2e {artifact-dir}` on failures
 3. Fix and repeat — if the agent doesn't support committing, skip this test
 
-**After passing:** Add any new edge cases to existing unit tests if bugs were found.
-
-Run: `mise run fmt && mise run lint && mise run test`
+Run: `mise run fmt && mise run lint`
 
 ### Step 8: E2E Tier 4 — Multi-Session Tests
 
@@ -156,13 +154,13 @@ Run these tests to validate multi-session behavior:
 **Cycle (for each test):**
 
 1. Run: `mise run test:e2e:$AGENT_SLUG TestMultiSessionManualCommit`
-2. Use `/debug-e2e {artifact-dir}` on failures
+2. **Watch it fail** — use `/debug-e2e {artifact-dir}` on failures
 3. Fix and repeat
 4. Move to next test
 
-**After all pass:** These tests rarely need new agent code — they exercise the strategy layer. Update unit tests only if agent-specific bugs were found.
+These tests rarely need new agent code — they exercise the strategy layer.
 
-Run: `mise run fmt && mise run lint && mise run test`
+Run: `mise run fmt && mise run lint`
 
 ### Step 9: E2E Tier 5 — File Operation Edge Cases
 
@@ -173,11 +171,9 @@ Run these tests for file operation correctness:
 - `TestDeletedFilesCommitDeletion` — Agent deletes a file, user commits the deletion
 - `TestMixedNewAndModifiedFiles` — Agent both creates and modifies files
 
-**Cycle:** Same as above — run each test, use `/debug-e2e` on failures, fix, repeat.
+**Cycle:** Same as above — run each test, **watch it fail**, use `/debug-e2e` on failures, fix, repeat.
 
-**After all pass:** Update unit tests if any transcript parsing or file-touched extraction bugs were discovered.
-
-Run: `mise run fmt && mise run lint && mise run test`
+Run: `mise run fmt && mise run lint`
 
 ### Step 10: Optional Interfaces
 
@@ -190,10 +186,9 @@ Read `cmd/entire/cli/agent/agent.go` for all optional interfaces. For each one t
 For each optional interface:
 
 1. Implement the methods based on `AGENT.md` and reference implementation
-2. Write unit tests for the new methods
-3. Run relevant E2E tests to verify integration
+2. Run relevant E2E tests to verify integration (e.g., `TestCheckpointMetadataDeepValidation` for transcript methods)
 
-Run: `mise run fmt && mise run lint && mise run test`
+Run: `mise run fmt && mise run lint`
 
 ### Step 11: E2E Tier 6 — Interactive and Rewind Tests
 
@@ -204,9 +199,9 @@ Run these if the agent supports interactive multi-step sessions:
 - `TestRewindAfterCommit` — Rewind to a checkpoint after committing
 - `TestRewindMultipleFiles` — Rewind with multiple files changed
 
-**Cycle:** Same pattern — run, `/debug-e2e` on failures, fix, repeat.
+**Cycle:** Same pattern — run, **watch it fail**, `/debug-e2e` on failures, fix, repeat.
 
-Run: `mise run fmt && mise run lint && mise run test`
+Run: `mise run fmt && mise run lint`
 
 ### Step 12: E2E Tier 7 — Complex Scenarios
 
@@ -219,11 +214,47 @@ Run the remaining edge case and stress tests:
 - `TestSubagentCommitFlow` — If the agent has subagent support
 - `TestSingleSessionSubagentCommitInTurn` — Subagent commits during a turn
 
-**Cycle:** Same pattern. Many of these require no new agent code — they exercise strategy-layer behavior.
+**Cycle:** Same pattern — **watch it fail**, fix, repeat. Many of these require no new agent code — they exercise strategy-layer behavior.
+
+Run: `mise run fmt && mise run lint`
+
+### Step 13: Full E2E Suite Pass
+
+Run the complete E2E suite for the agent to catch any regressions or tests that were skipped in earlier tiers:
+
+```bash
+mise run test:e2e --agent $AGENT_SLUG
+```
+
+This runs every `ForEachAgent` test, not just the ones targeted in Steps 4-12. Fix any failures before proceeding — the same cycle applies: read the failure, use `/debug-e2e {artifact-dir}`, implement the minimum fix, re-run.
+
+All E2E tests must pass before writing unit tests.
+
+### Step 14: Write Unit Tests
+
+Now that all E2E tiers pass, write unit tests to lock in behavior. Use real data from E2E runs (captured JSON payloads, transcript snippets, config file contents) as golden fixtures.
+
+**Test files to create:**
+
+1. **`hooks_test.go`** — Test `InstallHooks` (creates config, idempotent), `UninstallHooks` (removes hooks), `AreHooksInstalled` (detects presence). Use a temp directory to avoid touching real config.
+
+2. **`lifecycle_test.go`** — Test `ParseHookEvent` for all event types. Use actual JSON payloads from E2E artifacts or `AGENT.md` examples. Test every `EventType` mapping, nil returns for unknown hook names, pass-through hooks, empty input, and malformed JSON. **Important:** Test against `EventType` constants from `event.go`, not native hook names — the agent's native hook verbs (e.g., "stop") map to normalized EventTypes (e.g., `TurnEnd`).
+
+3. **`types_test.go`** — Test hook input struct parsing with actual JSON payloads from E2E artifacts or `AGENT.md` examples.
+
+4. **`transcript_test.go`** — Test `ReadTranscript`, `ChunkTranscript`, `ReassembleTranscript` with sample data in the agent's native format. Test all `TranscriptAnalyzer` methods (from `agent.go`) if implemented. Use transcript snippets from E2E artifact directories as golden test data.
+
+5. **`${AGENT_PACKAGE}_test.go`** — Test agent constructor (`New`), `Name()`, `AgentName()`, and any other agent-level methods. Verify the agent satisfies all expected interfaces using compile-time checks (`var _ agent.Agent = (*${AgentType})(nil)`).
+
+**Where to find golden test data:**
+
+- E2E artifact directories contain captured transcripts, hook payloads, and config files
+- `AGENT.md` has example JSON payloads in the "Hook input" sections
+- The agent's actual config file format from E2E test repos
 
 Run: `mise run fmt && mise run lint && mise run test`
 
-### Step 13: Verify Registration
+### Step 15: Verify Registration
 
 Verify that registration from Step 3 is correct and complete:
 
@@ -231,7 +262,7 @@ Verify that registration from Step 3 is correct and complete:
 2. The blank import in `cmd/entire/cli/hooks_cmd.go` is present
 3. Run the full test suite: `mise run test:ci`
 
-### Step 14: Final Validation
+### Step 16: Final Validation
 
 Run the complete validation:
 
@@ -275,7 +306,7 @@ Summarize what was implemented:
 - Package directory and files created
 - Interfaces implemented (core + optional)
 - Hook names registered
-- Test coverage (number of test functions, what they cover)
+- E2E tiers passing (list which E2E tests pass)
+- Unit test coverage (number of test functions, what they cover — written in Step 13)
 - Any gaps or TODOs remaining
-- E2E tests passing (list which ones pass)
 - Commands to run full validation

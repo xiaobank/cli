@@ -1,5 +1,5 @@
 ---
-description: "Build the agent Go package via TDD using research findings and E2E tests as spec"
+description: "E2E-first Test driven develpoment — unit tests written last"
 ---
 
 # Implement Command
