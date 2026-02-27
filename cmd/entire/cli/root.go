@@ -85,6 +85,8 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(newDoctorCmd())
 	cmd.AddCommand(newSendAnalyticsCmd())
 	cmd.AddCommand(newCurlBashPostInstallCmd())
+	cmd.AddCommand(newCursorExportCmd())
+	cmd.AddCommand(newCursorImportCmd())
 
 	cmd.SetVersionTemplate(versionString())
 
