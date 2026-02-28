@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -14,6 +15,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	cpkg "github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 
@@ -446,6 +448,19 @@ func (s *ManualCommitStrategy) resetShadowBranchToCheckpoint(ctx context.Context
 	ref := plumbing.NewHashReference(refName, commit.Hash)
 	if err := repo.Storer.SetReference(ref); err != nil {
 		return fmt.Errorf("failed to update shadow branch: %w", err)
+	}
+
+	// Clear TranscriptPath so that post-rewind condensation reads from the shadow
+	// branch (which was just reset to the checkpoint) instead of the live transcript
+	// file (which may contain data from checkpoints beyond the rewind point).
+	if state.TranscriptPath != "" {
+		state.TranscriptPath = ""
+		if saveErr := SaveSessionState(ctx, state); saveErr != nil {
+			logging.Warn(ctx, "rewind: failed to clear transcript path in session state",
+				slog.String("session_id", sessionID),
+				slog.String("error", saveErr.Error()),
+			)
+		}
 	}
 
 	fmt.Fprintf(os.Stderr, "[entire] Reset shadow branch %s to checkpoint %s\n", shadowBranchName, commit.Hash.String()[:7])

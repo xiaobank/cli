@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        agent: [claude-code, opencode, gemini-cli]
+        agent: [claude-code, opencode, gemini-cli, kiro]
 
     steps:
       - name: Checkout repository
@@ -36,6 +36,7 @@ jobs:
             claude-code) curl -fsSL https://claude.ai/install.sh | bash ;;
             opencode)    curl -fsSL https://opencode.ai/install | bash ;;
             gemini-cli)  npm install -g @google/gemini-cli ;;
+            kiro)        curl -fsSL https://cli.kiro.dev/install | bash ;;
           esac
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 

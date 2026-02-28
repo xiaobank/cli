@@ -226,7 +226,17 @@ Run the complete E2E suite for the agent to catch any regressions or tests that 
 mise run test:e2e --agent $AGENT_SLUG
 ```
 
-This runs every `ForEachAgent` test, not just the ones targeted in Steps 4-12. Fix any failures before proceeding — the same cycle applies: read the failure, use `/debug-e2e {artifact-dir}`, implement the minimum fix, re-run.
+This runs every `ForEachAgent` test, not just the ones targeted in Steps 4-12.
+
+**Important: E2E tests can be flaky when run all at once.** Do NOT run them in parallel — always use sequential execution. If some tests fail when running the full suite, re-run each failing test individually before investigating:
+
+```bash
+mise run test:e2e --agent $AGENT_SLUG TestFailingTestName
+```
+
+If a test passes when run individually but fails in the full suite, it's a flaky failure — not a real error. Only investigate failures that reproduce consistently when run in isolation.
+
+Fix any real failures before proceeding — the same cycle applies: read the failure, use `/debug-e2e {artifact-dir}`, implement the minimum fix, re-run.
 
 All E2E tests must pass before writing unit tests.
 

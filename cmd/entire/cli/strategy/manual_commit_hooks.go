@@ -58,6 +58,14 @@ func hasTTY() bool {
 	return true
 }
 
+// agentUsesTerminal returns true for agents that run inside a terminal emulator
+// (e.g., Kiro runs in tmux). These agents have hasTTY()=true even when the agent
+// itself is committing, so the no-TTY fast path doesn't catch them. This lets the
+// fast path auto-link their commits during ACTIVE sessions without prompting.
+func agentUsesTerminal(agentType types.AgentType) bool {
+	return agentType == agent.AgentTypeKiro
+}
+
 // ttyConfirmResult represents the outcome of a TTY confirmation prompt.
 type ttyConfirmResult int
 
@@ -345,16 +353,18 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 		return nil //nolint:nilerr // Intentional: hooks must be silent on failure
 	}
 
-	// Fast path: when an agent is committing (ACTIVE session + no TTY), skip
-	// content detection and interactive prompts. The agent can't respond to TTY
-	// prompts and the content detection can miss mid-session work (no shadow
-	// branch yet, transcript analysis may fail). Generate a checkpoint ID and
-	// add the trailer directly.
-	if !hasTTY() {
-		for _, state := range sessions {
-			if state.Phase.IsActive() {
-				return s.addTrailerForAgentCommit(logCtx, commitMsgFile, state, source)
-			}
+	// Fast path: when an agent is committing (ACTIVE session + no TTY or known
+	// TTY agent), skip content detection and interactive prompts. The agent can't
+	// respond to TTY prompts and the content detection can miss mid-session work
+	// (no shadow branch yet, transcript analysis may fail). Generate a checkpoint
+	// ID and add the trailer directly.
+	//
+	// This covers two cases:
+	// 1. Non-TTY agents (Claude Code, Gemini CLI): hasTTY()=false
+	// 2. TTY agents (Kiro in tmux): hasTTY()=true but agentUsesTerminal()=true
+	for _, state := range sessions {
+		if state.Phase.IsActive() && (!hasTTY() || agentUsesTerminal(state.AgentType)) {
+			return s.addTrailerForAgentCommit(logCtx, commitMsgFile, state, source)
 		}
 	}
 
@@ -416,12 +426,25 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 		commitLinking = stngs.GetCommitLinking()
 	}
 
+	// Check if any session with content is currently ACTIVE (agent is running).
+	// TTY agents (e.g., Kiro in tmux) have hasTTY()=true even for agent commits,
+	// so the no-TTY fast path above doesn't catch them. Rather than prompting
+	// (which would block the agent), auto-link: content overlap has already been
+	// verified by filterSessionsWithNewContent.
+	anyActive := false
+	for _, state := range sessionsWithContent {
+		if state.Phase.IsActive() {
+			anyActive = true
+			break
+		}
+	}
+
 	// Add trailer differently based on commit source
 	switch source {
 	case "message":
-		// Using -m or -F: behavior depends on commit_linking setting
-		if commitLinking == settings.CommitLinkingAlways {
-			// Auto-link: add trailer without prompting
+		// Using -m or -F: behavior depends on session phase, commit_linking setting
+		if anyActive || commitLinking == settings.CommitLinkingAlways {
+			// Auto-link: agent is running (can't prompt) or user chose "always"
 			message = addCheckpointTrailer(message, checkpointID)
 		} else {
 			// Prompt mode: ask user interactively whether to add trailer

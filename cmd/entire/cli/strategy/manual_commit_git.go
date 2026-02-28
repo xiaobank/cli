@@ -121,6 +121,13 @@ func (s *ManualCommitStrategy) SaveStep(ctx context.Context, step StepContext) e
 	// Store the prompt attribution we calculated before saving
 	state.PromptAttributions = append(state.PromptAttributions, promptAttr)
 
+	// Backfill transcript path if not yet set. This handles agents with deferred
+	// transcript persistence (e.g., Kiro) where TranscriptPath is empty during
+	// mid-turn commits but becomes available at TurnEnd/SaveStep.
+	if state.TranscriptPath == "" && step.TranscriptPath != "" {
+		state.TranscriptPath = step.TranscriptPath
+	}
+
 	// Track touched files (modified, new, and deleted)
 	state.FilesTouched = mergeFilesTouched(state.FilesTouched, step.ModifiedFiles, step.NewFiles, step.DeletedFiles)
 

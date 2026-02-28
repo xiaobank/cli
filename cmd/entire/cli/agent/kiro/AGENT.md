@@ -34,13 +34,35 @@ We own the entire file — no round-trip preservation needed (unlike Cursor's sh
 **Format:**
 ```json
 {
-  "agentSpawn": [{"command": "entire hooks kiro agent-spawn"}],
-  "userPromptSubmit": [{"command": "entire hooks kiro user-prompt-submit"}],
-  "preToolUse": [{"command": "entire hooks kiro pre-tool-use"}],
-  "postToolUse": [{"command": "entire hooks kiro post-tool-use"}],
-  "stop": [{"command": "entire hooks kiro stop"}]
+  "name": "entire",
+  "tools": ["read", "write", "shell", "grep", "glob", "aws", "report",
+            "introspect", "knowledge", "thinking", "todo", "delegate"],
+  "hooks": {
+    "agentSpawn": [{"command": "entire hooks kiro agent-spawn"}],
+    "userPromptSubmit": [{"command": "entire hooks kiro user-prompt-submit"}],
+    "preToolUse": [{"command": "entire hooks kiro pre-tool-use"}],
+    "postToolUse": [{"command": "entire hooks kiro post-tool-use"}],
+    "stop": [{"command": "entire hooks kiro stop"}]
+  }
 }
 ```
+
+Note: The file is a Kiro agent definition. Hooks must be nested under the `hooks` field.
+Required top-level fields: `name`. Optional: `$schema`, `description`, `prompt`, `mcpServers`,
+`tools`, `toolAliases`, `allowedTools`, `resources`, `hooks`, `toolsSettings`, `model`, etc.
+
+**Important:** The `tools` array must include all default Kiro tools. Without it, `--agent entire`
+restricts the model to zero tools. The tool names come from `~/.kiro/agents/agent_config.json.example`.
+
+## Agent Activation
+
+Hooks only fire when `--agent entire` is passed to `kiro-cli chat`. Without this flag,
+`.kiro/agents/entire.json` is not loaded and hooks do not execute.
+
+**`--no-interactive` mode:** Does not fire agent hooks. All E2E tests use interactive (tmux) mode.
+
+**TUI prompt indicator:** `!>` in trust-all mode (with `-a` flag). The `Credits:` line
+appears after each agent response and serves as a reliable completion marker.
 
 ## Hook Stdin Format
 

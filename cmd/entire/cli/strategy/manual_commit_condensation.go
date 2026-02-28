@@ -156,18 +156,22 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 		// No shadow branch: mid-session commit before Stop/SaveStep.
 		// Extract data directly from live transcript.
 		if state.TranscriptPath == "" {
-			return nil, errors.New("shadow branch not found and no live transcript available")
-		}
-		// Ensure transcript file exists (OpenCode creates it lazily via `opencode export`).
-		// Only wait for flush when the session is active — for idle/ended sessions the
-		// transcript is already fully flushed (the Stop hook completed the flush).
-		if state.Phase.IsActive() {
-			prepareTranscriptIfNeeded(ctx, ag, state.TranscriptPath)
-		}
-		var extractErr error
-		sessionData, extractErr = s.extractSessionDataFromLiveTranscript(ctx, state)
-		if extractErr != nil {
-			return nil, fmt.Errorf("failed to extract session data from live transcript: %w", extractErr)
+			// No transcript available (e.g., Kiro's deferred SQLite persistence).
+			// Create minimal session data — HandleTurnEnd will finalize the checkpoint
+			// with the full transcript once it becomes available at the stop hook.
+			sessionData = &ExtractedSessionData{}
+		} else {
+			// Ensure transcript file exists (OpenCode creates it lazily via `opencode export`).
+			// Only wait for flush when the session is active — for idle/ended sessions the
+			// transcript is already fully flushed (the Stop hook completed the flush).
+			if state.Phase.IsActive() {
+				prepareTranscriptIfNeeded(ctx, ag, state.TranscriptPath)
+			}
+			var extractErr error
+			sessionData, extractErr = s.extractSessionDataFromLiveTranscript(ctx, state)
+			if extractErr != nil {
+				return nil, fmt.Errorf("failed to extract session data from live transcript: %w", extractErr)
+			}
 		}
 	}
 

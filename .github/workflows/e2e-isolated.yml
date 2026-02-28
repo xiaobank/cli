@@ -8,7 +8,7 @@ on:
         required: true
         default: "gemini-cli"
         type: choice
-        options: [claude-code, opencode, gemini-cli]
+        options: [claude-code, opencode, gemini-cli, kiro]
       test:
         description: "Test name filter (regex)"
         required: true
@@ -38,6 +38,7 @@ jobs:
             claude-code) curl -fsSL https://claude.ai/install.sh | bash ;;
             opencode)    curl -fsSL https://opencode.ai/install | bash ;;
             gemini-cli)  npm install -g @google/gemini-cli ;;
+            kiro)        curl -fsSL https://cli.kiro.dev/install | bash ;;
           esac
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
