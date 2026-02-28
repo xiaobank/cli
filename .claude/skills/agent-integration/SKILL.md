@@ -65,6 +65,8 @@ Read and follow the research procedure from `.claude/skills/agent-integration/re
 
 **Expected output:** Implementation one-pager at `cmd/entire/cli/agent/$AGENT_PACKAGE/AGENT.md` and a test script at `scripts/test-$AGENT_SLUG-agent-integration.sh`.
 
+**Commit:** After the research phase completes, use `/commit` to commit all files.
+
 **Gate:** If the verdict is INCOMPATIBLE, stop and discuss with the user before proceeding.
 
 ### Phase 2: Write E2E Runner
@@ -74,6 +76,8 @@ Create the E2E agent runner so existing test scenarios can exercise the new agen
 Read and follow the procedure from `.claude/skills/agent-integration/test-writer.md`.
 
 **Expected output:** E2E agent runner at `e2e/agents/$AGENT_SLUG.go` that compiles and registers with the test framework.
+
+**Commit:** After the E2E runner compiles and registers, use `/commit` to commit all files.
 
 ### Phase 3: Implement (E2E-First, Unit Tests Last)
 

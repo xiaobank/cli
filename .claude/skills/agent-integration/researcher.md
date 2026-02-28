@@ -139,6 +139,10 @@ mkdir -p cmd/entire/cli/agent/$AGENT_PACKAGE
 - If a section doesn't apply (e.g., no transcript support), say so explicitly.
 - This file persists as development documentation — future maintainers will reference it.
 
+### Phase 6: Commit
+
+Use `/commit` to commit all files.
+
 ## Blocker Handling
 
 If blocked at any point (auth, sandbox, binary not found):

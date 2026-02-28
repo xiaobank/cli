@@ -180,6 +180,10 @@ After writing the runner code:
 4. **Add mise task**: Remind the user to add a `test:e2e:${agent_slug}` task in `mise.toml` and update CI workflows
 5. **Next step**: The implement phase will run E2E tests against this runner — that's where failures are diagnosed and fixed
 
+### Step 7: Commit
+
+Use `/commit` to commit all files.
+
 ## Key Conventions
 
 - **Build tag**: All E2E test files must have `//go:build e2e` as the first line

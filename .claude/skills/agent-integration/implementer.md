@@ -65,6 +65,8 @@ mise run fmt && mise run lint && mise run test
 
 Everything must pass before proceeding. Fix any issues.
 
+**Commit:** Use `/commit` to commit all files. Skip if no files changed.
+
 **Standing instruction for Steps 4-12:** If you need agent-specific information (hook format, transcript location, config structure), check `AGENT.md` first. If `AGENT.md` doesn't cover what you need, you may search external docs — but always update `AGENT.md` with anything new you discover so future steps don't need to re-search.
 
 ### Step 4: E2E Tier 1 — `TestHumanOnlyChangesAndCommits`
@@ -87,6 +89,8 @@ This test requires no agent prompts — it only exercises hooks, so it's the fas
 
 Run: `mise run fmt && mise run lint`
 
+**Commit:** Use `/commit` to commit all files. Skip if no files changed.
+
 ### Step 5: E2E Tier 2 — `TestSingleSessionManualCommit`
 
 The foundational test. This exercises the full agent lifecycle: start session → agent prompt → agent produces files → user commits → session ends.
@@ -107,6 +111,8 @@ The foundational test. This exercises the full agent lifecycle: start session �
 
 Run: `mise run fmt && mise run lint`
 
+**Commit:** Use `/commit` to commit all files. Skip if no files changed.
+
 ### Step 6: E2E Tier 2b — `TestCheckpointMetadataDeepValidation`
 
 Validates transcript quality: JSONL validity, content hash correctness, prompt extraction accuracy.
@@ -126,6 +132,8 @@ Validates transcript quality: JSONL validity, content hash correctness, prompt e
 
 Run: `mise run fmt && mise run lint`
 
+**Commit:** Use `/commit` to commit all files. Skip if no files changed.
+
 ### Step 7: E2E Tier 3 — `TestSingleSessionAgentCommitInTurn`
 
 Agent creates files and commits them within a single prompt turn. Tests the in-turn commit path.
@@ -142,6 +150,8 @@ Agent creates files and commits them within a single prompt turn. Tests the in-t
 3. Fix and repeat — if the agent doesn't support committing, skip this test
 
 Run: `mise run fmt && mise run lint`
+
+**Commit:** Use `/commit` to commit all files. Skip if no files changed.
 
 ### Step 8: E2E Tier 4 — Multi-Session Tests
 
@@ -162,6 +172,8 @@ These tests rarely need new agent code — they exercise the strategy layer.
 
 Run: `mise run fmt && mise run lint`
 
+**Commit:** Use `/commit` to commit all files. Skip if no files changed.
+
 ### Step 9: E2E Tier 5 — File Operation Edge Cases
 
 Run these tests for file operation correctness:
@@ -174,6 +186,8 @@ Run these tests for file operation correctness:
 **Cycle:** Same as above — run each test, **watch it fail**, use `/debug-e2e` on failures, fix, repeat.
 
 Run: `mise run fmt && mise run lint`
+
+**Commit:** Use `/commit` to commit all files. Skip if no files changed.
 
 ### Step 10: Optional Interfaces
 
@@ -190,6 +204,8 @@ For each optional interface:
 
 Run: `mise run fmt && mise run lint`
 
+**Commit:** Use `/commit` to commit all files. Skip if no files changed.
+
 ### Step 11: E2E Tier 6 — Interactive and Rewind Tests
 
 Run these if the agent supports interactive multi-step sessions:
@@ -202,6 +218,8 @@ Run these if the agent supports interactive multi-step sessions:
 **Cycle:** Same pattern — run, **watch it fail**, `/debug-e2e` on failures, fix, repeat.
 
 Run: `mise run fmt && mise run lint`
+
+**Commit:** Use `/commit` to commit all files. Skip if no files changed.
 
 ### Step 12: E2E Tier 7 — Complex Scenarios
 
@@ -217,6 +235,8 @@ Run the remaining edge case and stress tests:
 **Cycle:** Same pattern — **watch it fail**, fix, repeat. Many of these require no new agent code — they exercise strategy-layer behavior.
 
 Run: `mise run fmt && mise run lint`
+
+**Commit:** Use `/commit` to commit all files. Skip if no files changed.
 
 ### Step 13: Full E2E Suite Pass
 
@@ -264,6 +284,8 @@ Now that all E2E tiers pass, write unit tests to lock in behavior. Use real data
 
 Run: `mise run fmt && mise run lint && mise run test`
 
+**Commit:** Use `/commit` to commit all files. Skip if no files changed.
+
 ### Step 15: Verify Registration
 
 Verify that registration from Step 3 is correct and complete:
@@ -290,6 +312,8 @@ Check against the integration checklist (`docs/architecture/agent-integration-ch
 - [ ] Session storage working
 - [ ] Hook installation/uninstallation working
 - [ ] Tests pass with `t.Parallel()`
+
+**Commit:** Use `/commit` to commit all files. Skip if no files changed.
 
 ## E2E Debugging Protocol
 
