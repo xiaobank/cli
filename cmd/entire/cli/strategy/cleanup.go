@@ -266,36 +266,37 @@ func DeleteOrphanedCheckpoints(ctx context.Context, checkpointIDs []string) (del
 		return nil, nil, fmt.Errorf("failed to get tree: %w", err)
 	}
 
-	// Flatten tree to entries
+	// Flatten tree to discover file paths, then build deletion changes
 	entries := make(map[string]object.TreeEntry)
 	if err := checkpoint.FlattenTree(repo, baseTree, "", entries); err != nil {
 		return nil, nil, fmt.Errorf("failed to flatten tree: %w", err)
 	}
 
-	// Remove entries for each checkpoint
-	checkpointSet := make(map[string]bool)
-	for _, id := range checkpointIDs {
-		checkpointSet[id] = true
+	// Build set of checkpoint paths to delete
+	checkpointPaths := make(map[string]bool)
+	for _, idStr := range checkpointIDs {
+		cpID, parseErr := id.NewCheckpointID(idStr)
+		if parseErr != nil {
+			continue // Skip invalid checkpoint IDs
+		}
+		checkpointPaths[cpID.Path()+"/"] = true
 	}
 
-	// Find and remove entries matching checkpoint paths
+	// Collect deletion changes for matching entries
+	var changes []checkpoint.TreeChange
 	for path := range entries {
-		for checkpointIDStr := range checkpointSet {
-			cpID, err := id.NewCheckpointID(checkpointIDStr)
-			if err != nil {
-				continue // Skip invalid checkpoint IDs
-			}
-			cpPath := cpID.Path()
-			if strings.HasPrefix(path, cpPath+"/") {
-				delete(entries, path)
+		for cpPrefix := range checkpointPaths {
+			if strings.HasPrefix(path, cpPrefix) {
+				changes = append(changes, checkpoint.TreeChange{Path: path, Entry: nil})
+				break
 			}
 		}
 	}
 
-	// Build new tree
-	newTreeHash, err := checkpoint.BuildTreeFromEntries(repo, entries)
+	// Apply deletions surgically
+	newTreeHash, err := checkpoint.ApplyTreeChanges(repo, parentCommit.TreeHash, changes)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to build tree: %w", err)
+		return nil, nil, fmt.Errorf("failed to apply tree changes: %w", err)
 	}
 
 	// Create commit

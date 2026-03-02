@@ -168,20 +168,24 @@ func fetchAndMergeSessionsCommon(ctx context.Context, remote, branchName string)
 		return fmt.Errorf("failed to get remote tree: %w", err)
 	}
 
-	// Flatten both trees and combine entries
-	// Session logs have unique cond-* directories, so no conflicts expected
-	entries := make(map[string]object.TreeEntry)
-	if err := checkpoint.FlattenTree(repo, localTree, "", entries); err != nil {
+	// Compute what the remote has that differs from local, then apply surgically.
+	// Session logs have unique cond-* directories, so no conflicts expected.
+	localEntries := make(map[string]object.TreeEntry)
+	if err := checkpoint.FlattenTree(repo, localTree, "", localEntries); err != nil {
 		return fmt.Errorf("failed to flatten local tree: %w", err)
 	}
-	if err := checkpoint.FlattenTree(repo, remoteTree, "", entries); err != nil {
+	remoteEntries := make(map[string]object.TreeEntry)
+	if err := checkpoint.FlattenTree(repo, remoteTree, "", remoteEntries); err != nil {
 		return fmt.Errorf("failed to flatten remote tree: %w", err)
 	}
 
-	// Build merged tree
-	mergedTreeHash, err := checkpoint.BuildTreeFromEntries(repo, entries)
+	// DiffTrees computes changes to transform local into remote (remote wins on collision)
+	changes := checkpoint.DiffTrees(localEntries, remoteEntries)
+
+	// Apply changes surgically to the local tree
+	mergedTreeHash, err := checkpoint.ApplyTreeChanges(repo, localCommit.TreeHash, changes)
 	if err != nil {
-		return fmt.Errorf("failed to build merged tree: %w", err)
+		return fmt.Errorf("failed to apply tree changes: %w", err)
 	}
 
 	// Create merge commit with both parents

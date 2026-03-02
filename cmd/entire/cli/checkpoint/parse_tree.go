@@ -282,6 +282,36 @@ func ApplyTreeChanges(
 	return storeTree(repo, result)
 }
 
+// DiffTrees computes the []TreeChange needed to transform a tree with base
+// entries into a tree with target entries. Both maps should be flat
+// (path → TreeEntry) as produced by FlattenTree.
+//
+// - Entries in target but absent/different in base: add/modify
+// - Entries in base but absent in target: delete (nil Entry)
+func DiffTrees(base, target map[string]object.TreeEntry) []TreeChange {
+	changes := make([]TreeChange, 0, len(target))
+
+	// Adds and modifications
+	for path, entry := range target {
+		baseEntry, exists := base[path]
+		if !exists || baseEntry.Hash != entry.Hash {
+			changes = append(changes, TreeChange{
+				Path:  path,
+				Entry: &object.TreeEntry{Name: entry.Name, Mode: entry.Mode, Hash: entry.Hash},
+			})
+		}
+	}
+
+	// Deletions
+	for path := range base {
+		if _, exists := target[path]; !exists {
+			changes = append(changes, TreeChange{Path: path, Entry: nil})
+		}
+	}
+
+	return changes
+}
+
 // splitFirstSegment splits "a/b/c" into ("a", "b/c"), and "file.txt" into ("file.txt", "").
 func splitFirstSegment(path string) (first, rest string) {
 	parts := strings.SplitN(path, "/", 2)

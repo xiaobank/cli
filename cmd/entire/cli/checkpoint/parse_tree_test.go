@@ -683,6 +683,189 @@ func TestApplyTreeChanges_MixedOperations(t *testing.T) {
 	}
 }
 
+func TestDiffTrees_BothEmpty(t *testing.T) {
+	t.Parallel()
+	changes := DiffTrees(
+		map[string]object.TreeEntry{},
+		map[string]object.TreeEntry{},
+	)
+	if len(changes) != 0 {
+		t.Errorf("expected 0 changes, got %d", len(changes))
+	}
+}
+
+func TestDiffTrees_Identical(t *testing.T) {
+	t.Parallel()
+	hash := plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	entries := map[string]object.TreeEntry{
+		"unchanged.txt": {Name: "unchanged.txt", Mode: filemode.Regular, Hash: hash},
+	}
+	changes := DiffTrees(entries, entries)
+	if len(changes) != 0 {
+		t.Errorf("expected 0 changes for identical trees, got %d", len(changes))
+	}
+}
+
+func TestDiffTrees_AddsOnly(t *testing.T) {
+	t.Parallel()
+	hash := plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	base := map[string]object.TreeEntry{}
+	target := map[string]object.TreeEntry{
+		"new.txt": {Name: "new.txt", Mode: filemode.Regular, Hash: hash},
+	}
+	changes := DiffTrees(base, target)
+	if len(changes) != 1 {
+		t.Fatalf("expected 1 change, got %d", len(changes))
+	}
+	if changes[0].Path != "new.txt" || changes[0].Entry == nil {
+		t.Error("expected add for new.txt")
+	}
+}
+
+func TestDiffTrees_DeletesOnly(t *testing.T) {
+	t.Parallel()
+	hash := plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	base := map[string]object.TreeEntry{
+		"old.txt": {Name: "old.txt", Mode: filemode.Regular, Hash: hash},
+	}
+	target := map[string]object.TreeEntry{}
+	changes := DiffTrees(base, target)
+	if len(changes) != 1 {
+		t.Fatalf("expected 1 change, got %d", len(changes))
+	}
+	if changes[0].Path != "old.txt" || changes[0].Entry != nil {
+		t.Error("expected delete for old.txt")
+	}
+}
+
+func TestDiffTrees_ModificationsOnly(t *testing.T) {
+	t.Parallel()
+	hashOld := plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	hashNew := plumbing.NewHash("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	base := map[string]object.TreeEntry{
+		"modified.txt": {Name: "modified.txt", Mode: filemode.Regular, Hash: hashOld},
+	}
+	target := map[string]object.TreeEntry{
+		"modified.txt": {Name: "modified.txt", Mode: filemode.Regular, Hash: hashNew},
+	}
+	changes := DiffTrees(base, target)
+	if len(changes) != 1 {
+		t.Fatalf("expected 1 change, got %d", len(changes))
+	}
+	if changes[0].Path != "modified.txt" || changes[0].Entry == nil {
+		t.Error("expected modify for modified.txt")
+	}
+	if changes[0].Entry.Hash != hashNew {
+		t.Errorf("expected new hash %s, got %s", hashNew, changes[0].Entry.Hash)
+	}
+}
+
+func TestDiffTrees_Mixed(t *testing.T) {
+	t.Parallel()
+	hashA := plumbing.NewHash("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	hashB := plumbing.NewHash("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	hashC := plumbing.NewHash("cccccccccccccccccccccccccccccccccccccccc")
+	base := map[string]object.TreeEntry{
+		"keep.txt":   {Name: "keep.txt", Mode: filemode.Regular, Hash: hashA},
+		"modify.txt": {Name: "modify.txt", Mode: filemode.Regular, Hash: hashA},
+		"delete.txt": {Name: "delete.txt", Mode: filemode.Regular, Hash: hashA},
+	}
+	target := map[string]object.TreeEntry{
+		"keep.txt":   {Name: "keep.txt", Mode: filemode.Regular, Hash: hashA},
+		"modify.txt": {Name: "modify.txt", Mode: filemode.Regular, Hash: hashB},
+		"add.txt":    {Name: "add.txt", Mode: filemode.Regular, Hash: hashC},
+	}
+	changes := DiffTrees(base, target)
+	// Should have: modify (modify.txt), add (add.txt), delete (delete.txt) = 3 changes
+	if len(changes) != 3 {
+		t.Fatalf("expected 3 changes, got %d", len(changes))
+	}
+
+	changeMap := make(map[string]*TreeChange, len(changes))
+	for i := range changes {
+		changeMap[changes[i].Path] = &changes[i]
+	}
+
+	if c, ok := changeMap["modify.txt"]; !ok || c.Entry == nil || c.Entry.Hash != hashB {
+		t.Error("expected modify for modify.txt with new hash")
+	}
+	if c, ok := changeMap["add.txt"]; !ok || c.Entry == nil || c.Entry.Hash != hashC {
+		t.Error("expected add for add.txt")
+	}
+	if c, ok := changeMap["delete.txt"]; !ok || c.Entry != nil {
+		t.Error("expected delete for delete.txt")
+	}
+	if _, ok := changeMap["keep.txt"]; ok {
+		t.Error("keep.txt should not appear in changes")
+	}
+}
+
+// TestDiffTrees_EquivalenceWithApplyTreeChanges verifies that computing a diff
+// and applying it via ApplyTreeChanges produces the same file content as
+// FlattenTree + BuildTreeFromEntries.
+func TestDiffTrees_EquivalenceWithApplyTreeChanges(t *testing.T) {
+	t.Parallel()
+	repo := mustInitBareRepo(t)
+
+	blobA := storeBlob(t, repo, "content-a")
+	blobB := storeBlob(t, repo, "content-b")
+	blobC := storeBlob(t, repo, "content-c")
+	blobNew := storeBlob(t, repo, "new-content")
+
+	// Build base tree: a3/ckpt1/meta.json, a3/ckpt2/meta.json, b7/ckpt3/meta.json
+	ckpt1 := mustStoreTree(t, repo, []object.TreeEntry{{Name: "meta.json", Mode: filemode.Regular, Hash: blobA}})
+	ckpt2 := mustStoreTree(t, repo, []object.TreeEntry{{Name: "meta.json", Mode: filemode.Regular, Hash: blobB}})
+	ckpt3 := mustStoreTree(t, repo, []object.TreeEntry{{Name: "meta.json", Mode: filemode.Regular, Hash: blobC}})
+	shardA3 := mustStoreTree(t, repo, []object.TreeEntry{
+		{Name: "ckpt1", Mode: filemode.Dir, Hash: ckpt1},
+		{Name: "ckpt2", Mode: filemode.Dir, Hash: ckpt2},
+	})
+	shardB7 := mustStoreTree(t, repo, []object.TreeEntry{
+		{Name: "ckpt3", Mode: filemode.Dir, Hash: ckpt3},
+	})
+	baseTree := mustStoreTree(t, repo, []object.TreeEntry{
+		{Name: "a3", Mode: filemode.Dir, Hash: shardA3},
+		{Name: "b7", Mode: filemode.Dir, Hash: shardB7},
+	})
+
+	// Target: modify a3/ckpt1, add a3/ckpt4, keep a3/ckpt2, keep b7/ckpt3
+	// (no full-directory deletions — ApplyTreeChanges leaves empty dirs on delete)
+	ckpt1mod := mustStoreTree(t, repo, []object.TreeEntry{{Name: "meta.json", Mode: filemode.Regular, Hash: blobNew}})
+	ckpt4 := mustStoreTree(t, repo, []object.TreeEntry{{Name: "meta.json", Mode: filemode.Regular, Hash: blobNew}})
+	shardA3Target := mustStoreTree(t, repo, []object.TreeEntry{
+		{Name: "ckpt1", Mode: filemode.Dir, Hash: ckpt1mod},
+		{Name: "ckpt2", Mode: filemode.Dir, Hash: ckpt2},
+		{Name: "ckpt4", Mode: filemode.Dir, Hash: ckpt4},
+	})
+	targetTree := mustStoreTree(t, repo, []object.TreeEntry{
+		{Name: "a3", Mode: filemode.Dir, Hash: shardA3Target},
+		{Name: "b7", Mode: filemode.Dir, Hash: shardB7},
+	})
+
+	// Approach 1: Flatten both, DiffTrees, ApplyTreeChanges
+	baseEntries := make(map[string]object.TreeEntry)
+	if err := FlattenTree(repo, mustTreeObject(t, repo, baseTree), "", baseEntries); err != nil {
+		t.Fatalf("FlattenTree base: %v", err)
+	}
+	targetEntries := make(map[string]object.TreeEntry)
+	if err := FlattenTree(repo, mustTreeObject(t, repo, targetTree), "", targetEntries); err != nil {
+		t.Fatalf("FlattenTree target: %v", err)
+	}
+	changes := DiffTrees(baseEntries, targetEntries)
+	surgeryResult, err := ApplyTreeChanges(repo, baseTree, changes)
+	if err != nil {
+		t.Fatalf("ApplyTreeChanges() error = %v", err)
+	}
+
+	// Both should produce the same tree hash (no full-directory deletions involved)
+	if surgeryResult != targetTree {
+		surgeryFiles := flattenTreeHelper(t, repo, surgeryResult, "")
+		targetFiles := flattenTreeHelper(t, repo, targetTree, "")
+		t.Errorf("DiffTrees+ApplyTreeChanges (%s) != target tree (%s)\nsurgery: %v\ntarget:  %v",
+			surgeryResult, targetTree, surgeryFiles, targetFiles)
+	}
+}
+
 // TestUpdateSubtree_EquivalenceWithFlattenRebuild verifies that UpdateSubtree
 // produces the same result as the old FlattenTree + modify + BuildTreeFromEntries approach.
 func TestUpdateSubtree_EquivalenceWithFlattenRebuild(t *testing.T) {
