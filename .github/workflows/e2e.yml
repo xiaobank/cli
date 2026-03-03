@@ -36,11 +36,8 @@ jobs:
             claude-code) curl -fsSL https://claude.ai/install.sh | bash ;;
             opencode)    curl -fsSL https://opencode.ai/install | bash ;;
             gemini-cli)  npm install -g @google/gemini-cli ;;
-<<<<<<< HEAD
             kiro)        curl -fsSL https://cli.kiro.dev/install | bash ;;
-=======
             factoryai-droid) curl -fsSL https://app.factory.ai/cli | sh ;;
->>>>>>> main
           esac
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 

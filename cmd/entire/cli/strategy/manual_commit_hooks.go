@@ -67,7 +67,6 @@ func hasTTY() bool {
 	return true
 }
 
-<<<<<<< HEAD
 // agentUsesTerminal returns true for agents that run inside a terminal emulator
 // (e.g., Kiro runs in tmux). These agents have hasTTY()=true even when the agent
 // itself is committing, so the no-TTY fast path doesn't catch them. This lets the
@@ -76,12 +75,8 @@ func agentUsesTerminal(agentType types.AgentType) bool {
 	return agentType == agent.AgentTypeKiro
 }
 
-// ttyConfirmResult represents the outcome of a TTY confirmation prompt.
-type ttyConfirmResult int
-=======
 // ttyResult represents the outcome of a TTY confirmation prompt.
 type ttyResult int
->>>>>>> main
 
 const (
 	ttyResultLink       ttyResult = iota // Link: add the checkpoint trailer
@@ -432,31 +427,13 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 	}
 
 	// Check if any session with content is currently ACTIVE (agent is running).
-	// TTY agents (e.g., Kiro in tmux) have hasTTY()=true even for agent commits,
-	// so the no-TTY fast path above doesn't catch them. Rather than prompting
-	// (which would block the agent), auto-link: content overlap has already been
-	// verified by filterSessionsWithNewContent.
-	anyActive := false
-	for _, state := range sessionsWithContent {
-		if state.Phase.IsActive() {
-			anyActive = true
-			break
-		}
-	}
-
 	// Add trailer differently based on commit source
 	switch source {
 	case "message":
-<<<<<<< HEAD
-		// Using -m or -F: behavior depends on session phase, commit_linking setting
-		if anyActive || commitLinking == settings.CommitLinkingAlways {
-			// Auto-link: agent is running (can't prompt) or user chose "always"
-=======
 		// Using -m or -F: behavior depends on TTY availability and commit_linking setting
 		switch {
 		case !hasTTY():
 			// No TTY (agent subprocess, CI) — auto-link without prompting
->>>>>>> main
 			message = addCheckpointTrailer(message, checkpointID)
 		case commitLinking == settings.CommitLinkingAlways:
 			// User previously chose "always" — auto-link without prompting

@@ -78,7 +78,7 @@ func (k *Kiro) RunPrompt(ctx context.Context, dir string, prompt string, opts ..
 	}
 
 	name := fmt.Sprintf("kiro-run-%d", time.Now().UnixNano())
-	s, err := NewTmuxSession(name, dir, nil, k.Binary(), args...)
+	s, err := NewTmuxSession(name, dir, []string{"ENTIRE_TEST_TTY"}, k.Binary(), args...)
 	if err != nil {
 		return Output{}, fmt.Errorf("starting kiro session: %w", err)
 	}
@@ -117,7 +117,7 @@ func (k *Kiro) RunPrompt(ctx context.Context, dir string, prompt string, opts ..
 
 func (k *Kiro) StartSession(ctx context.Context, dir string) (Session, error) {
 	name := fmt.Sprintf("kiro-test-%d", time.Now().UnixNano())
-	s, err := NewTmuxSession(name, dir, nil, k.Binary(), "chat", "-a", "--agent", "entire")
+	s, err := NewTmuxSession(name, dir, []string{"ENTIRE_TEST_TTY"}, k.Binary(), "chat", "-a", "--agent", "entire")
 	if err != nil {
 		return nil, err
 	}
