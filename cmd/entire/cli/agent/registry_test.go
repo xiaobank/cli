@@ -135,11 +135,41 @@ func (d *detectableAgent) DetectPresence(_ context.Context) (bool, error) {
 }
 
 func TestAgentNameConstants(t *testing.T) {
-	if AgentNameClaudeCode != "claude-code" {
-		t.Errorf("expected AgentNameClaudeCode %q, got %q", "claude-code", AgentNameClaudeCode)
+	t.Parallel()
+
+	nameTests := []struct {
+		got  types.AgentName
+		want types.AgentName
+		desc string
+	}{
+		{AgentNameClaudeCode, "claude-code", "AgentNameClaudeCode"},
+		{AgentNameCursor, "cursor", "AgentNameCursor"},
+		{AgentNameGemini, "gemini", "AgentNameGemini"},
+		{AgentNameKiro, "kiro", "AgentNameKiro"},
+		{AgentNameOpenCode, "opencode", "AgentNameOpenCode"},
 	}
-	if AgentNameGemini != "gemini" {
-		t.Errorf("expected AgentNameGemini %q, got %q", "gemini", AgentNameGemini)
+	for _, tc := range nameTests {
+		if tc.got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.desc, tc.got, tc.want)
+		}
+	}
+
+	typeTests := []struct {
+		got  types.AgentType
+		want types.AgentType
+		desc string
+	}{
+		{AgentTypeClaudeCode, "Claude Code", "AgentTypeClaudeCode"},
+		{AgentTypeCursor, "Cursor", "AgentTypeCursor"},
+		{AgentTypeGemini, "Gemini CLI", "AgentTypeGemini"},
+		{AgentTypeKiro, "Kiro", "AgentTypeKiro"},
+		{AgentTypeOpenCode, "OpenCode", "AgentTypeOpenCode"},
+		{AgentTypeUnknown, "Agent", "AgentTypeUnknown"},
+	}
+	for _, tc := range typeTests {
+		if tc.got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.desc, tc.got, tc.want)
+		}
 	}
 }
 

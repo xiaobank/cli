@@ -134,6 +134,22 @@ func TestInstallHooks_IncludesAllDefaultTools(t *testing.T) {
 	}
 }
 
+func TestInstallHooks_CountMatchesHookNames(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+
+	ag := &KiroAgent{}
+	count, err := ag.InstallHooks(context.Background(), false, false)
+	if err != nil {
+		t.Fatalf("InstallHooks() error = %v", err)
+	}
+
+	expectedCount := len(ag.HookNames())
+	if count != expectedCount {
+		t.Errorf("InstallHooks() count = %d, want %d (len(HookNames()))", count, expectedCount)
+	}
+}
+
 func TestInstallHooks_CreatesDirectoryStructure(t *testing.T) {
 	tempDir := t.TempDir()
 	t.Chdir(tempDir)

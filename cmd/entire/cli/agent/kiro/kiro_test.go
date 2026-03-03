@@ -2,8 +2,10 @@ package kiro
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
@@ -75,33 +77,40 @@ func TestProtectedDirs(t *testing.T) {
 	}
 }
 
-func TestDetectPresence_WithKiroDir(t *testing.T) {
-	t.Parallel()
-
-	tempDir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(tempDir, ".kiro"), 0o750); err != nil {
-		t.Fatalf("failed to create .kiro dir: %v", err)
-	}
-
-	// DetectPresence uses paths.WorktreeRoot which won't resolve in a temp dir,
-	// so it falls back to ".". We chdir to make it find .kiro.
-	// Since t.Chdir is not parallelizable, we test a separate scenario below.
-}
-
 func TestDetectPresence_WithoutKiroDir(t *testing.T) {
-	t.Parallel()
+	// t.Chdir prevents t.Parallel() — DetectPresence falls back to "." when
+	// WorktreeRoot fails (temp dir is not a git repo).
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
 
 	ag := &KiroAgent{}
-	// In a temp dir without .kiro, presence should be false.
-	// paths.WorktreeRoot will fail in temp dir (not a git repo), falls back to ".".
-	// Since "." doesn't have .kiro, this should return false.
 	found, err := ag.DetectPresence(context.Background())
 	if err != nil {
 		t.Fatalf("DetectPresence() error = %v", err)
 	}
-	// We can't guarantee false in CI since the working dir might have .kiro,
-	// but we can at least verify no error.
-	_ = found
+	if found {
+		t.Error("DetectPresence() = true, want false (no .kiro directory)")
+	}
+}
+
+func TestDetectPresence_WithKiroDir(t *testing.T) {
+	// t.Chdir prevents t.Parallel() — DetectPresence falls back to "." when
+	// WorktreeRoot fails (temp dir is not a git repo).
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+
+	if err := os.MkdirAll(filepath.Join(tempDir, ".kiro"), 0o750); err != nil {
+		t.Fatalf("failed to create .kiro dir: %v", err)
+	}
+
+	ag := &KiroAgent{}
+	found, err := ag.DetectPresence(context.Background())
+	if err != nil {
+		t.Fatalf("DetectPresence() error = %v", err)
+	}
+	if !found {
+		t.Error("DetectPresence() = false, want true (.kiro directory exists)")
+	}
 }
 
 func TestGetSessionID(t *testing.T) {
@@ -209,6 +218,82 @@ func TestGetSupportedHooks(t *testing.T) {
 		if hooks[i] != want {
 			t.Errorf("GetSupportedHooks()[%d] = %q, want %q", i, hooks[i], want)
 		}
+	}
+}
+
+func TestEscapeSQLString(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"empty string", "", ""},
+		{"no quotes", "/home/user/project", "/home/user/project"},
+		{"single quote", "O'Brien", "O''Brien"},
+		{"multiple quotes", "it's a 'test'", "it''s a ''test''"},
+		{"already doubled", "it''s fine", "it''''s fine"},
+		{"only quotes", "'''", "''''''"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := escapeSQLString(tc.input)
+			if got != tc.want {
+				t.Errorf("escapeSQLString(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestChunkTranscript_LargeContent(t *testing.T) {
+	t.Parallel()
+
+	ag := &KiroAgent{}
+
+	// Build content larger than maxSize (100 bytes), using newline-separated lines.
+	// Each line is ~20 bytes, so 10 lines ≈ 200 bytes → should produce >1 chunk at maxSize=100.
+	var lines []string
+	for i := range 10 {
+		lines = append(lines, fmt.Sprintf(`{"line":%d,"data":"x"}`, i))
+	}
+	content := []byte(strings.Join(lines, "\n"))
+
+	chunks, err := ag.ChunkTranscript(context.Background(), content, 100)
+	if err != nil {
+		t.Fatalf("ChunkTranscript() error = %v", err)
+	}
+	if len(chunks) < 2 {
+		t.Errorf("ChunkTranscript() returned %d chunks, want >= 2 for large content", len(chunks))
+	}
+
+	// Verify all original content is represented across chunks.
+	reassembled, err := ag.ReassembleTranscript(chunks)
+	if err != nil {
+		t.Fatalf("ReassembleTranscript() error = %v", err)
+	}
+	if string(reassembled) != string(content) {
+		t.Errorf("roundtrip mismatch: got %d bytes, want %d bytes", len(reassembled), len(content))
+	}
+}
+
+func TestReassembleTranscript_MultipleChunks(t *testing.T) {
+	t.Parallel()
+
+	ag := &KiroAgent{}
+	chunk1 := []byte(`{"line":1}` + "\n" + `{"line":2}`)
+	chunk2 := []byte(`{"line":3}` + "\n" + `{"line":4}`)
+
+	result, err := ag.ReassembleTranscript([][]byte{chunk1, chunk2})
+	if err != nil {
+		t.Fatalf("ReassembleTranscript() error = %v", err)
+	}
+
+	expected := string(chunk1) + "\n" + string(chunk2)
+	if string(result) != expected {
+		t.Errorf("ReassembleTranscript() = %q, want %q", string(result), expected)
 	}
 }
 

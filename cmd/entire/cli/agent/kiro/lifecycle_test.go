@@ -123,6 +123,40 @@ func TestParseHookEvent_Stop(t *testing.T) {
 	}
 }
 
+func TestParseHookEvent_Stop_TranscriptRef(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+	t.Setenv("ENTIRE_TEST_KIRO_MOCK_DB", "1")
+
+	ag := &KiroAgent{}
+
+	// First, agent-spawn to generate and cache a session ID.
+	spawnInput := `{"hook_event_name":"agentSpawn","cwd":"` + tempDir + `"}`
+	spawnEvent, err := ag.ParseHookEvent(context.Background(), HookNameAgentSpawn, strings.NewReader(spawnInput))
+	if err != nil {
+		t.Fatalf("agent-spawn error: %v", err)
+	}
+
+	// Then stop — should set SessionRef to cached transcript path.
+	stopInput := `{"hook_event_name":"stop","cwd":"` + tempDir + `"}`
+	stopEvent, err := ag.ParseHookEvent(context.Background(), HookNameStop, strings.NewReader(stopInput))
+	if err != nil {
+		t.Fatalf("stop error: %v", err)
+	}
+
+	if stopEvent.SessionRef == "" {
+		t.Fatal("stop event SessionRef should not be empty when mock DB is enabled")
+	}
+
+	// Verify the path contains the session ID and ends with .json.
+	if !strings.Contains(stopEvent.SessionRef, spawnEvent.SessionID) {
+		t.Errorf("SessionRef %q does not contain session ID %q", stopEvent.SessionRef, spawnEvent.SessionID)
+	}
+	if !strings.HasSuffix(stopEvent.SessionRef, ".json") {
+		t.Errorf("SessionRef %q does not end with .json", stopEvent.SessionRef)
+	}
+}
+
 // --- ParseHookEvent: pass-through hooks ---
 
 func TestParseHookEvent_PreToolUse_ReturnsNil(t *testing.T) {
