@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -59,8 +60,23 @@ func (k *KiroAgent) ParseHookEvent(ctx context.Context, hookName string, stdin i
 	}
 }
 
+// readHookInputOrEmpty wraps ReadAndParseHookInput, returning a zero-value
+// hookInputRaw on empty stdin instead of erroring. This supports the Kiro IDE
+// which delivers data via environment variables rather than JSON on stdin.
+// Malformed JSON still returns an error.
+func readHookInputOrEmpty(stdin io.Reader) (*hookInputRaw, error) {
+	raw, err := agent.ReadAndParseHookInput[hookInputRaw](stdin)
+	if err != nil {
+		if errors.Is(err, agent.ErrEmptyHookInput) {
+			return &hookInputRaw{}, nil
+		}
+		return nil, err
+	}
+	return raw, nil
+}
+
 func (k *KiroAgent) parseAgentSpawn(ctx context.Context, stdin io.Reader) (*agent.Event, error) {
-	_, err := agent.ReadAndParseHookInput[hookInputRaw](stdin)
+	_, err := readHookInputOrEmpty(stdin)
 	if err != nil {
 		return nil, err
 	}
@@ -79,9 +95,15 @@ func (k *KiroAgent) parseAgentSpawn(ctx context.Context, stdin io.Reader) (*agen
 }
 
 func (k *KiroAgent) parseUserPromptSubmit(ctx context.Context, stdin io.Reader) (*agent.Event, error) {
-	raw, err := agent.ReadAndParseHookInput[hookInputRaw](stdin)
+	raw, err := readHookInputOrEmpty(stdin)
 	if err != nil {
 		return nil, err
+	}
+
+	// IDE mode: prompt comes from USER_PROMPT env var when stdin is empty.
+	prompt := raw.Prompt
+	if prompt == "" {
+		prompt = os.Getenv("USER_PROMPT")
 	}
 
 	// Read the stable session ID generated at agentSpawn.
@@ -94,22 +116,31 @@ func (k *KiroAgent) parseUserPromptSubmit(ctx context.Context, stdin io.Reader) 
 	return &agent.Event{
 		Type:      agent.TurnStart,
 		SessionID: sessionID,
-		Prompt:    raw.Prompt,
+		Prompt:    prompt,
 		Timestamp: time.Now(),
 	}, nil
 }
 
 func (k *KiroAgent) parseStop(ctx context.Context, stdin io.Reader) (*agent.Event, error) {
-	raw, err := agent.ReadAndParseHookInput[hookInputRaw](stdin)
+	raw, err := readHookInputOrEmpty(stdin)
 	if err != nil {
 		return nil, err
+	}
+
+	// IDE mode: CWD may not be in stdin. Fall back to repo root.
+	cwd := raw.CWD
+	if cwd == "" {
+		repoRoot, rootErr := paths.WorktreeRoot(ctx)
+		if rootErr == nil {
+			cwd = repoRoot
+		}
 	}
 
 	// Read the stable session ID generated at agentSpawn.
 	sessionID := k.readCachedSessionID(ctx)
 	if sessionID == "" {
 		// Fallback: try SQLite for the session ID.
-		sid, queryErr := k.querySessionID(ctx, raw.CWD)
+		sid, queryErr := k.querySessionID(ctx, cwd)
 		if queryErr != nil || sid == "" {
 			sessionID = "unknown"
 		} else {
@@ -119,7 +150,7 @@ func (k *KiroAgent) parseStop(ctx context.Context, stdin io.Reader) (*agent.Even
 
 	// At stop, Kiro's SQLite transcript is available. Fetch and cache it
 	// under our stable session ID so lifecycle.go can read it.
-	sessionRef, _ := k.ensureCachedTranscript(ctx, raw.CWD, sessionID) //nolint:errcheck // best-effort: sessionRef="" is a valid fallback
+	sessionRef, _ := k.ensureCachedTranscript(ctx, cwd, sessionID) //nolint:errcheck // best-effort: sessionRef="" is a valid fallback
 
 	return &agent.Event{
 		Type:       agent.TurnEnd,

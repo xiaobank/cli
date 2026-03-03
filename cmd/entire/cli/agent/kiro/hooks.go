@@ -22,8 +22,20 @@ const HooksFileName = "entire.json"
 // hooksDir is the directory within .kiro where agent hook configs live.
 const hooksDir = "agents"
 
+// ideHooksDir is the directory within .kiro where IDE hook files live.
+const ideHooksDir = "hooks"
+
+// ideHookFileSuffix is the file extension for IDE hook files.
+const ideHookFileSuffix = ".kiro.hook"
+
+// ideHookVersion is the schema version for IDE hook files.
+const ideHookVersion = "1"
+
 // localDevCmdPrefix is the command prefix used for local development builds.
 const localDevCmdPrefix = "go run ${KIRO_PROJECT_DIR}/cmd/entire/main.go "
+
+// prodHookCmdPrefix is the command prefix for production hook commands.
+const prodHookCmdPrefix = "entire hooks kiro "
 
 // entireHookPrefixes identify Entire hooks in the config file.
 var entireHookPrefixes = []string{
@@ -31,9 +43,26 @@ var entireHookPrefixes = []string{
 	localDevCmdPrefix,
 }
 
-// InstallHooks installs Entire hooks in .kiro/agents/entire.json.
-// Since Entire owns this file entirely, we write it from scratch each time.
-// Returns the number of hooks installed.
+// ideHookDef defines a single IDE hook file to install.
+type ideHookDef struct {
+	Filename    string // e.g. "entire-prompt-submit"
+	TriggerType string // e.g. "promptSubmit"
+	CLIVerb     string // e.g. "user-prompt-submit"
+}
+
+// ideHookDefs lists the 4 IDE hook files to install.
+// No agentSpawn IDE hook — the IDE has no such trigger.
+// The first promptSubmit serves as session start.
+var ideHookDefs = []ideHookDef{
+	{Filename: "entire-prompt-submit", TriggerType: "promptSubmit", CLIVerb: HookNameUserPromptSubmit},
+	{Filename: "entire-stop", TriggerType: "agentStop", CLIVerb: HookNameStop},
+	{Filename: "entire-pre-tool-use", TriggerType: "preToolUse", CLIVerb: HookNamePreToolUse},
+	{Filename: "entire-post-tool-use", TriggerType: "postToolUse", CLIVerb: HookNamePostToolUse},
+}
+
+// InstallHooks installs Entire hooks in .kiro/agents/entire.json (CLI hooks)
+// and .kiro/hooks/*.kiro.hook (IDE hooks).
+// Returns the total number of hooks installed (CLI + IDE).
 func (k *KiroAgent) InstallHooks(ctx context.Context, localDev bool, force bool) (int, error) {
 	worktreeRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {
@@ -46,7 +75,7 @@ func (k *KiroAgent) InstallHooks(ctx context.Context, localDev bool, force bool)
 	if !force {
 		if existing, readErr := os.ReadFile(hooksPath); readErr == nil { //nolint:gosec // path constructed from repo root
 			var file kiroAgentFile
-			if json.Unmarshal(existing, &file) == nil && allHooksPresent(file.Hooks, localDev) {
+			if json.Unmarshal(existing, &file) == nil && allHooksPresent(file.Hooks, localDev) && allIDEHooksPresent(worktreeRoot, localDev) {
 				return 0, nil
 			}
 		}
@@ -56,7 +85,7 @@ func (k *KiroAgent) InstallHooks(ctx context.Context, localDev bool, force bool)
 	if localDev {
 		cmdPrefix = localDevCmdPrefix + "hooks kiro "
 	} else {
-		cmdPrefix = "entire hooks kiro "
+		cmdPrefix = prodHookCmdPrefix
 	}
 
 	file := kiroAgentFile{
@@ -89,44 +118,63 @@ func (k *KiroAgent) InstallHooks(ctx context.Context, localDev bool, force bool)
 		return 0, fmt.Errorf("failed to write hooks config: %w", err)
 	}
 
-	return len(k.HookNames()), nil
+	// Install IDE hooks (.kiro/hooks/*.kiro.hook)
+	ideCount, err := installIDEHooks(worktreeRoot, cmdPrefix)
+	if err != nil {
+		return 0, fmt.Errorf("failed to install IDE hooks: %w", err)
+	}
+
+	return len(k.HookNames()) + ideCount, nil
 }
 
-// UninstallHooks removes the Entire hooks config file.
+// UninstallHooks removes the Entire hooks config file and IDE hook files.
 func (k *KiroAgent) UninstallHooks(ctx context.Context) error {
 	worktreeRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {
 		worktreeRoot = "."
 	}
 
+	// Remove CLI agent file
 	hooksPath := filepath.Join(worktreeRoot, ".kiro", hooksDir, HooksFileName)
 	if err := os.Remove(hooksPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove hooks config: %w", err)
 	}
+
+	// Remove IDE hook files
+	for _, def := range ideHookDefs {
+		idePath := filepath.Join(worktreeRoot, ".kiro", ideHooksDir, def.Filename+ideHookFileSuffix)
+		if err := os.Remove(idePath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed to remove IDE hook %s: %w", def.Filename, err)
+		}
+	}
+
 	return nil
 }
 
 // AreHooksInstalled checks if Entire hooks are installed.
+// Returns true if EITHER CLI agent hooks or IDE hooks are present.
 func (k *KiroAgent) AreHooksInstalled(ctx context.Context) bool {
 	worktreeRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {
 		worktreeRoot = "."
 	}
 
+	// Check CLI agent hooks
 	hooksPath := filepath.Join(worktreeRoot, ".kiro", hooksDir, HooksFileName)
 	data, err := os.ReadFile(hooksPath) //nolint:gosec // path constructed from repo root
-	if err != nil {
-		return false
+	if err == nil {
+		var file kiroAgentFile
+		if json.Unmarshal(data, &file) == nil {
+			if hasEntireHook(file.Hooks.AgentSpawn) ||
+				hasEntireHook(file.Hooks.UserPromptSubmit) ||
+				hasEntireHook(file.Hooks.Stop) {
+				return true
+			}
+		}
 	}
 
-	var file kiroAgentFile
-	if err := json.Unmarshal(data, &file); err != nil {
-		return false
-	}
-
-	return hasEntireHook(file.Hooks.AgentSpawn) ||
-		hasEntireHook(file.Hooks.UserPromptSubmit) ||
-		hasEntireHook(file.Hooks.Stop)
+	// Check IDE hooks — any Entire IDE hook file means hooks are installed
+	return anyIDEHookPresent(worktreeRoot)
 }
 
 // GetSupportedHooks returns the hook types Kiro supports.
@@ -145,7 +193,7 @@ func allHooksPresent(hooks kiroHooks, localDev bool) bool {
 	if localDev {
 		cmdPrefix = localDevCmdPrefix + "hooks kiro "
 	} else {
-		cmdPrefix = "entire hooks kiro "
+		cmdPrefix = prodHookCmdPrefix
 	}
 
 	return hookCommandExists(hooks.AgentSpawn, cmdPrefix+HookNameAgentSpawn) &&
@@ -180,4 +228,87 @@ func hasEntireHook(entries []kiroHookEntry) bool {
 		}
 	}
 	return false
+}
+
+// installIDEHooks creates .kiro/hooks/*.kiro.hook files for the Kiro IDE.
+func installIDEHooks(worktreeRoot, cmdPrefix string) (int, error) {
+	dir := filepath.Join(worktreeRoot, ".kiro", ideHooksDir)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return 0, fmt.Errorf("failed to create .kiro/hooks directory: %w", err)
+	}
+
+	for _, def := range ideHookDefs {
+		hook := kiroIDEHookFile{
+			Enabled:     true,
+			Name:        def.Filename,
+			Description: "Entire CLI " + def.TriggerType + " hook",
+			Version:     ideHookVersion,
+			When: kiroIDEHookWhen{
+				Type: def.TriggerType,
+			},
+			Then: kiroIDEHookThen{
+				Type:    "runCommand",
+				Command: cmdPrefix + def.CLIVerb,
+			},
+		}
+
+		data, err := jsonutil.MarshalIndentWithNewline(hook, "", "  ")
+		if err != nil {
+			return 0, fmt.Errorf("failed to marshal IDE hook %s: %w", def.Filename, err)
+		}
+
+		path := filepath.Join(dir, def.Filename+ideHookFileSuffix)
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			return 0, fmt.Errorf("failed to write IDE hook %s: %w", def.Filename, err)
+		}
+	}
+
+	return len(ideHookDefs), nil
+}
+
+// allIDEHooksPresent checks that all 4 IDE hook files exist and have correct commands.
+func allIDEHooksPresent(worktreeRoot string, localDev bool) bool {
+	var cmdPrefix string
+	if localDev {
+		cmdPrefix = localDevCmdPrefix + "hooks kiro "
+	} else {
+		cmdPrefix = prodHookCmdPrefix
+	}
+
+	for _, def := range ideHookDefs {
+		path := filepath.Join(worktreeRoot, ".kiro", ideHooksDir, def.Filename+ideHookFileSuffix)
+		data, err := os.ReadFile(path) //nolint:gosec // path constructed from repo root
+		if err != nil {
+			return false
+		}
+		var hook kiroIDEHookFile
+		if err := json.Unmarshal(data, &hook); err != nil {
+			return false
+		}
+		if hook.Then.Command != cmdPrefix+def.CLIVerb {
+			return false
+		}
+	}
+	return true
+}
+
+// anyIDEHookPresent checks if any Entire IDE hook file exists.
+func anyIDEHookPresent(worktreeRoot string) bool {
+	for _, def := range ideHookDefs {
+		path := filepath.Join(worktreeRoot, ".kiro", ideHooksDir, def.Filename+ideHookFileSuffix)
+		data, err := os.ReadFile(path) //nolint:gosec // path constructed from repo root
+		if err != nil {
+			continue
+		}
+		var hook kiroIDEHookFile
+		if json.Unmarshal(data, &hook) == nil && isEntireIDEHook(hook) {
+			return true
+		}
+	}
+	return false
+}
+
+// isEntireIDEHook checks if an IDE hook file belongs to Entire.
+func isEntireIDEHook(hook kiroIDEHookFile) bool {
+	return strings.HasPrefix(hook.Name, "entire-") && isEntireHook(hook.Then.Command)
 }

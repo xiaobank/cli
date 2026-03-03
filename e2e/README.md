@@ -1,6 +1,6 @@
 # E2E Tests
 
-End-to-end tests for the `entire` CLI against real agents (Claude Code, Gemini CLI, OpenCode).
+End-to-end tests for the `entire` CLI against real agents (Claude Code, Gemini CLI, OpenCode, Factory Droid, Kiro).
 
 ## Commands
 
@@ -46,13 +46,15 @@ e2e/
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `E2E_AGENT` | Agent to test (`claude-code`, `gemini-cli`, `opencode`) | all registered |
+| `E2E_AGENT` | Agent to test (`claude-code`, `gemini-cli`, `opencode`, `factoryai-droid`, `kiro`) | all registered |
 | `E2E_ENTIRE_BIN` | Path to a pre-built `entire` binary | builds from source |
 | `E2E_TIMEOUT` | Timeout per prompt | `2m` |
 | `E2E_KEEP_REPOS` | Set to `1` to preserve temp repos after test | unset |
 | `E2E_ARTIFACT_DIR` | Override artifact output directory | `e2e/artifacts/<timestamp>` |
 | `ANTHROPIC_API_KEY` | Required for Claude Code | — |
 | `GEMINI_API_KEY` | Required for Gemini CLI | — |
+| `AMAZON_Q_SIGV4` | Enable headless IAM/SIGV4 auth for Kiro | unset |
+| `AWS_REGION` | AWS region for Kiro SIGV4 auth | `us-east-1` in CI |
 
 ## Debugging Failures
 
@@ -80,7 +82,14 @@ To diagnose: read `console.log` in the failing test's artifact directory. Compar
 
 ## CI Workflows
 
-- **`.github/workflows/e2e.yml`** — Runs full suite on push to main. Matrix: `[claude, opencode, gemini]`.
+- **`.github/workflows/e2e.yml`** — Runs full suite on push to main. Matrix: `[claude-code, opencode, gemini-cli, factoryai-droid, kiro]`.
 - **`.github/workflows/e2e-isolated.yml`** — Manual dispatch for debugging a single test. Inputs: agent + test name filter.
 
 Both workflows run `go run ./e2e/bootstrap` before tests to handle agent-specific CI setup (auth config, warmup).
+
+## Kiro Authentication
+
+- **Local development**: use normal browser/device login (`kiro-cli login`) and the CLI will reuse your local auth state.
+- **GitHub-hosted CI**: Kiro jobs use AWS OIDC credentials plus SIGV4 (`AMAZON_Q_SIGV4=1`) instead of browser login.
+
+CI prerequisite: set `AWS_ROLE_ARN` repository secret so `aws-actions/configure-aws-credentials` can assume the role.

@@ -13,7 +13,7 @@ Implementation one-pager for the Kiro (Amazon AI coding CLI) agent integration.
 | Preview | Yes |
 | Protected Dir | `.kiro` |
 
-## Hook Events (5 total)
+## Hook Events (5 CLI + 4 IDE)
 
 | Kiro Hook (camelCase) | CLI Subcommand (kebab-case) | EventType | Notes |
 |----------------------|----------------------------|-----------|-------|
@@ -26,6 +26,8 @@ Implementation one-pager for the Kiro (Amazon AI coding CLI) agent integration.
 No `SessionEnd` hook exists — sessions end implicitly (similar to Cursor).
 
 ## Hook Configuration
+
+### CLI Agent Hooks
 
 **File:** `.kiro/agents/entire.json`
 
@@ -54,19 +56,63 @@ Required top-level fields: `name`. Optional: `$schema`, `description`, `prompt`,
 **Important:** The `tools` array must include all default Kiro tools. Without it, `--agent entire`
 restricts the model to zero tools. The tool names come from `~/.kiro/agents/agent_config.json.example`.
 
+### IDE Hook Configuration
+
+**Directory:** `.kiro/hooks/`
+
+The Kiro IDE (VS Code extension) reads hooks from individual `.kiro/hooks/*.kiro.hook` files.
+Unlike CLI hooks (nested in `entire.json`), each IDE hook is a standalone JSON file.
+
+**IDE hook files installed (4 total):**
+
+| File | `when.type` | Command |
+|------|-------------|---------|
+| `entire-prompt-submit.kiro.hook` | `promptSubmit` | `entire hooks kiro user-prompt-submit` |
+| `entire-stop.kiro.hook` | `agentStop` | `entire hooks kiro stop` |
+| `entire-pre-tool-use.kiro.hook` | `preToolUse` | `entire hooks kiro pre-tool-use` |
+| `entire-post-tool-use.kiro.hook` | `postToolUse` | `entire hooks kiro post-tool-use` |
+
+No `agentSpawn` IDE hook — the IDE has no such trigger. The first `promptSubmit` serves as session start.
+
+**Format:**
+```json
+{
+  "enabled": true,
+  "name": "entire-prompt-submit",
+  "description": "Entire CLI promptSubmit hook",
+  "version": "1",
+  "when": {
+    "type": "promptSubmit"
+  },
+  "then": {
+    "type": "runCommand",
+    "command": "entire hooks kiro user-prompt-submit"
+  }
+}
+```
+
+**Key difference from CLI hooks:** IDE hooks deliver data via environment variables (e.g.,
+`USER_PROMPT` for the user's prompt) rather than JSON on stdin. The lifecycle parsers handle
+empty stdin gracefully by reading from environment variables as a fallback.
+
 ## Agent Activation
 
 Hooks only fire when `--agent entire` is passed to `kiro-cli chat`. Without this flag,
 `.kiro/agents/entire.json` is not loaded and hooks do not execute.
+
+IDE hooks in `.kiro/hooks/` are loaded automatically by the Kiro IDE without requiring
+an explicit agent flag.
 
 **`--no-interactive` mode:** Does not fire agent hooks. All E2E tests use interactive (tmux) mode.
 
 **TUI prompt indicator:** `!>` in trust-all mode (with `-a` flag). The `Credits:` line
 appears after each agent response and serves as a reliable completion marker.
 
-## Hook Stdin Format
+## Hook Data Delivery
 
-All hooks receive the same JSON structure on stdin:
+### CLI Mode (stdin JSON)
+
+CLI hooks (`kiro-cli chat --agent entire`) receive a JSON structure on stdin:
 ```json
 {
   "hook_event_name": "userPromptSubmit",
@@ -79,6 +125,14 @@ All hooks receive the same JSON structure on stdin:
 ```
 
 Fields are populated based on the hook event — `prompt` only for `userPromptSubmit`, tool fields only for tool hooks.
+
+### IDE Mode (environment variables)
+
+IDE hooks (`.kiro/hooks/*.kiro.hook`) receive **no stdin**. Data is delivered via environment variables:
+- `USER_PROMPT` — the user's prompt text (for `promptSubmit` hooks)
+
+The lifecycle parsers handle empty stdin gracefully: if stdin is empty, they fall back to reading
+environment variables for prompt data and use `paths.WorktreeRoot()` for CWD.
 
 ## Transcript Storage
 

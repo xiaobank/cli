@@ -104,6 +104,11 @@ type Event struct {
 	Metadata map[string]string
 }
 
+// ErrEmptyHookInput is returned by ReadAndParseHookInput when stdin is empty.
+// Agents that support empty stdin (e.g., Kiro IDE mode) can check for this
+// with errors.Is and handle it gracefully.
+var ErrEmptyHookInput = errors.New("empty hook input")
+
 // ReadAndParseHookInput reads all bytes from stdin and unmarshals JSON into the given type.
 // This is a shared helper for agent ParseHookEvent implementations.
 func ReadAndParseHookInput[T any](stdin io.Reader) (*T, error) {
@@ -112,7 +117,7 @@ func ReadAndParseHookInput[T any](stdin io.Reader) (*T, error) {
 		return nil, fmt.Errorf("failed to read hook input: %w", err)
 	}
 	if len(data) == 0 {
-		return nil, errors.New("empty hook input")
+		return nil, ErrEmptyHookInput
 	}
 	var result T
 	if err := json.Unmarshal(data, &result); err != nil {

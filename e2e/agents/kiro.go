@@ -4,6 +4,8 @@ package agents
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -44,16 +46,74 @@ func (k *Kiro) IsTransientError(out Output, _ error) bool {
 
 func (k *Kiro) Bootstrap() error {
 	// kiro-cli uses Amazon Q / Builder ID auth.
-	// On CI, ensure the user is logged in; locally, auth is handled by the desktop app.
+	// On CI, ensure auth is available; locally, auth is handled by the desktop app.
 	if os.Getenv("CI") == "" {
 		return nil
 	}
+
+	if isTruthyEnvValue(os.Getenv("AMAZON_Q_SIGV4")) {
+		if err := validateKiroSIGV4Inputs(
+			os.Getenv("AWS_REGION"),
+			os.Getenv("AWS_ACCESS_KEY_ID"),
+			os.Getenv("AWS_SECRET_ACCESS_KEY"),
+		); err != nil {
+			return fmt.Errorf("kiro-cli sigv4 auth check failed: %w", err)
+		}
+		return nil
+	}
+
 	// Verify login status — fail fast if not authenticated.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "kiro-cli", "whoami")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("kiro-cli auth check failed (run `kiro-cli login`): %s", out)
+	cmd := exec.CommandContext(ctx, "kiro-cli", "whoami", "-f", "json")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf(
+			"kiro-cli auth check failed (run `kiro-cli login --use-device-flow`): %s",
+			strings.TrimSpace(string(out)),
+		)
+	}
+	if err := validateKiroWhoamiJSON(out); err != nil {
+		return fmt.Errorf("kiro-cli auth check failed: %w", err)
+	}
+	return nil
+}
+
+func isTruthyEnvValue(v string) bool {
+	value := strings.TrimSpace(v)
+	if value == "" {
+		return false
+	}
+	lower := strings.ToLower(value)
+	return lower != "0" && lower != "false"
+}
+
+func validateKiroSIGV4Inputs(region, accessKeyID, secretAccessKey string) error {
+	if strings.TrimSpace(region) == "" {
+		return errors.New("AWS_REGION is required when AMAZON_Q_SIGV4 is enabled")
+	}
+	if strings.TrimSpace(accessKeyID) == "" {
+		return errors.New("AWS_ACCESS_KEY_ID is required when AMAZON_Q_SIGV4 is enabled")
+	}
+	if strings.TrimSpace(secretAccessKey) == "" {
+		return errors.New("AWS_SECRET_ACCESS_KEY is required when AMAZON_Q_SIGV4 is enabled")
+	}
+	return nil
+}
+
+func validateKiroWhoamiJSON(out []byte) error {
+	var response struct {
+		Account json.RawMessage `json:"account"`
+	}
+
+	if err := json.Unmarshal(out, &response); err != nil {
+		return fmt.Errorf("invalid whoami JSON: %w", err)
+	}
+	if len(response.Account) == 0 {
+		return errors.New("account is missing")
+	}
+	if strings.EqualFold(strings.TrimSpace(string(response.Account)), "null") {
+		return errors.New("account is null")
 	}
 	return nil
 }

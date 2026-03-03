@@ -14,6 +14,10 @@ on:
         required: true
         default: "TestInteractiveMultiStep"
 
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
   e2e-isolated:
     runs-on: ubuntu-latest
@@ -43,11 +47,20 @@ jobs:
           esac
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
+      - name: Configure AWS credentials (Kiro OIDC)
+        if: inputs.agent == 'kiro'
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
       - name: Bootstrap agent
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
+          AMAZON_Q_SIGV4: ${{ inputs.agent == 'kiro' && '1' || '' }}
+          AWS_REGION: ${{ inputs.agent == 'kiro' && 'us-east-1' || '' }}
         run: go run ./e2e/bootstrap
 
       - name: Run isolated test
@@ -55,6 +68,8 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
+          AMAZON_Q_SIGV4: ${{ inputs.agent == 'kiro' && '1' || '' }}
+          AWS_REGION: ${{ inputs.agent == 'kiro' && 'us-east-1' || '' }}
           E2E_ARTIFACT_DIR: ${{ github.workspace }}/e2e-artifacts
           E2E_ENTIRE_BIN: /usr/local/bin/entire
         run: |

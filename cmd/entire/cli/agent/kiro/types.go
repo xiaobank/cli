@@ -33,3 +33,27 @@ type kiroHooks struct {
 type kiroHookEntry struct {
 	Command string `json:"command"`
 }
+
+// kiroIDEHookFile represents a .kiro/hooks/*.kiro.hook file for the Kiro IDE.
+// Unlike CLI agent hooks (nested in entire.json), IDE hooks are standalone files
+// with a when/then structure. The IDE delivers data via environment variables
+// (e.g., USER_PROMPT) rather than JSON on stdin.
+type kiroIDEHookFile struct {
+	Enabled     bool            `json:"enabled"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Version     string          `json:"version"`
+	When        kiroIDEHookWhen `json:"when"`
+	Then        kiroIDEHookThen `json:"then"`
+}
+
+// kiroIDEHookWhen defines the trigger condition for an IDE hook.
+type kiroIDEHookWhen struct {
+	Type string `json:"type"`
+}
+
+// kiroIDEHookThen defines the action for an IDE hook.
+type kiroIDEHookThen struct {
+	Type    string `json:"type"`
+	Command string `json:"command"`
+}

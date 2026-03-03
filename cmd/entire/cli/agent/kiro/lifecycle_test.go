@@ -216,13 +216,19 @@ func TestParseHookEvent_EmptyInput(t *testing.T) {
 
 	ag := &KiroAgent{}
 
-	_, err := ag.ParseHookEvent(context.Background(), HookNameAgentSpawn, strings.NewReader(""))
-
-	if err == nil {
-		t.Fatal("expected error for empty input, got nil")
+	// Empty stdin is valid in IDE mode — returns SessionStart with generated session ID.
+	event, err := ag.ParseHookEvent(context.Background(), HookNameAgentSpawn, strings.NewReader(""))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "empty hook input") {
-		t.Errorf("expected 'empty hook input' error, got: %v", err)
+	if event == nil {
+		t.Fatal("expected event, got nil")
+	}
+	if event.Type != agent.SessionStart {
+		t.Errorf("expected event type %v, got %v", agent.SessionStart, event.Type)
+	}
+	if event.SessionID == "" {
+		t.Error("expected non-empty session ID")
 	}
 }
 
@@ -247,22 +253,38 @@ func TestParseHookEvent_EmptyInput_UserPromptSubmit(t *testing.T) {
 
 	ag := &KiroAgent{}
 
-	_, err := ag.ParseHookEvent(context.Background(), HookNameUserPromptSubmit, strings.NewReader(""))
-
-	if err == nil {
-		t.Fatal("expected error for empty input, got nil")
+	// Empty stdin is valid in IDE mode — returns TurnStart with generated session ID.
+	event, err := ag.ParseHookEvent(context.Background(), HookNameUserPromptSubmit, strings.NewReader(""))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if event == nil {
+		t.Fatal("expected event, got nil")
+	}
+	if event.Type != agent.TurnStart {
+		t.Errorf("expected event type %v, got %v", agent.TurnStart, event.Type)
+	}
+	if event.SessionID == "" {
+		t.Error("expected non-empty session ID")
 	}
 }
 
 func TestParseHookEvent_EmptyInput_Stop(t *testing.T) {
-	t.Parallel()
+	// t.Setenv prevents t.Parallel()
+	t.Setenv("ENTIRE_TEST_KIRO_MOCK_DB", "1")
 
 	ag := &KiroAgent{}
 
-	_, err := ag.ParseHookEvent(context.Background(), HookNameStop, strings.NewReader(""))
-
-	if err == nil {
-		t.Fatal("expected error for empty input, got nil")
+	// Empty stdin is valid in IDE mode — returns TurnEnd.
+	event, err := ag.ParseHookEvent(context.Background(), HookNameStop, strings.NewReader(""))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if event == nil {
+		t.Fatal("expected event, got nil")
+	}
+	if event.Type != agent.TurnEnd {
+		t.Errorf("expected event type %v, got %v", agent.TurnEnd, event.Type)
 	}
 }
 
@@ -287,6 +309,77 @@ func TestParseHookEvent_MalformedJSON_Stop(t *testing.T) {
 
 	if err == nil {
 		t.Fatal("expected error for malformed JSON, got nil")
+	}
+}
+
+// --- IDE mode: env var fallback ---
+
+func TestParseHookEvent_UserPromptSubmit_EmptyStdin_ReadsEnvVar(t *testing.T) {
+	// t.Setenv prevents t.Parallel()
+	t.Setenv("USER_PROMPT", "Hello from the IDE")
+
+	ag := &KiroAgent{}
+
+	event, err := ag.ParseHookEvent(context.Background(), HookNameUserPromptSubmit, strings.NewReader(""))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if event == nil {
+		t.Fatal("expected event, got nil")
+	}
+	if event.Type != agent.TurnStart {
+		t.Errorf("expected event type %v, got %v", agent.TurnStart, event.Type)
+	}
+	if event.Prompt != "Hello from the IDE" {
+		t.Errorf("expected prompt %q, got %q", "Hello from the IDE", event.Prompt)
+	}
+}
+
+func TestParseHookEvent_UserPromptSubmit_StdinPromptTakesPrecedence(t *testing.T) {
+	// t.Setenv prevents t.Parallel()
+	t.Setenv("USER_PROMPT", "from env")
+
+	ag := &KiroAgent{}
+
+	// When stdin has a prompt, it takes precedence over the env var
+	input := `{"hook_event_name":"userPromptSubmit","cwd":"/tmp","prompt":"from stdin"}`
+	event, err := ag.ParseHookEvent(context.Background(), HookNameUserPromptSubmit, strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if event.Prompt != "from stdin" {
+		t.Errorf("expected prompt %q (stdin takes precedence), got %q", "from stdin", event.Prompt)
+	}
+}
+
+func TestParseHookEvent_Stop_EmptyStdin_Succeeds(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+	t.Setenv("ENTIRE_TEST_KIRO_MOCK_DB", "1")
+
+	ag := &KiroAgent{}
+
+	// First, agent-spawn to generate and cache a session ID.
+	spawnInput := `{"hook_event_name":"agentSpawn","cwd":"` + tempDir + `"}`
+	spawnEvent, err := ag.ParseHookEvent(context.Background(), HookNameAgentSpawn, strings.NewReader(spawnInput))
+	if err != nil {
+		t.Fatalf("agent-spawn error: %v", err)
+	}
+
+	// Then stop with empty stdin (IDE mode) — should still succeed
+	stopEvent, err := ag.ParseHookEvent(context.Background(), HookNameStop, strings.NewReader(""))
+	if err != nil {
+		t.Fatalf("stop error: %v", err)
+	}
+	if stopEvent == nil {
+		t.Fatal("expected event, got nil")
+	}
+	if stopEvent.Type != agent.TurnEnd {
+		t.Errorf("expected event type %v, got %v", agent.TurnEnd, stopEvent.Type)
+	}
+	if stopEvent.SessionID != spawnEvent.SessionID {
+		t.Errorf("stop session ID %q does not match agent-spawn session ID %q",
+			stopEvent.SessionID, spawnEvent.SessionID)
 	}
 }
 

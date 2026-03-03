@@ -19,8 +19,8 @@ func TestInstallHooks_FreshInstall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InstallHooks() error = %v", err)
 	}
-	if count != 5 {
-		t.Errorf("InstallHooks() returned count %d, want 5", count)
+	if count != 9 {
+		t.Errorf("InstallHooks() returned count %d, want 9 (5 CLI + 4 IDE)", count)
 	}
 
 	file := readKiroAgentFile(t, tempDir)
@@ -47,8 +47,8 @@ func TestInstallHooks_LocalDevMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InstallHooks() error = %v", err)
 	}
-	if count != 5 {
-		t.Errorf("InstallHooks() returned count %d, want 5", count)
+	if count != 9 {
+		t.Errorf("InstallHooks() returned count %d, want 9 (5 CLI + 4 IDE)", count)
 	}
 
 	file := readKiroAgentFile(t, tempDir)
@@ -69,8 +69,8 @@ func TestInstallHooks_Idempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first InstallHooks() error = %v", err)
 	}
-	if count1 != 5 {
-		t.Errorf("first InstallHooks() count = %d, want 5", count1)
+	if count1 != 9 {
+		t.Errorf("first InstallHooks() count = %d, want 9 (5 CLI + 4 IDE)", count1)
 	}
 
 	// Second install should detect hooks are already current and skip
@@ -100,8 +100,8 @@ func TestInstallHooks_ForceReinstall(t *testing.T) {
 	if err != nil {
 		t.Fatalf("force InstallHooks() error = %v", err)
 	}
-	if count != 5 {
-		t.Errorf("force InstallHooks() count = %d, want 5", count)
+	if count != 9 {
+		t.Errorf("force InstallHooks() count = %d, want 9 (5 CLI + 4 IDE)", count)
 	}
 }
 
@@ -144,9 +144,9 @@ func TestInstallHooks_CountMatchesHookNames(t *testing.T) {
 		t.Fatalf("InstallHooks() error = %v", err)
 	}
 
-	expectedCount := len(ag.HookNames())
+	expectedCount := len(ag.HookNames()) + len(ideHookDefs)
 	if count != expectedCount {
-		t.Errorf("InstallHooks() count = %d, want %d (len(HookNames()))", count, expectedCount)
+		t.Errorf("InstallHooks() count = %d, want %d (len(HookNames()) + len(ideHookDefs))", count, expectedCount)
 	}
 }
 
@@ -453,6 +453,254 @@ func assertKiroHookCommand(t *testing.T, entries []kiroHookEntry, expectedComman
 			commands = append(commands, entry.Command)
 		}
 		t.Errorf("expected hook command %q, got %v", expectedCommand, commands)
+	}
+}
+
+// --- IDE Hook Tests ---
+
+func TestInstallHooks_CreatesIDEHookFiles(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+
+	ag := &KiroAgent{}
+	_, err := ag.InstallHooks(context.Background(), false, false)
+	if err != nil {
+		t.Fatalf("InstallHooks() error = %v", err)
+	}
+
+	for _, def := range ideHookDefs {
+		path := filepath.Join(tempDir, ".kiro", "hooks", def.Filename+ideHookFileSuffix)
+		if _, statErr := os.Stat(path); statErr != nil {
+			t.Errorf("IDE hook file not found at %s: %v", path, statErr)
+		}
+	}
+}
+
+func TestInstallHooks_IDEHooksValidJSON(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+
+	ag := &KiroAgent{}
+	_, err := ag.InstallHooks(context.Background(), false, false)
+	if err != nil {
+		t.Fatalf("InstallHooks() error = %v", err)
+	}
+
+	for _, def := range ideHookDefs {
+		path := filepath.Join(tempDir, ".kiro", "hooks", def.Filename+ideHookFileSuffix)
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatalf("failed to read %s: %v", path, readErr)
+		}
+
+		var hook kiroIDEHookFile
+		if err := json.Unmarshal(data, &hook); err != nil {
+			t.Fatalf("failed to parse %s: %v", path, err)
+		}
+
+		if !hook.Enabled {
+			t.Errorf("%s: enabled = false, want true", def.Filename)
+		}
+		if hook.Version != ideHookVersion {
+			t.Errorf("%s: version = %q, want %q", def.Filename, hook.Version, ideHookVersion)
+		}
+		if hook.When.Type != def.TriggerType {
+			t.Errorf("%s: when.type = %q, want %q", def.Filename, hook.When.Type, def.TriggerType)
+		}
+		if hook.Then.Type != "runCommand" {
+			t.Errorf("%s: then.type = %q, want %q", def.Filename, hook.Then.Type, "runCommand")
+		}
+		expectedCmd := "entire hooks kiro " + def.CLIVerb
+		if hook.Then.Command != expectedCmd {
+			t.Errorf("%s: then.command = %q, want %q", def.Filename, hook.Then.Command, expectedCmd)
+		}
+	}
+}
+
+func TestInstallHooks_IDEHooksLocalDevMode(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+
+	ag := &KiroAgent{}
+	_, err := ag.InstallHooks(context.Background(), true, false)
+	if err != nil {
+		t.Fatalf("InstallHooks() error = %v", err)
+	}
+
+	expectedPrefix := "go run ${KIRO_PROJECT_DIR}/cmd/entire/main.go hooks kiro "
+
+	for _, def := range ideHookDefs {
+		path := filepath.Join(tempDir, ".kiro", "hooks", def.Filename+ideHookFileSuffix)
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatalf("failed to read %s: %v", path, readErr)
+		}
+
+		var hook kiroIDEHookFile
+		if err := json.Unmarshal(data, &hook); err != nil {
+			t.Fatalf("failed to parse %s: %v", path, err)
+		}
+
+		expectedCmd := expectedPrefix + def.CLIVerb
+		if hook.Then.Command != expectedCmd {
+			t.Errorf("%s: then.command = %q, want %q", def.Filename, hook.Then.Command, expectedCmd)
+		}
+	}
+}
+
+func TestInstallHooks_IDEHooksFilePermissions(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+
+	ag := &KiroAgent{}
+	_, err := ag.InstallHooks(context.Background(), false, false)
+	if err != nil {
+		t.Fatalf("InstallHooks() error = %v", err)
+	}
+
+	for _, def := range ideHookDefs {
+		path := filepath.Join(tempDir, ".kiro", "hooks", def.Filename+ideHookFileSuffix)
+		info, statErr := os.Stat(path)
+		if statErr != nil {
+			t.Fatalf("failed to stat %s: %v", path, statErr)
+		}
+		perm := info.Mode().Perm()
+		if perm != 0o600 {
+			t.Errorf("%s: permissions = %o, want %o", def.Filename, perm, 0o600)
+		}
+	}
+}
+
+func TestInstallHooks_IDEHooksAllTriggerTypes(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+
+	ag := &KiroAgent{}
+	_, err := ag.InstallHooks(context.Background(), false, false)
+	if err != nil {
+		t.Fatalf("InstallHooks() error = %v", err)
+	}
+
+	expectedTriggers := map[string]string{
+		"entire-prompt-submit": "promptSubmit",
+		"entire-stop":          "agentStop",
+		"entire-pre-tool-use":  "preToolUse",
+		"entire-post-tool-use": "postToolUse",
+	}
+
+	for filename, wantTrigger := range expectedTriggers {
+		path := filepath.Join(tempDir, ".kiro", "hooks", filename+ideHookFileSuffix)
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatalf("failed to read %s: %v", path, readErr)
+		}
+
+		var hook kiroIDEHookFile
+		if err := json.Unmarshal(data, &hook); err != nil {
+			t.Fatalf("failed to parse %s: %v", path, err)
+		}
+
+		if hook.When.Type != wantTrigger {
+			t.Errorf("%s: when.type = %q, want %q", filename, hook.When.Type, wantTrigger)
+		}
+	}
+}
+
+func TestUninstallHooks_RemovesIDEHookFiles(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+
+	ag := &KiroAgent{}
+
+	// Install first
+	_, err := ag.InstallHooks(context.Background(), false, false)
+	if err != nil {
+		t.Fatalf("InstallHooks() error = %v", err)
+	}
+
+	// Verify IDE hook files exist
+	for _, def := range ideHookDefs {
+		path := filepath.Join(tempDir, ".kiro", "hooks", def.Filename+ideHookFileSuffix)
+		if _, statErr := os.Stat(path); statErr != nil {
+			t.Fatalf("IDE hook file should exist before uninstall: %v", statErr)
+		}
+	}
+
+	// Uninstall
+	if err := ag.UninstallHooks(context.Background()); err != nil {
+		t.Fatalf("UninstallHooks() error = %v", err)
+	}
+
+	// Verify IDE hook files are removed
+	for _, def := range ideHookDefs {
+		path := filepath.Join(tempDir, ".kiro", "hooks", def.Filename+ideHookFileSuffix)
+		if _, statErr := os.Stat(path); statErr == nil {
+			t.Errorf("IDE hook file should be removed after uninstall: %s", path)
+		}
+	}
+}
+
+func TestAreHooksInstalled_IDEOnlyHooks(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+
+	ag := &KiroAgent{}
+
+	// Install hooks, then remove only the CLI agent file
+	_, err := ag.InstallHooks(context.Background(), false, false)
+	if err != nil {
+		t.Fatalf("InstallHooks() error = %v", err)
+	}
+
+	// Remove the CLI agent file only
+	cliPath := filepath.Join(tempDir, ".kiro", "agents", "entire.json")
+	if err := os.Remove(cliPath); err != nil {
+		t.Fatalf("failed to remove CLI agent file: %v", err)
+	}
+
+	// Should still detect hooks via IDE hook files
+	if !ag.AreHooksInstalled(context.Background()) {
+		t.Error("AreHooksInstalled() should return true when IDE hooks are present")
+	}
+}
+
+func TestInstallHooks_Idempotent_IncludesIDEHooks(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+
+	ag := &KiroAgent{}
+
+	// First install
+	count1, err := ag.InstallHooks(context.Background(), false, false)
+	if err != nil {
+		t.Fatalf("first InstallHooks() error = %v", err)
+	}
+	if count1 != 9 {
+		t.Errorf("first InstallHooks() count = %d, want 9", count1)
+	}
+
+	// Second install should be idempotent (both CLI and IDE hooks present)
+	count2, err := ag.InstallHooks(context.Background(), false, false)
+	if err != nil {
+		t.Fatalf("second InstallHooks() error = %v", err)
+	}
+	if count2 != 0 {
+		t.Errorf("second InstallHooks() count = %d, want 0 (no new hooks)", count2)
+	}
+
+	// Delete one IDE hook file — re-install should detect and fix
+	firstDef := ideHookDefs[0]
+	path := filepath.Join(tempDir, ".kiro", "hooks", firstDef.Filename+ideHookFileSuffix)
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("failed to remove IDE hook for test: %v", err)
+	}
+
+	count3, err := ag.InstallHooks(context.Background(), false, false)
+	if err != nil {
+		t.Fatalf("third InstallHooks() error = %v", err)
+	}
+	if count3 != 9 {
+		t.Errorf("third InstallHooks() count = %d, want 9 (re-installs all)", count3)
 	}
 }
 
