@@ -54,6 +54,11 @@ func NewTmuxSession(name string, dir string, unsetEnv []string, command string, 
 	setCmd := s.tmuxCmd("set-option", "-t", name, "remain-on-exit", "on")
 	_ = setCmd.Run()
 
+	// Log actual pane dimensions for debugging size issues.
+	if sizeOut, err := s.tmuxCmd("display-message", "-t", name, "-p", "#{window_width}x#{window_height}").Output(); err == nil {
+		fmt.Printf("[tmux] session %s size: %s\n", name, strings.TrimSpace(string(sizeOut)))
+	}
+
 	return s, nil
 }
 
