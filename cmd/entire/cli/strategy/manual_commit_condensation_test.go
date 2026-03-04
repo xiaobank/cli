@@ -12,7 +12,6 @@ import (
 
 	// Register agents so GetByAgentType works in tests.
 	_ "github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
-	_ "github.com/entireio/cli/cmd/entire/cli/agent/cursor"
 	_ "github.com/entireio/cli/cmd/entire/cli/agent/factoryaidroid"
 )
 
@@ -35,7 +34,7 @@ func TestCalculateTokenUsage_CursorReturnsNil(t *testing.T) {
 
 	ag, err := agent.GetByAgentType(agent.AgentTypeCursor)
 	if err != nil {
-		t.Fatalf("GetByAgentType(Cursor) error: %v", err)
+		t.Skip("cursor agent not registered (external binary not on PATH)")
 	}
 	result := agent.CalculateTokenUsage(context.Background(), ag, transcript, 0, "")
 	if result != nil {
@@ -185,7 +184,7 @@ func TestCalculateTokenUsage_CursorRealTranscript(t *testing.T) {
 	// Even with a multi-line real transcript, Cursor should return nil
 	ag, err := agent.GetByAgentType(agent.AgentTypeCursor)
 	if err != nil {
-		t.Fatalf("GetByAgentType(Cursor) error: %v", err)
+		t.Skip("cursor agent not registered (external binary not on PATH)")
 	}
 	result := agent.CalculateTokenUsage(context.Background(), ag, []byte(cursorSampleTranscript), 0, "")
 	if result != nil {
@@ -199,7 +198,7 @@ func TestCalculateTokenUsage_CursorWithOffset(t *testing.T) {
 	// Offset should not matter — Cursor always returns nil
 	ag, err := agent.GetByAgentType(agent.AgentTypeCursor)
 	if err != nil {
-		t.Fatalf("GetByAgentType(Cursor) error: %v", err)
+		t.Skip("cursor agent not registered (external binary not on PATH)")
 	}
 	result := agent.CalculateTokenUsage(context.Background(), ag, []byte(cursorSampleTranscript), 3, "")
 	if result != nil {

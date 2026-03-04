@@ -1,43 +1,67 @@
-package cursor
+package main
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"regexp"
+)
 
-// CursorHooksFile represents the .cursor/HooksFileName structure.
-// Cursor uses a flat JSON file with version and hooks sections.
-//
-//nolint:revive // CursorHooksFile is clearer than HooksFile when used outside this package
-type CursorHooksFile struct {
+// Event type constants matching agent.EventType values.
+const (
+	eventSessionStart  = 1
+	eventTurnStart     = 2
+	eventTurnEnd       = 3
+	eventCompaction    = 4
+	eventSessionEnd    = 5
+	eventSubagentStart = 6
+	eventSubagentEnd   = 7
+)
+
+// Cursor hook names.
+const (
+	hookNameSessionStart       = "session-start"
+	hookNameSessionEnd         = "session-end"
+	hookNameBeforeSubmitPrompt = "before-submit-prompt"
+	hookNameStop               = "stop"
+	hookNamePreCompact         = "pre-compact"
+	hookNameSubagentStart      = "subagent-start"
+	hookNameSubagentStop       = "subagent-stop"
+)
+
+// hooksFileName is the hooks file used by Cursor.
+const hooksFileName = "hooks.json"
+
+// entireHookPrefixes are command prefixes that identify Entire hooks.
+var entireHookPrefixes = []string{
+	"entire ",
+	"go run ${CURSOR_PROJECT_DIR}/cmd/entire/main.go ",
+}
+
+// cursorHooksFile represents the .cursor/hooks.json structure.
+type cursorHooksFile struct {
 	Version int         `json:"version"`
-	Hooks   CursorHooks `json:"hooks"`
+	Hooks   cursorHooks `json:"hooks"`
 }
 
-// CursorHooks contains all hook configurations using camelCase keys.
-//
-//nolint:revive // CursorHooks is clearer than Hooks when used outside this package
-type CursorHooks struct {
-	SessionStart       []CursorHookEntry `json:"sessionStart,omitempty"`
-	SessionEnd         []CursorHookEntry `json:"sessionEnd,omitempty"`
-	BeforeSubmitPrompt []CursorHookEntry `json:"beforeSubmitPrompt,omitempty"`
-	Stop               []CursorHookEntry `json:"stop,omitempty"`
-	PreCompact         []CursorHookEntry `json:"preCompact,omitempty"`
-	SubagentStart      []CursorHookEntry `json:"subagentStart,omitempty"`
-	SubagentStop       []CursorHookEntry `json:"subagentStop,omitempty"`
+// cursorHooks contains all hook configurations.
+type cursorHooks struct {
+	SessionStart       []cursorHookEntry `json:"sessionStart,omitempty"`
+	SessionEnd         []cursorHookEntry `json:"sessionEnd,omitempty"`
+	BeforeSubmitPrompt []cursorHookEntry `json:"beforeSubmitPrompt,omitempty"`
+	Stop               []cursorHookEntry `json:"stop,omitempty"`
+	PreCompact         []cursorHookEntry `json:"preCompact,omitempty"`
+	SubagentStart      []cursorHookEntry `json:"subagentStart,omitempty"`
+	SubagentStop       []cursorHookEntry `json:"subagentStop,omitempty"`
 }
 
-// CursorHookEntry represents a single hook command.
-// Cursor hooks have a command string and an optional matcher field for filtering by tool name.
-//
-//nolint:revive // CursorHookEntry is clearer than HookEntry when used outside this package
-type CursorHookEntry struct {
+// cursorHookEntry represents a single hook command.
+type cursorHookEntry struct {
 	Command string `json:"command"`
 	Matcher string `json:"matcher,omitempty"`
 }
 
-// sessionStartRaw is the JSON structure from SessionStart hooks.
-// IDE includes composer_mode ("agent"), CLI omits it.
-// IDE model is "default", CLI has actual model name.
+// --- Raw hook input structs ---
+
 type sessionStartRaw struct {
-	// common
 	ConversationID string   `json:"conversation_id"`
 	GenerationID   string   `json:"generation_id"`
 	Model          string   `json:"model"`
@@ -47,16 +71,11 @@ type sessionStartRaw struct {
 	UserEmail      string   `json:"user_email"`
 	TranscriptPath string   `json:"transcript_path"`
 
-	// hook specific
 	IsBackgroundAgent bool   `json:"is_background_agent"`
-	ComposerMode      string `json:"composer_mode"` // IDE-only: "agent"
+	ComposerMode      string `json:"composer_mode"`
 }
 
-// stopHookInputRaw is the JSON structure from Stop hooks.
-// IDE provides transcript_path; CLI sends null.
-// Both provide status and loop_count.
 type stopHookInputRaw struct {
-	// common
 	ConversationID string   `json:"conversation_id"`
 	GenerationID   string   `json:"generation_id"`
 	Model          string   `json:"model"`
@@ -66,16 +85,11 @@ type stopHookInputRaw struct {
 	UserEmail      string   `json:"user_email"`
 	TranscriptPath string   `json:"transcript_path"`
 
-	// hook specific
 	Status    string      `json:"status"`
 	LoopCount json.Number `json:"loop_count"`
 }
 
-// sessionEndRaw is the JSON structure from SessionEnd hooks.
-// IDE provides transcript_path; CLI sends null.
-// Both provide reason, duration_ms, is_background_agent, final_status.
 type sessionEndRaw struct {
-	// common
 	ConversationID string   `json:"conversation_id"`
 	GenerationID   string   `json:"generation_id"`
 	Model          string   `json:"model"`
@@ -85,16 +99,13 @@ type sessionEndRaw struct {
 	UserEmail      string   `json:"user_email"`
 	TranscriptPath string   `json:"transcript_path"`
 
-	// hook specific
 	Reason            string      `json:"reason"`
 	DurationMs        json.Number `json:"duration_ms"`
 	IsBackgroundAgent bool        `json:"is_background_agent"`
 	FinalStatus       string      `json:"final_status"`
 }
 
-// beforeSubmitPromptInputRaw is the JSON structure from BeforeSubmitPrompt hooks.
 type beforeSubmitPromptInputRaw struct {
-	// common
 	ConversationID string   `json:"conversation_id"`
 	GenerationID   string   `json:"generation_id"`
 	Model          string   `json:"model"`
@@ -104,13 +115,10 @@ type beforeSubmitPromptInputRaw struct {
 	UserEmail      string   `json:"user_email"`
 	TranscriptPath string   `json:"transcript_path"`
 
-	// hook specific
 	Prompt string `json:"prompt"`
 }
 
-// preCompactHookInputRaw is the JSON structure from PreCompact hook.
 type preCompactHookInputRaw struct {
-	// common
 	ConversationID string   `json:"conversation_id"`
 	GenerationID   string   `json:"generation_id"`
 	Model          string   `json:"model"`
@@ -120,19 +128,16 @@ type preCompactHookInputRaw struct {
 	UserEmail      string   `json:"user_email"`
 	TranscriptPath string   `json:"transcript_path"`
 
-	// hook specific
-	Trigger             string      `json:"trigger"`               // "auto" | "manual",
-	ContextUsagePercent json.Number `json:"context_usage_percent"` // : 85,
-	ContextTokens       json.Number `json:"context_tokens"`        // 120000,
-	ContextWindowSize   json.Number `json:"context_window_size"`   // : 128000,
-	MessageCount        json.Number `json:"message_count"`         // 45,
-	MessagesToCompact   json.Number `json:"messages_to_compact"`   // : 30,
-	IsFirstCompaction   bool        `json:"is_first_compaction"`   // true | false
+	Trigger             string      `json:"trigger"`
+	ContextUsagePercent json.Number `json:"context_usage_percent"`
+	ContextTokens       json.Number `json:"context_tokens"`
+	ContextWindowSize   json.Number `json:"context_window_size"`
+	MessageCount        json.Number `json:"message_count"`
+	MessagesToCompact   json.Number `json:"messages_to_compact"`
+	IsFirstCompaction   bool        `json:"is_first_compaction"`
 }
 
-// subagentStartHookInputRaw is the JSON structure from SubagentStart[Task] hook.
 type subagentStartHookInputRaw struct {
-	// common
 	ConversationID string   `json:"conversation_id"`
 	GenerationID   string   `json:"generation_id"`
 	Model          string   `json:"model"`
@@ -142,7 +147,6 @@ type subagentStartHookInputRaw struct {
 	UserEmail      string   `json:"user_email"`
 	TranscriptPath string   `json:"transcript_path"`
 
-	// hook specific
 	SubagentID           string `json:"subagent_id"`
 	SubagentType         string `json:"subagent_type"`
 	SubagentModel        string `json:"subagent_model"`
@@ -152,9 +156,7 @@ type subagentStartHookInputRaw struct {
 	IsParallelWorker     bool   `json:"is_parallel_worker"`
 }
 
-// subagentStopHookInputRaw is the JSON structure from SubagentStop hooks.
 type subagentStopHookInputRaw struct {
-	// common
 	ConversationID string   `json:"conversation_id"`
 	GenerationID   string   `json:"generation_id"`
 	Model          string   `json:"model"`
@@ -164,7 +166,6 @@ type subagentStopHookInputRaw struct {
 	UserEmail      string   `json:"user_email"`
 	TranscriptPath string   `json:"transcript_path"`
 
-	// hook specific
 	SubagentID           string      `json:"subagent_id"`
 	SubagentType         string      `json:"subagent_type"`
 	Status               string      `json:"status"`
@@ -178,4 +179,18 @@ type subagentStopHookInputRaw struct {
 	Task                 string      `json:"task"`
 	Description          string      `json:"description"`
 	AgentTranscriptPath  string      `json:"agent_transcript_path"`
+}
+
+// --- IDE tag regexes (copied from textutil/ide_tags.go) ---
+
+var ideContextTagRegex = regexp.MustCompile(`(?s)<ide_[^>]*>.*?</ide_[^>]*>`)
+
+var systemTagRegexes = []*regexp.Regexp{
+	regexp.MustCompile(`(?s)<local-command-caveat[^>]*>.*?</local-command-caveat>`),
+	regexp.MustCompile(`(?s)<system-reminder[^>]*>.*?</system-reminder>`),
+	regexp.MustCompile(`(?s)<command-name[^>]*>.*?</command-name>`),
+	regexp.MustCompile(`(?s)<command-message[^>]*>.*?</command-message>`),
+	regexp.MustCompile(`(?s)<command-args[^>]*>.*?</command-args>`),
+	regexp.MustCompile(`(?s)<local-command-stdout[^>]*>.*?</local-command-stdout>`),
+	regexp.MustCompile(`</?user_query>`),
 }
