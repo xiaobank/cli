@@ -1,13 +1,14 @@
 package cli
 
 import (
+	"context"
+
 	"github.com/entireio/cli/cmd/entire/cli/agent"
-	// Import agents to ensure they are registered before we iterate
-	_ "github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
-	_ "github.com/entireio/cli/cmd/entire/cli/agent/cursor"
-	_ "github.com/entireio/cli/cmd/entire/cli/agent/factoryaidroid"
-	_ "github.com/entireio/cli/cmd/entire/cli/agent/geminicli"
-	_ "github.com/entireio/cli/cmd/entire/cli/agent/opencode"
+	_ "github.com/entireio/cli/cmd/entire/cli/agent/claudecode" // register agent
+	"github.com/entireio/cli/cmd/entire/cli/agent/external"
+	_ "github.com/entireio/cli/cmd/entire/cli/agent/factoryaidroid" // register agent
+	_ "github.com/entireio/cli/cmd/entire/cli/agent/geminicli"      // register agent
+	_ "github.com/entireio/cli/cmd/entire/cli/agent/opencode"       // register agent
 
 	"github.com/spf13/cobra"
 )
@@ -22,6 +23,9 @@ func newHooksCmd() *cobra.Command {
 
 	// Git hooks are strategy-level (not agent-specific)
 	cmd.AddCommand(newHooksGitCmd())
+
+	// Discover external agent plugins from PATH before iterating
+	external.DiscoverAndRegister(context.Background())
 
 	// Dynamically add agent hook subcommands
 	// Each agent that implements HookSupport gets its own subcommand tree
