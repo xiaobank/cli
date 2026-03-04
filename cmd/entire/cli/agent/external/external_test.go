@@ -399,6 +399,11 @@ func TestWrap_HooksAndAnalyzer(t *testing.T) {
 	if _, ok := wrapped.(agent.TokenCalculator); ok {
 		t.Error("Wrap() should not return TokenCalculator when token_calculator=false")
 	}
+
+	// Should NOT satisfy TranscriptPreparer (transcript_preparer=false in validInfoJSON)
+	if _, ok := wrapped.(agent.TranscriptPreparer); ok {
+		t.Error("Wrap() should not return TranscriptPreparer when transcript_preparer=false")
+	}
 }
 
 func TestWrap_NoCapabilities(t *testing.T) {
@@ -466,5 +471,119 @@ func TestWrap_HooksOnly(t *testing.T) {
 	}
 	if _, ok := wrapped.(agent.TranscriptAnalyzer); ok {
 		t.Error("Wrap() should not return TranscriptAnalyzer when transcript_analyzer=false")
+	}
+}
+
+func TestWrap_PreparerOnly(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+
+	infoJSON := `{
+  "protocol_version": 1,
+  "name": "preparer-only",
+  "type": "Preparer Only",
+  "description": "Agent with preparer only",
+  "is_preview": false,
+  "protected_dirs": [],
+  "hook_names": [],
+  "capabilities": {"transcript_preparer": true}
+}`
+
+	binPath := testBinaryDir(t, mockInfoScript(infoJSON))
+	ea, err := New(binPath)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	wrapped := Wrap(ea)
+
+	if _, ok := wrapped.(agent.TranscriptPreparer); !ok {
+		t.Error("Wrap() should return TranscriptPreparer when transcript_preparer=true")
+	}
+	if _, ok := wrapped.(agent.HookSupport); ok {
+		t.Error("Wrap() should not return HookSupport when hooks=false")
+	}
+	if _, ok := wrapped.(agent.TranscriptAnalyzer); ok {
+		t.Error("Wrap() should not return TranscriptAnalyzer when transcript_analyzer=false")
+	}
+}
+
+func TestWrap_AnalyzerAndPreparer(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+
+	infoJSON := `{
+  "protocol_version": 1,
+  "name": "analyzer-preparer",
+  "type": "Analyzer Preparer",
+  "description": "Agent with analyzer and preparer",
+  "is_preview": false,
+  "protected_dirs": [],
+  "hook_names": [],
+  "capabilities": {"transcript_analyzer": true, "transcript_preparer": true}
+}`
+
+	binPath := testBinaryDir(t, mockInfoScript(infoJSON))
+	ea, err := New(binPath)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	wrapped := Wrap(ea)
+
+	if _, ok := wrapped.(agent.TranscriptAnalyzer); !ok {
+		t.Error("Wrap() should return TranscriptAnalyzer when transcript_analyzer=true")
+	}
+	if _, ok := wrapped.(agent.TranscriptPreparer); !ok {
+		t.Error("Wrap() should return TranscriptPreparer when transcript_preparer=true")
+	}
+	if _, ok := wrapped.(agent.HookSupport); ok {
+		t.Error("Wrap() should not return HookSupport when hooks=false")
+	}
+}
+
+func TestWrap_HooksAnalyzerPreparer(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+
+	infoJSON := `{
+  "protocol_version": 1,
+  "name": "hooks-analyzer-preparer",
+  "type": "Hooks Analyzer Preparer",
+  "description": "Agent with hooks, analyzer and preparer",
+  "is_preview": false,
+  "protected_dirs": [],
+  "hook_names": ["stop"],
+  "capabilities": {"hooks": true, "transcript_analyzer": true, "transcript_preparer": true}
+}`
+
+	binPath := testBinaryDir(t, mockInfoScript(infoJSON))
+	ea, err := New(binPath)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	wrapped := Wrap(ea)
+
+	if _, ok := wrapped.(agent.HookSupport); !ok {
+		t.Error("Wrap() should return HookSupport when hooks=true")
+	}
+	if _, ok := wrapped.(agent.TranscriptAnalyzer); !ok {
+		t.Error("Wrap() should return TranscriptAnalyzer when transcript_analyzer=true")
+	}
+	if _, ok := wrapped.(agent.TranscriptPreparer); !ok {
+		t.Error("Wrap() should return TranscriptPreparer when transcript_preparer=true")
+	}
+	if _, ok := wrapped.(agent.TokenCalculator); ok {
+		t.Error("Wrap() should not return TokenCalculator when token_calculator=false")
 	}
 }

@@ -22,14 +22,22 @@ func Wrap(ea *Agent) agent.Agent {
 	base := baseAgent{ea: ea}
 
 	switch {
-	case caps.Hooks && caps.TranscriptAnalyzer && caps.TokenCalculator && caps.TextGenerator && caps.HookResponseWriter && caps.SubagentAwareExtractor:
+	case caps.Hooks && caps.TranscriptAnalyzer && caps.TranscriptPreparer && caps.TokenCalculator && caps.TextGenerator && caps.HookResponseWriter && caps.SubagentAwareExtractor:
 		return &fullAgent{baseAgent: base}
+	case caps.Hooks && caps.TranscriptAnalyzer && caps.TranscriptPreparer:
+		return &hooksAnalyzerPreparerAgent{baseAgent: base}
 	case caps.Hooks && caps.TranscriptAnalyzer:
 		return &hooksAnalyzerAgent{baseAgent: base}
+	case caps.Hooks && caps.TranscriptPreparer:
+		return &hooksPreparerAgent{baseAgent: base}
+	case caps.TranscriptAnalyzer && caps.TranscriptPreparer:
+		return &analyzerPreparerAgent{baseAgent: base}
 	case caps.Hooks:
 		return &hooksAgent{baseAgent: base}
 	case caps.TranscriptAnalyzer:
 		return &analyzerAgent{baseAgent: base}
+	case caps.TranscriptPreparer:
+		return &preparerAgent{baseAgent: base}
 	default:
 		return &base
 	}
@@ -103,6 +111,106 @@ func (a *analyzerAgent) ExtractSummary(ref string) (string, error) {
 }
 
 var _ agent.TranscriptAnalyzer = (*analyzerAgent)(nil)
+
+// --- preparerAgent: agent.Agent + TranscriptPreparer ---
+
+type preparerAgent struct{ baseAgent }
+
+func (p *preparerAgent) PrepareTranscript(ctx context.Context, ref string) error {
+	return p.ea.PrepareTranscript(ctx, ref)
+}
+
+var _ agent.TranscriptPreparer = (*preparerAgent)(nil)
+
+// --- analyzerPreparerAgent: agent.Agent + TranscriptAnalyzer + TranscriptPreparer ---
+
+type analyzerPreparerAgent struct{ baseAgent }
+
+func (ap *analyzerPreparerAgent) GetTranscriptPosition(path string) (int, error) {
+	return ap.ea.GetTranscriptPosition(path)
+}
+func (ap *analyzerPreparerAgent) ExtractModifiedFilesFromOffset(path string, offset int) ([]string, int, error) {
+	return ap.ea.ExtractModifiedFilesFromOffset(path, offset)
+}
+func (ap *analyzerPreparerAgent) ExtractPrompts(ref string, offset int) ([]string, error) {
+	return ap.ea.ExtractPrompts(ref, offset)
+}
+func (ap *analyzerPreparerAgent) ExtractSummary(ref string) (string, error) {
+	return ap.ea.ExtractSummary(ref)
+}
+func (ap *analyzerPreparerAgent) PrepareTranscript(ctx context.Context, ref string) error {
+	return ap.ea.PrepareTranscript(ctx, ref)
+}
+
+var (
+	_ agent.TranscriptAnalyzer = (*analyzerPreparerAgent)(nil)
+	_ agent.TranscriptPreparer = (*analyzerPreparerAgent)(nil)
+)
+
+// --- hooksPreparerAgent: agent.Agent + HookSupport + TranscriptPreparer ---
+
+type hooksPreparerAgent struct{ baseAgent }
+
+func (hp *hooksPreparerAgent) HookNames() []string { return hp.ea.HookNames() }
+func (hp *hooksPreparerAgent) ParseHookEvent(ctx context.Context, name string, stdin io.Reader) (*agent.Event, error) {
+	return hp.ea.ParseHookEvent(ctx, name, stdin)
+}
+func (hp *hooksPreparerAgent) InstallHooks(ctx context.Context, localDev bool, force bool) (int, error) {
+	return hp.ea.InstallHooks(ctx, localDev, force)
+}
+func (hp *hooksPreparerAgent) UninstallHooks(ctx context.Context) error {
+	return hp.ea.UninstallHooks(ctx)
+}
+func (hp *hooksPreparerAgent) AreHooksInstalled(ctx context.Context) bool {
+	return hp.ea.AreHooksInstalled(ctx)
+}
+func (hp *hooksPreparerAgent) PrepareTranscript(ctx context.Context, ref string) error {
+	return hp.ea.PrepareTranscript(ctx, ref)
+}
+
+var (
+	_ agent.HookSupport        = (*hooksPreparerAgent)(nil)
+	_ agent.TranscriptPreparer = (*hooksPreparerAgent)(nil)
+)
+
+// --- hooksAnalyzerPreparerAgent: agent.Agent + HookSupport + TranscriptAnalyzer + TranscriptPreparer ---
+
+type hooksAnalyzerPreparerAgent struct{ baseAgent }
+
+func (hap *hooksAnalyzerPreparerAgent) HookNames() []string { return hap.ea.HookNames() }
+func (hap *hooksAnalyzerPreparerAgent) ParseHookEvent(ctx context.Context, name string, stdin io.Reader) (*agent.Event, error) {
+	return hap.ea.ParseHookEvent(ctx, name, stdin)
+}
+func (hap *hooksAnalyzerPreparerAgent) InstallHooks(ctx context.Context, localDev bool, force bool) (int, error) {
+	return hap.ea.InstallHooks(ctx, localDev, force)
+}
+func (hap *hooksAnalyzerPreparerAgent) UninstallHooks(ctx context.Context) error {
+	return hap.ea.UninstallHooks(ctx)
+}
+func (hap *hooksAnalyzerPreparerAgent) AreHooksInstalled(ctx context.Context) bool {
+	return hap.ea.AreHooksInstalled(ctx)
+}
+func (hap *hooksAnalyzerPreparerAgent) GetTranscriptPosition(path string) (int, error) {
+	return hap.ea.GetTranscriptPosition(path)
+}
+func (hap *hooksAnalyzerPreparerAgent) ExtractModifiedFilesFromOffset(path string, offset int) ([]string, int, error) {
+	return hap.ea.ExtractModifiedFilesFromOffset(path, offset)
+}
+func (hap *hooksAnalyzerPreparerAgent) ExtractPrompts(ref string, offset int) ([]string, error) {
+	return hap.ea.ExtractPrompts(ref, offset)
+}
+func (hap *hooksAnalyzerPreparerAgent) ExtractSummary(ref string) (string, error) {
+	return hap.ea.ExtractSummary(ref)
+}
+func (hap *hooksAnalyzerPreparerAgent) PrepareTranscript(ctx context.Context, ref string) error {
+	return hap.ea.PrepareTranscript(ctx, ref)
+}
+
+var (
+	_ agent.HookSupport        = (*hooksAnalyzerPreparerAgent)(nil)
+	_ agent.TranscriptAnalyzer = (*hooksAnalyzerPreparerAgent)(nil)
+	_ agent.TranscriptPreparer = (*hooksAnalyzerPreparerAgent)(nil)
+)
 
 // --- hooksAnalyzerAgent: agent.Agent + HookSupport + TranscriptAnalyzer ---
 
@@ -183,6 +291,11 @@ func (f *fullAgent) WriteHookResponse(message string) error {
 	return f.ea.WriteHookResponse(message)
 }
 
+// TranscriptPreparer
+func (f *fullAgent) PrepareTranscript(ctx context.Context, ref string) error {
+	return f.ea.PrepareTranscript(ctx, ref)
+}
+
 // SubagentAwareExtractor
 func (f *fullAgent) ExtractAllModifiedFiles(data []byte, offset int, dir string) ([]string, error) {
 	return f.ea.ExtractAllModifiedFiles(data, offset, dir)
@@ -194,6 +307,7 @@ func (f *fullAgent) CalculateTotalTokenUsage(data []byte, offset int, dir string
 var (
 	_ agent.HookSupport            = (*fullAgent)(nil)
 	_ agent.TranscriptAnalyzer     = (*fullAgent)(nil)
+	_ agent.TranscriptPreparer     = (*fullAgent)(nil)
 	_ agent.TokenCalculator        = (*fullAgent)(nil)
 	_ agent.TextGenerator          = (*fullAgent)(nil)
 	_ agent.HookResponseWriter     = (*fullAgent)(nil)
