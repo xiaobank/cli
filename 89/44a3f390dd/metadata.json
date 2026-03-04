@@ -1,0 +1,14 @@
+{
+  "trail_id": "8944a3f390dd",
+  "branch": "refactoring-transcript-reads",
+  "base": "main",
+  "title": "refactoring transcript reads",
+  "body": "Phase 0 - laying the groundwork for post-edit hook tracking",
+  "status": "draft",
+  "author": "khaong",
+  "assignees": [],
+  "labels": [],
+  "created_at": "2026-03-04T15:06:56.739225+11:00",
+  "updated_at": "2026-03-04T15:06:56.739225+11:00",
+  "merged_at": null
+}
