@@ -1,9 +1,11 @@
 package kiro
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -630,6 +632,319 @@ func TestIsFileModificationTool(t *testing.T) {
 			t.Parallel()
 			if got := isFileModificationTool(tc.tool); got != tc.want {
 				t.Errorf("isFileModificationTool(%q) = %v, want %v", tc.tool, got, tc.want)
+			}
+		})
+	}
+}
+
+// --- IDE format transcript tests ---
+
+// testKiroIDETranscript is a realistic Kiro IDE transcript with sequential
+// user/assistant messages in Anthropic API format.
+const testKiroIDETranscript = `{
+  "history": [
+    {
+      "message": {
+        "role": "user",
+        "content": [{"type": "text", "text": "Create a hello world in python"}]
+      }
+    },
+    {
+      "message": {
+        "role": "assistant",
+        "content": "I'll create a hello world Python script for you."
+      }
+    },
+    {
+      "message": {
+        "role": "user",
+        "content": [{"type": "text", "text": "Now add a test file"}]
+      }
+    },
+    {
+      "message": {
+        "role": "assistant",
+        "content": "Done! I've created both hello.py and test_hello.py."
+      }
+    }
+  ]
+}`
+
+func TestParseTranscript_IDEFormat(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		input       []byte
+		wantEntries int
+		wantErr     bool
+	}{
+		{
+			name:        "valid IDE transcript",
+			input:       []byte(testKiroIDETranscript),
+			wantEntries: 2, // 4 sequential messages → 2 paired entries
+		},
+		{
+			name: "IDE transcript with unpaired trailing user message",
+			input: []byte(`{
+				"history": [
+					{"message": {"role": "user", "content": [{"type": "text", "text": "hello"}]}},
+					{"message": {"role": "assistant", "content": "hi"}},
+					{"message": {"role": "user", "content": [{"type": "text", "text": "goodbye"}]}}
+				]
+			}`),
+			wantEntries: 2, // 2 user + 1 assistant → 2 entries (second user unpaired)
+		},
+		{
+			name: "IDE transcript with plain string user content",
+			input: []byte(`{
+				"history": [
+					{"message": {"role": "user", "content": "plain text prompt"}},
+					{"message": {"role": "assistant", "content": "response"}}
+				]
+			}`),
+			wantEntries: 1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := parseTranscript(tc.input)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(got.History) != tc.wantEntries {
+				t.Errorf("len(History) = %d, want %d", len(got.History), tc.wantEntries)
+			}
+		})
+	}
+}
+
+func TestExtractUserPrompt_IDEFormat(t *testing.T) {
+	t.Parallel()
+
+	// Parse IDE transcript and verify prompts are extracted correctly.
+	transcript, err := parseTranscript([]byte(testKiroIDETranscript))
+	if err != nil {
+		t.Fatalf("failed to parse IDE transcript: %v", err)
+	}
+
+	if len(transcript.History) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(transcript.History))
+	}
+
+	// First entry should have the first prompt.
+	prompt := extractUserPrompt(transcript.History[0].User.Content)
+	if prompt != "Create a hello world in python" {
+		t.Errorf("prompt[0] = %q, want %q", prompt, "Create a hello world in python")
+	}
+
+	// Second entry should have the second prompt.
+	prompt = extractUserPrompt(transcript.History[1].User.Content)
+	if prompt != "Now add a test file" {
+		t.Errorf("prompt[1] = %q, want %q", prompt, "Now add a test file")
+	}
+}
+
+func TestExtractLastAssistantResponse_IDEFormat(t *testing.T) {
+	t.Parallel()
+
+	transcript, err := parseTranscript([]byte(testKiroIDETranscript))
+	if err != nil {
+		t.Fatalf("failed to parse IDE transcript: %v", err)
+	}
+
+	summary := extractLastAssistantResponse(transcript.History)
+	if summary != "Done! I've created both hello.py and test_hello.py." {
+		t.Errorf("summary = %q, want %q", summary, "Done! I've created both hello.py and test_hello.py.")
+	}
+}
+
+func TestExtractPrompts_IDEFormat(t *testing.T) {
+	t.Parallel()
+
+	ag := &KiroAgent{}
+	path := writeTestFile(t, testKiroIDETranscript)
+
+	prompts, err := ag.ExtractPrompts(path, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(prompts) != 2 {
+		t.Fatalf("got %d prompts, want 2: %v", len(prompts), prompts)
+	}
+	if prompts[0] != "Create a hello world in python" {
+		t.Errorf("prompts[0] = %q, want %q", prompts[0], "Create a hello world in python")
+	}
+	if prompts[1] != "Now add a test file" {
+		t.Errorf("prompts[1] = %q, want %q", prompts[1], "Now add a test file")
+	}
+}
+
+func TestExtractSummary_IDEFormat(t *testing.T) {
+	t.Parallel()
+
+	ag := &KiroAgent{}
+	path := writeTestFile(t, testKiroIDETranscript)
+
+	summary, err := ag.ExtractSummary(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if summary != "Done! I've created both hello.py and test_hello.py." {
+		t.Errorf("summary = %q, want %q", summary, "Done! I've created both hello.py and test_hello.py.")
+	}
+}
+
+func TestGetTranscriptPosition_IDEFormat(t *testing.T) {
+	t.Parallel()
+
+	ag := &KiroAgent{}
+	path := writeTestFile(t, testKiroIDETranscript)
+
+	pos, err := ag.GetTranscriptPosition(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// 4 sequential messages → 2 paired entries
+	if pos != 2 {
+		t.Errorf("got %d, want 2", pos)
+	}
+}
+
+// --- IDE transcript discovery tests ---
+
+func TestIDEWorkspaceSessionsDir(t *testing.T) {
+	t.Parallel()
+
+	dir, err := ideWorkspaceSessionsDir("/Users/alisha/Projects/test-repos/kiro-ide")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify the path contains the base64-encoded CWD.
+	if !strings.Contains(dir, "workspace-sessions") {
+		t.Errorf("path should contain workspace-sessions: %s", dir)
+	}
+
+	// The base64 of the path should be in the directory name.
+	encoded := "L1VzZXJzL2FsaXNoYS9Qcm9qZWN0cy90ZXN0LXJlcG9zL2tpcm8taWRl"
+	if !strings.HasSuffix(dir, encoded) {
+		t.Errorf("path should end with base64-encoded cwd %q, got %q", encoded, dir)
+	}
+}
+
+func TestEnsureIDETranscript(t *testing.T) {
+	t.Parallel()
+
+	ag := &KiroAgent{}
+
+	// Set up a fake IDE workspace sessions directory.
+	tmpDir := t.TempDir()
+	cwd := filepath.Join(tmpDir, "workspace")
+	if err := os.MkdirAll(cwd, 0o750); err != nil {
+		t.Fatalf("failed to create workspace dir: %v", err)
+	}
+
+	// We can't easily test the real IDE path, but we can test the error case.
+	_, err := ag.ensureIDETranscript(context.Background(), cwd, "test-session")
+	if err == nil {
+		t.Error("expected error for missing IDE sessions directory, got nil")
+	}
+}
+
+// --- convertIDETranscript ---
+
+func TestConvertIDETranscript(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		input       string
+		wantEntries int
+		wantPrompts []string
+		wantSummary string
+	}{
+		{
+			name:        "normal paired messages",
+			input:       testKiroIDETranscript,
+			wantEntries: 2,
+			wantPrompts: []string{"Create a hello world in python", "Now add a test file"},
+			wantSummary: "Done! I've created both hello.py and test_hello.py.",
+		},
+		{
+			name: "trailing user without assistant",
+			input: `{
+				"history": [
+					{"message": {"role": "user", "content": [{"type": "text", "text": "hello"}]}},
+					{"message": {"role": "assistant", "content": "hi there"}},
+					{"message": {"role": "user", "content": [{"type": "text", "text": "are you there?"}]}}
+				]
+			}`,
+			wantEntries: 2,
+			wantPrompts: []string{"hello", "are you there?"},
+			wantSummary: "hi there",
+		},
+		{
+			name: "single exchange",
+			input: `{
+				"history": [
+					{"message": {"role": "user", "content": "just a string"}},
+					{"message": {"role": "assistant", "content": "response"}}
+				]
+			}`,
+			wantEntries: 1,
+			wantPrompts: []string{"just a string"},
+			wantSummary: "response",
+		},
+		{
+			name:        "empty history",
+			input:       `{"history": []}`,
+			wantEntries: 0,
+			wantPrompts: nil,
+			wantSummary: "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := parseTranscript([]byte(tc.input))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(got.History) != tc.wantEntries {
+				t.Errorf("len(History) = %d, want %d", len(got.History), tc.wantEntries)
+			}
+
+			// Verify prompt extraction.
+			var prompts []string
+			for i := range got.History {
+				if p := extractUserPrompt(got.History[i].User.Content); p != "" {
+					prompts = append(prompts, p)
+				}
+			}
+			if len(prompts) != len(tc.wantPrompts) {
+				t.Errorf("got %d prompts %v, want %d %v", len(prompts), prompts, len(tc.wantPrompts), tc.wantPrompts)
+			} else {
+				for i, want := range tc.wantPrompts {
+					if prompts[i] != want {
+						t.Errorf("prompts[%d] = %q, want %q", i, prompts[i], want)
+					}
+				}
+			}
+
+			// Verify summary extraction.
+			summary := extractLastAssistantResponse(got.History)
+			if summary != tc.wantSummary {
+				t.Errorf("summary = %q, want %q", summary, tc.wantSummary)
 			}
 		})
 	}

@@ -118,3 +118,43 @@ type kiroToolCall struct {
 	Name string          `json:"name"`
 	Args json.RawMessage `json:"args"`
 }
+
+// --- Kiro IDE transcript types ---
+// The Kiro IDE stores conversations as JSON files with sequential {role, content}
+// messages (Anthropic API format), unlike the CLI's paired user+assistant entries.
+
+// kiroIDETranscript is the top-level structure of a Kiro IDE session JSON file.
+type kiroIDETranscript struct {
+	History []kiroIDEHistoryEntry `json:"history"`
+}
+
+// kiroIDEHistoryEntry is a single message in an IDE conversation.
+type kiroIDEHistoryEntry struct {
+	Message kiroIDEMessage `json:"message"`
+}
+
+// kiroIDEMessage holds the role and content of an IDE message.
+// Content is json.RawMessage because it can be either a plain string (assistant)
+// or an array of content blocks (user).
+type kiroIDEMessage struct {
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
+}
+
+// kiroIDEContentBlock represents a content block in IDE user messages
+// (e.g., [{"type": "text", "text": "..."}]).
+type kiroIDEContentBlock struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+// --- Kiro IDE session index types ---
+// The IDE stores a sessions.json index alongside session files.
+
+// kiroIDESessionEntry represents one session in the IDE's sessions.json index.
+type kiroIDESessionEntry struct {
+	SessionID          string `json:"sessionId"`
+	Title              string `json:"title"`
+	DateCreated        string `json:"dateCreated"`
+	WorkspaceDirectory string `json:"workspaceDirectory"`
+}

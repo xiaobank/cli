@@ -153,11 +153,15 @@ func (k *KiroAgent) parseStop(ctx context.Context, stdin io.Reader) (*agent.Even
 
 	// At stop, Kiro's SQLite transcript is available. Fetch and cache it
 	// under our stable session ID so lifecycle.go can read it.
-	sessionRef, _ := k.ensureCachedTranscript(ctx, cwd, sessionID) //nolint:errcheck // best-effort: fall back to placeholder
+	sessionRef, _ := k.ensureCachedTranscript(ctx, cwd, sessionID) //nolint:errcheck // best-effort: fall back to IDE or placeholder
 
-	// IDE mode: SQLite may not exist or be at a different path. Create a
-	// minimal placeholder transcript so the lifecycle handler can proceed
-	// (file-diff checkpoints still work without a real transcript).
+	// IDE mode: SQLite may not exist. Try the IDE's workspace session files.
+	if sessionRef == "" {
+		sessionRef, _ = k.ensureIDETranscript(ctx, cwd, sessionID) //nolint:errcheck // best-effort: fall back to placeholder
+	}
+
+	// Last resort: create a minimal placeholder so the lifecycle handler can
+	// proceed (file-diff checkpoints still work without a real transcript).
 	if sessionRef == "" {
 		sessionRef = k.createPlaceholderTranscript(ctx, cwd, sessionID)
 	}

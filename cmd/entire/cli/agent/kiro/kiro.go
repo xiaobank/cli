@@ -3,6 +3,7 @@ package kiro
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -379,6 +381,95 @@ func (k *KiroAgent) ensureCachedTranscript(ctx context.Context, cwd, sessionID s
 	if err := os.WriteFile(cachePath, []byte(transcript), 0o600); err != nil {
 		return "", fmt.Errorf("failed to write cached transcript: %w", err)
 	}
+
+	return cachePath, nil
+}
+
+// --- IDE transcript discovery ---
+
+// ideWorkspaceSessionsDir returns the directory where the Kiro IDE stores
+// session files for the given working directory. The directory is derived from
+// the base64-encoded CWD.
+func ideWorkspaceSessionsDir(cwd string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get home directory: %w", err)
+	}
+
+	encoded := base64.StdEncoding.EncodeToString([]byte(cwd))
+
+	var baseDir string
+	switch runtime.GOOS {
+	case "darwin":
+		baseDir = filepath.Join(home, "Library", "Application Support", "Kiro", "User", "globalStorage", "kiro.kiroagent", "workspace-sessions")
+	default: // linux
+		baseDir = filepath.Join(home, ".config", "Kiro", "User", "globalStorage", "kiro.kiroagent", "workspace-sessions")
+	}
+
+	return filepath.Join(baseDir, encoded), nil
+}
+
+// ensureIDETranscript looks for the most recent Kiro IDE session transcript
+// for the given CWD and copies it to .entire/tmp/<sessionID>.json.
+// Returns the cache path on success, or empty string if no transcript is found.
+func (k *KiroAgent) ensureIDETranscript(ctx context.Context, cwd, sessionID string) (string, error) {
+	sessDir, err := ideWorkspaceSessionsDir(cwd)
+	if err != nil {
+		return "", err
+	}
+
+	// Read the sessions.json index.
+	indexPath := filepath.Join(sessDir, "sessions.json")
+	indexData, err := os.ReadFile(indexPath) //nolint:gosec // Controlled path from IDE storage
+	if err != nil {
+		logging.Debug(ctx, "kiro: IDE sessions.json not found", "path", indexPath, "err", err)
+		return "", fmt.Errorf("IDE sessions.json not found: %w", err)
+	}
+
+	var sessions []kiroIDESessionEntry
+	if err := json.Unmarshal(indexData, &sessions); err != nil {
+		return "", fmt.Errorf("failed to parse IDE sessions.json: %w", err)
+	}
+
+	if len(sessions) == 0 {
+		return "", errors.New("no IDE sessions found")
+	}
+
+	// Sort by dateCreated descending to find the most recent session.
+	sort.Slice(sessions, func(i, j int) bool {
+		return sessions[i].DateCreated > sessions[j].DateCreated
+	})
+
+	// Read the most recent session's transcript.
+	latestSession := sessions[0]
+	transcriptPath := filepath.Join(sessDir, latestSession.SessionID+".json")
+	transcriptData, err := os.ReadFile(transcriptPath) //nolint:gosec // Controlled path from IDE storage
+	if err != nil {
+		return "", fmt.Errorf("failed to read IDE transcript %s: %w", transcriptPath, err)
+	}
+
+	// Cache the transcript under our session ID.
+	repoRoot, rootErr := paths.WorktreeRoot(ctx)
+	if rootErr != nil {
+		repoRoot = cwd
+	}
+
+	cacheDir := filepath.Join(repoRoot, ".entire", "tmp")
+	cachePath := filepath.Join(cacheDir, sessionID+".json")
+
+	if err := os.MkdirAll(cacheDir, 0o750); err != nil {
+		return "", fmt.Errorf("failed to create cache dir: %w", err)
+	}
+
+	if err := os.WriteFile(cachePath, transcriptData, 0o600); err != nil {
+		return "", fmt.Errorf("failed to write cached IDE transcript: %w", err)
+	}
+
+	logging.Info(ctx, "kiro: cached IDE transcript",
+		"ide_session", latestSession.SessionID,
+		"our_session", sessionID,
+		"cache_path", cachePath,
+	)
 
 	return cachePath, nil
 }
