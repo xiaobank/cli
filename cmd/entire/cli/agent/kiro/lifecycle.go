@@ -166,6 +166,10 @@ func (k *KiroAgent) parseStop(ctx context.Context, stdin io.Reader) (*agent.Even
 		sessionRef = k.createPlaceholderTranscript(ctx, cwd, sessionID)
 	}
 
+	// Clear the cache so a subsequent session doesn't reuse this stale ID
+	// (e.g., if Kiro resumes without firing agentSpawn).
+	k.clearCachedSessionID(ctx)
+
 	return &agent.Event{
 		Type:       agent.TurnEnd,
 		SessionID:  sessionID,
@@ -211,6 +215,15 @@ func (k *KiroAgent) generateAndCacheSessionID(ctx context.Context) string {
 		logging.Warn(ctx, "kiro: failed to write session ID cache", "err", err)
 	}
 	return sid
+}
+
+// clearCachedSessionID removes the session ID cache file so that a subsequent
+// session does not accidentally reuse a stale ID from a previous session.
+func (k *KiroAgent) clearCachedSessionID(ctx context.Context) {
+	cachePath := k.sessionIDCachePath(ctx)
+	if err := os.Remove(cachePath); err != nil && !os.IsNotExist(err) {
+		logging.Warn(ctx, "kiro: failed to clear session ID cache", "err", err)
+	}
 }
 
 // readCachedSessionID reads the stable session ID from .entire/tmp/kiro-active-session.

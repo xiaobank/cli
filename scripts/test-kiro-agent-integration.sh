@@ -52,9 +52,13 @@ trap 'rm -rf "$CAPTURE_DIR"' EXIT
 mkdir -p .kiro/agents
 cat > .kiro/agents/capture.json <<EOF
 {
-  "agentSpawn": [{"command": "cat > ${CAPTURE_DIR}/agent-spawn.json"}],
-  "userPromptSubmit": [{"command": "cat > ${CAPTURE_DIR}/user-prompt-submit.json"}],
-  "stop": [{"command": "cat > ${CAPTURE_DIR}/stop.json"}]
+  "name": "capture",
+  "tools": ["shell"],
+  "hooks": {
+    "agentSpawn": [{"command": "cat > ${CAPTURE_DIR}/agent-spawn.json"}],
+    "userPromptSubmit": [{"command": "cat > ${CAPTURE_DIR}/user-prompt-submit.json"}],
+    "stop": [{"command": "cat > ${CAPTURE_DIR}/stop.json"}]
+  }
 }
 EOF
 

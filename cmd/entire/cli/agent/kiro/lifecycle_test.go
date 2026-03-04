@@ -540,6 +540,39 @@ func TestSessionIDCaching_StopReadsCache(t *testing.T) {
 	}
 }
 
+func TestSessionIDCaching_StopClearsCache(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Chdir(tempDir)
+	t.Setenv("ENTIRE_TEST_KIRO_MOCK_DB", "1")
+
+	ag := &KiroAgent{}
+
+	// Agent-spawn caches a session ID.
+	spawnInput := `{"hook_event_name":"agentSpawn","cwd":"` + tempDir + `"}`
+	_, err := ag.ParseHookEvent(context.Background(), HookNameAgentSpawn, strings.NewReader(spawnInput))
+	if err != nil {
+		t.Fatalf("agent-spawn error: %v", err)
+	}
+
+	// Verify cache file exists.
+	cachePath := filepath.Join(tempDir, ".entire", "tmp", sessionIDFile)
+	if _, err := os.Stat(cachePath); err != nil {
+		t.Fatalf("expected cache file to exist after agent-spawn: %v", err)
+	}
+
+	// Stop should clear the cache file.
+	stopInput := `{"hook_event_name":"stop","cwd":"` + tempDir + `"}`
+	_, err = ag.ParseHookEvent(context.Background(), HookNameStop, strings.NewReader(stopInput))
+	if err != nil {
+		t.Fatalf("stop error: %v", err)
+	}
+
+	// Cache file must be gone after stop.
+	if _, err := os.Stat(cachePath); !os.IsNotExist(err) {
+		t.Errorf("expected cache file to be removed after stop, but it still exists (err=%v)", err)
+	}
+}
+
 func TestSessionIDCaching_UserPromptSubmitGeneratesNewIDWhenCacheMissing(t *testing.T) {
 	tempDir := t.TempDir()
 	t.Chdir(tempDir)
