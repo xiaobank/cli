@@ -46,6 +46,7 @@ jobs:
               KIRO_VERSION="1.27.0"
               curl -fsSL "https://desktop-release.q.us-east-1.amazonaws.com/${KIRO_VERSION}/kirocli-x86_64-linux.zip" -o kiro.zip
               unzip -q kiro.zip
+              mkdir -p ~/.local/bin
               cp kirocli/bin/kiro-cli-chat ~/.local/bin/
               chmod +x ~/.local/bin/kiro-cli-chat
               rm -rf kirocli kiro.zip
