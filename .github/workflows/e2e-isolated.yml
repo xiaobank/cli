@@ -36,32 +36,31 @@ jobs:
       - name: Build entire CLI
         run: go build -o /usr/local/bin/entire ./cmd/entire
 
-      - name: Install agent CLI
-        run: |
-          case "${{ inputs.agent }}" in
-            claude-code) curl -fsSL https://claude.ai/install.sh | bash ;;
-            opencode)    curl -fsSL https://opencode.ai/install | bash ;;
-            gemini-cli)  npm install -g @google/gemini-cli ;;
-            kiro)
-              KIRO_VERSION="1.27.0"
-              curl -fsSL "https://desktop-release.q.us-east-1.amazonaws.com/${KIRO_VERSION}/kirocli-x86_64-linux.zip" -o kiro.zip
-              unzip -q kiro.zip
-              mkdir -p ~/.local/bin
-              cp kirocli/bin/kiro-cli-chat ~/.local/bin/
-              chmod +x ~/.local/bin/kiro-cli-chat
-              rm -rf kirocli kiro.zip
-              ;;
-            cursor-cli)  curl https://cursor.com/install -fsS | bash ;;
-            factoryai-droid) curl -fsSL https://app.factory.ai/cli | sh ;;
-          esac
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
-
       - name: Configure AWS credentials (Kiro OIDC)
         if: inputs.agent == 'kiro'
         uses: aws-actions/configure-aws-credentials@v5
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: us-east-1
+
+      - name: Setup Kiro CLI
+        if: inputs.agent == 'kiro'
+        uses: clouatre-labs/setup-kiro-action@v1
+        with:
+          version: '1.24.0'
+          enable-sigv4: true
+          aws-region: us-east-1
+
+      - name: Install agent CLI
+        run: |
+          case "${{ inputs.agent }}" in
+            claude-code) curl -fsSL https://claude.ai/install.sh | bash ;;
+            opencode)    curl -fsSL https://opencode.ai/install | bash ;;
+            gemini-cli)  npm install -g @google/gemini-cli ;;
+            cursor-cli)  curl https://cursor.com/install -fsS | bash ;;
+            factoryai-droid) curl -fsSL https://app.factory.ai/cli | sh ;;
+          esac
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       - name: Bootstrap agent
         env:
