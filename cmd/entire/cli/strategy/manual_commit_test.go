@@ -15,10 +15,13 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 const testTrailerCheckpointID id.CheckpointID = "a1b2c3d4e5f6"
@@ -1506,9 +1509,7 @@ func TestShadowStrategy_CondenseSession_EphemeralBranchTrailer(t *testing.T) {
 		t.Fatalf("failed to create metadata dir: %v", err)
 	}
 
-	transcript := `{"type":"human","message":{"content":"test prompt"}}
-{"type":"assistant","message":{"content":"test response"}}
-`
+	transcript := testTranscriptMinimal
 	if err := os.WriteFile(filepath.Join(metadataDirAbs, paths.TranscriptFileName), []byte(transcript), 0o644); err != nil {
 		t.Fatalf("failed to write transcript: %v", err)
 	}
@@ -3677,4 +3678,40 @@ func TestResolveFilesTouched_PrefersStateFallsBackToTranscript(t *testing.T) {
 			t.Errorf("resolveFilesTouched with no sources = %v, want nil", files)
 		}
 	})
+}
+
+// TestInitializeSession_ClearsPushedDuringTurnRemote verifies that
+// PushedDuringTurnRemote is cleared when a new prompt starts.
+func TestInitializeSession_ClearsPushedDuringTurnRemote(t *testing.T) {
+	dir := setupGitRepo(t)
+	t.Chdir(dir)
+
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+
+	s := &ManualCommitStrategy{}
+	sessionID := "test-clear-pushed-flag"
+
+	// Get HEAD hash for BaseCommit
+	head, err := repo.Head()
+	require.NoError(t, err)
+
+	// Create session state with PushedDuringTurnRemote set
+	state := &SessionState{
+		SessionID:              sessionID,
+		BaseCommit:             head.Hash().String(),
+		Phase:                  session.PhaseIdle,
+		PushedDuringTurnRemote: "origin",
+		TurnCheckpointIDs:      nil,
+	}
+	require.NoError(t, s.saveSessionState(context.Background(), state))
+
+	// Reinitialize (new prompt)
+	err = s.InitializeSession(context.Background(), sessionID, "", "", "new prompt", "")
+	require.NoError(t, err)
+
+	loaded, err := s.loadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	assert.Empty(t, loaded.PushedDuringTurnRemote,
+		"PushedDuringTurnRemote should be cleared on new prompt")
 }

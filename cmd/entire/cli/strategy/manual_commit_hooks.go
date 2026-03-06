@@ -1828,6 +1828,7 @@ func (s *ManualCommitStrategy) InitializeSession(ctx context.Context, sessionID 
 		// TurnCheckpointIDs tracks mid-turn checkpoints for stop-time finalization.
 		state.LastCheckpointID = ""
 		state.TurnCheckpointIDs = nil
+		state.PushedDuringTurnRemote = ""
 
 		// Calculate attribution at prompt start (BEFORE agent makes any changes)
 		// This captures user edits since the last checkpoint (or base commit for first prompt).
@@ -2135,7 +2136,48 @@ func (s *ManualCommitStrategy) HandleTurnEnd(ctx context.Context, state *Session
 			slog.Int("error_count", errCount),
 		)
 	}
+
+	// If checkpoints were pushed during this turn, push the finalized transcripts
+	// so the remote stays consistent. Best-effort: errors are logged, not propagated.
+	s.pushFinalizedCheckpointsIfNeeded(ctx, state)
+
 	return nil
+}
+
+// pushFinalizedCheckpointsIfNeeded pushes entire/checkpoints/v1 to remote if
+// PushedDuringTurnRemote is set (meaning a push happened during this turn and
+// the remote has provisional transcripts that are now finalized).
+//
+// Always clears PushedDuringTurnRemote regardless of push success.
+func (s *ManualCommitStrategy) pushFinalizedCheckpointsIfNeeded(ctx context.Context, state *SessionState) {
+	remote := state.PushedDuringTurnRemote
+	state.PushedDuringTurnRemote = "" // Always clear, even on error
+
+	if remote == "" {
+		return
+	}
+
+	if isPushSessionsDisabled(ctx) {
+		return
+	}
+
+	logCtx := logging.WithComponent(ctx, "push")
+	logging.Info(logCtx, "pushing finalized checkpoint transcripts",
+		slog.String("session_id", state.SessionID),
+		slog.String("remote", remote),
+	)
+	fmt.Fprintf(os.Stderr, "[entire] Pushing finalized checkpoint transcripts to %s...\n", remote)
+
+	if err := pushBranchIfNeeded(ctx, remote, paths.MetadataBranchName); err != nil {
+		logging.Warn(logCtx, "failed to push finalized checkpoints",
+			slog.String("error", err.Error()))
+	}
+
+	// Also push trails to keep them in sync
+	if err := PushTrailsBranch(ctx, remote); err != nil {
+		logging.Warn(logCtx, "failed to push trails after finalization",
+			slog.String("error", err.Error()))
+	}
 }
 
 // finalizeAllTurnCheckpoints replaces the provisional transcript in each checkpoint

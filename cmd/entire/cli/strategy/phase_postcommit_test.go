@@ -1337,12 +1337,9 @@ func setupSessionWithCheckpoint(t *testing.T, s *ManualCommitStrategy, _ *git.Re
 	metadataDirAbs := filepath.Join(dir, metadataDir)
 	require.NoError(t, os.MkdirAll(metadataDirAbs, 0o755))
 
-	transcript := `{"type":"human","message":{"content":"test prompt"}}
-{"type":"assistant","message":{"content":"test response"}}
-`
 	require.NoError(t, os.WriteFile(
 		filepath.Join(metadataDirAbs, paths.TranscriptFileName),
-		[]byte(transcript), 0o644))
+		[]byte(testTranscriptMinimal), 0o644))
 
 	// SaveStep creates the shadow branch and checkpoint
 	// Include test.txt as a modified file so it's saved to the shadow branch
@@ -2323,4 +2320,102 @@ func TestPostCommit_ActiveSession_DifferentFilesThanCommit_ShouldCondense(t *tes
 	_, err = repo.Reference(plumbing.NewBranchReferenceName(paths.MetadataBranchName), true)
 	require.NoError(t, err,
 		"entire/checkpoints/v1 should exist — ACTIVE session with different files must still condense")
+}
+
+// TestHandleTurnEnd_PushesFinalizedCheckpoints verifies that HandleTurnEnd
+// clears PushedDuringTurnRemote after attempting to push finalized checkpoints.
+// The push itself fails silently (no remote configured in test), but the flag
+// must be cleared and no error returned.
+func TestHandleTurnEnd_PushesFinalizedCheckpoints(t *testing.T) {
+	dir := setupGitRepo(t)
+	t.Chdir(dir)
+
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+
+	s := &ManualCommitStrategy{}
+	sessionID := "test-push-finalized"
+
+	setupSessionWithCheckpoint(t, s, repo, dir, sessionID)
+
+	// Set phase to ACTIVE and clear TurnCheckpointIDs
+	state, err := s.loadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	state.Phase = session.PhaseActive
+	state.TurnCheckpointIDs = nil
+	require.NoError(t, s.saveSessionState(context.Background(), state))
+
+	// Create a real checkpoint via commit + PostCommit
+	commitWithCheckpointTrailer(t, repo, dir, "d4e5f6a1b2c3")
+	require.NoError(t, s.PostCommit(context.Background()))
+
+	// Write a full transcript file for HandleTurnEnd to read
+	fullTranscript := `{"type":"human","message":{"content":"build feature"}}
+{"type":"assistant","message":{"content":"done"}}
+`
+	transcriptPath := filepath.Join(dir, ".entire", "metadata", sessionID, "full_transcript.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(transcriptPath), 0o755))
+	require.NoError(t, os.WriteFile(transcriptPath, []byte(fullTranscript), 0o644))
+
+	// Reload state after PostCommit and set the push flag
+	state, err = s.loadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	state.TranscriptPath = transcriptPath
+	state.PushedDuringTurnRemote = "origin"
+	require.NoError(t, s.saveSessionState(context.Background(), state))
+
+	// Call HandleTurnEnd — should not return error
+	err = s.HandleTurnEnd(context.Background(), state)
+	require.NoError(t, err,
+		"HandleTurnEnd should return nil even when push fails (best-effort)")
+
+	// PushedDuringTurnRemote should be cleared
+	assert.Empty(t, state.PushedDuringTurnRemote,
+		"PushedDuringTurnRemote should be cleared after HandleTurnEnd")
+}
+
+// TestHandleTurnEnd_SkipsPushWhenNotFlagged verifies that HandleTurnEnd does
+// nothing push-related when PushedDuringTurnRemote is empty.
+func TestHandleTurnEnd_SkipsPushWhenNotFlagged(t *testing.T) {
+	dir := setupGitRepo(t)
+	t.Chdir(dir)
+
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+
+	s := &ManualCommitStrategy{}
+	sessionID := "test-no-push-flag"
+
+	setupSessionWithCheckpoint(t, s, repo, dir, sessionID)
+
+	// Set phase to ACTIVE and clear TurnCheckpointIDs
+	state, err := s.loadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	state.Phase = session.PhaseActive
+	state.TurnCheckpointIDs = nil
+	require.NoError(t, s.saveSessionState(context.Background(), state))
+
+	// Create a real checkpoint via commit + PostCommit
+	commitWithCheckpointTrailer(t, repo, dir, "e5f6a1b2c3d4")
+	require.NoError(t, s.PostCommit(context.Background()))
+
+	// Write a full transcript file
+	transcriptPath := filepath.Join(dir, ".entire", "metadata", sessionID, "full_transcript.jsonl")
+	require.NoError(t, os.MkdirAll(filepath.Dir(transcriptPath), 0o755))
+	require.NoError(t, os.WriteFile(transcriptPath, []byte(testTranscriptMinimal), 0o644))
+
+	// Reload state — PushedDuringTurnRemote is empty (default)
+	state, err = s.loadSessionState(context.Background(), sessionID)
+	require.NoError(t, err)
+	state.TranscriptPath = transcriptPath
+	require.NoError(t, s.saveSessionState(context.Background(), state))
+
+	// Call HandleTurnEnd — should not return error
+	err = s.HandleTurnEnd(context.Background(), state)
+	require.NoError(t, err,
+		"HandleTurnEnd should return nil when no push flag is set")
+
+	// PushedDuringTurnRemote should still be empty
+	assert.Empty(t, state.PushedDuringTurnRemote,
+		"PushedDuringTurnRemote should remain empty when not flagged")
 }

@@ -17,6 +17,10 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
+// testTranscriptMinimal is a minimal JSONL transcript used across multiple test files.
+// Extracted as a constant to satisfy goconst linter.
+const testTranscriptMinimal = "{\"type\":\"human\",\"message\":{\"content\":\"test prompt\"}}\n{\"type\":\"assistant\",\"message\":{\"content\":\"test response\"}}\n"
+
 func TestOpenRepository(t *testing.T) {
 	// Create a temporary directory for the test repository
 	tmpDir := t.TempDir()

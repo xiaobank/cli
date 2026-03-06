@@ -2,7 +2,9 @@ package strategy
 
 import (
 	"context"
+	"log/slog"
 
+	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/perf"
 )
@@ -22,9 +24,42 @@ func (s *ManualCommitStrategy) PrePush(ctx context.Context, remote string) error
 	}
 	pushCheckpointsSpan.End()
 
+	markActiveSessionsPushed(ctx, remote)
+
 	_, pushTrailsSpan := perf.Start(ctx, "push_trails_branch")
 	err := PushTrailsBranch(ctx, remote)
 	pushTrailsSpan.RecordError(err)
 	pushTrailsSpan.End()
 	return err
+}
+
+// markActiveSessionsPushed sets PushedDuringTurnRemote on all ACTIVE sessions
+// that have TurnCheckpointIDs. This records that provisional checkpoints were
+// pushed to remote, so HandleTurnEnd knows to push finalized transcripts.
+//
+// Best-effort: errors are logged but don't fail the push.
+func markActiveSessionsPushed(ctx context.Context, remote string) {
+	logCtx := logging.WithComponent(ctx, "push")
+
+	states, err := ListSessionStates(ctx)
+	if err != nil {
+		logging.Warn(logCtx, "failed to list session states for push marking",
+			slog.Any("error", err),
+		)
+		return
+	}
+
+	for _, state := range states {
+		if !state.Phase.IsActive() || len(state.TurnCheckpointIDs) == 0 {
+			continue
+		}
+
+		state.PushedDuringTurnRemote = remote
+		if err := SaveSessionState(ctx, state); err != nil {
+			logging.Warn(logCtx, "failed to save pushed-during-turn flag",
+				slog.String("session_id", state.SessionID),
+				slog.Any("error", err),
+			)
+		}
+	}
 }

@@ -84,6 +84,18 @@ type State struct {
 	//   - Cleared when session is reset (ResetSession deletes the state file entirely)
 	TurnCheckpointIDs []string `json:"turn_checkpoint_ids,omitempty"`
 
+	// PushedDuringTurnRemote is set by PrePush when checkpoints are pushed
+	// while the session is ACTIVE with TurnCheckpointIDs. Stores the remote
+	// name so HandleTurnEnd can push the finalized transcript to the same remote.
+	// Empty string means no push happened during this turn.
+	//
+	// Lifecycle:
+	//   - Set in PrePush after successful push of entire/checkpoints/v1
+	//   - Consumed in HandleTurnEnd to push finalized transcripts
+	//   - Cleared in HandleTurnEnd after push attempt
+	//   - Cleared in InitializeSession when a new prompt starts
+	PushedDuringTurnRemote string `json:"pushed_during_turn_remote,omitempty"`
+
 	// LastInteractionTime is updated on agent-interaction events (TurnStart,
 	// TurnEnd, SessionStop, Compaction) but NOT on git commit hooks.
 	// Used for stale session detection in "entire doctor".

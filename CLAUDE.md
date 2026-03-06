@@ -353,6 +353,7 @@ The manual-commit strategy (`manual_commit*.go`) does not modify the active bran
 - **Shadow branch migration** - if user does stash/pull/rebase (HEAD changes without commit), shadow branch is automatically moved to new base commit
 - **Orphaned branch cleanup** - if a shadow branch exists without a corresponding session state file, it is automatically reset when a new session starts
 - PrePush hook can push `entire/checkpoints/v1` branch alongside user pushes
+- **Turn-end push** - when checkpoints are pushed during a turn (via PrePush), `HandleTurnEnd` also pushes the finalized transcripts to keep the remote consistent. Tracked via `PushedDuringTurnRemote` on session state.
 - Safe to use on main/master since it never modifies commit history
 
 #### Key Files
@@ -360,7 +361,8 @@ The manual-commit strategy (`manual_commit*.go`) does not modify the active bran
 - `strategy.go` - Interface definition and context structs (`StepContext`, `TaskStepContext`, `RewindPoint`, etc.)
 - `common.go` - Helpers for metadata extraction, tree building, rewind validation, `ListCheckpoints()`
 - `session.go` - Session/checkpoint data structures
-- `push_common.go` - PrePush logic for pushing `entire/checkpoints/v1` branch
+- `push_common.go` - PrePush logic for pushing `entire/checkpoints/v1` branch; shared push helpers
+- `manual_commit_push.go` - PrePush handler; marks ACTIVE sessions when checkpoints are pushed (`PushedDuringTurnRemote`)
 - `manual_commit.go` - Manual-commit strategy main implementation
 - `manual_commit_types.go` - Type definitions: `SessionState`, `CheckpointInfo`, `CondenseResult`
 - `manual_commit_session.go` - Session state management (load/save/list session states)
@@ -368,7 +370,7 @@ The manual-commit strategy (`manual_commit*.go`) does not modify the active bran
 - `manual_commit_rewind.go` - Rewind implementation: file restoration from checkpoint trees
 - `manual_commit_git.go` - Git operations: checkpoint commits, tree building
 - `manual_commit_logs.go` - Session log retrieval and session listing
-- `manual_commit_hooks.go` - Git hook handlers (prepare-commit-msg, post-commit, pre-push)
+- `manual_commit_hooks.go` - Git hook handlers (prepare-commit-msg, post-commit, pre-push); HandleTurnEnd pushes finalized transcripts when `PushedDuringTurnRemote` is set
 - `manual_commit_reset.go` - Shadow branch reset/cleanup functionality
 - `session_state.go` - Package-level session state functions (`LoadSessionState`, `SaveSessionState`, `ListSessionStates`, `FindMostRecentSession`)
 - `hooks.go` - Git hook installation
