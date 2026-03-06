@@ -211,6 +211,7 @@ func (g *GeminiCLIAgent) parseFileEdit(ctx context.Context, stdin io.Reader) (*a
 	if err := json.Unmarshal(raw.ToolInput, &toolInput); err != nil {
 		logCtx := logging.WithComponent(ctx, "agent.geminicli")
 		logging.Debug(logCtx, "parseFileEdit: unexpected tool_input format",
+			slog.String("tool_name", raw.ToolName),
 			slog.String("error", err.Error()),
 		)
 		return nil, nil //nolint:nilnil // skip event but don't block agent
