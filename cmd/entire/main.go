@@ -14,7 +14,7 @@ import (
 )
 
 func main() {
-	// Create context that cancels on interrupt
+	// Create a context that is cancelled on interrupt/termination signals
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Handle interrupt signals
