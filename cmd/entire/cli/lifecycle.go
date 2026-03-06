@@ -175,15 +175,22 @@ func handleLifecycleModelUpdate(ctx context.Context, ag agent.Agent, event *agen
 
 // handleLifecycleFileEdit appends a file path to the session's tracking file.
 // This is intentionally lightweight — no JSON state loading, just a file append.
+// Returns nil unconditionally; errors are logged but not propagated to avoid blocking the agent.
 func handleLifecycleFileEdit(ctx context.Context, _ agent.Agent, event *agent.Event) error {
 	if event.SessionID == "" || event.FilePath == "" {
 		return nil
 	}
 
+	logCtx := logging.WithComponent(ctx, "lifecycle")
+
 	// Normalize to repo-relative path
 	repoRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {
-		return nil //nolint:nilerr // can't normalize path outside git repo, skip silently
+		logging.Warn(logCtx, "failed to get worktree root for file edit tracking",
+			slog.String("session_id", event.SessionID),
+			slog.String("error", err.Error()),
+		)
+		return nil
 	}
 
 	relPath := paths.ToRelativePath(event.FilePath, repoRoot)
@@ -193,11 +200,14 @@ func handleLifecycleFileEdit(ctx context.Context, _ agent.Agent, event *agent.Ev
 
 	store, err := session.NewStateStore(ctx)
 	if err != nil {
-		return nil //nolint:nilerr // can't access state store, skip silently
+		logging.Warn(logCtx, "failed to create state store for file edit tracking",
+			slog.String("session_id", event.SessionID),
+			slog.String("error", err.Error()),
+		)
+		return nil
 	}
 
 	if appendErr := store.AppendFileTouched(ctx, event.SessionID, relPath); appendErr != nil {
-		logCtx := logging.WithComponent(ctx, "lifecycle")
 		logging.Warn(logCtx, "failed to track file edit",
 			slog.String("session_id", event.SessionID),
 			slog.String("file_path", relPath),

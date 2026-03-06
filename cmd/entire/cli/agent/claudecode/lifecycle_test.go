@@ -311,6 +311,23 @@ func TestParseFileEdit_NoFilePath(t *testing.T) {
 	}
 }
 
+func TestParseFileEdit_MalformedToolInput(t *testing.T) {
+	t.Parallel()
+
+	ag := &ClaudeCodeAgent{}
+	// tool_input is a string instead of an object — json.Unmarshal into struct should fail gracefully
+	input := `{"session_id":"sess-123","transcript_path":"/tmp/t.jsonl","tool_use_id":"tu_abc","tool_input":"not-an-object","tool_response":{}}`
+
+	event, err := ag.ParseHookEvent(context.Background(), HookNamePostFileEdit, strings.NewReader(input))
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if event != nil {
+		t.Errorf("expected nil event for malformed tool_input, got %+v", event)
+	}
+}
+
 func TestParseHookEvent_UnknownHook_ReturnsNil(t *testing.T) {
 	t.Parallel()
 

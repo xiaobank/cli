@@ -1032,9 +1032,7 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 		})
 		state.FilesTouched = remainingFiles
 		// Clear tracking file — state.FilesTouched now has the authoritative carry-forward list
-		if store, storeErr := s.getStateStore(ctx); storeErr == nil {
-			_ = store.ClearFilesTouched(ctx, state.SessionID) //nolint:errcheck // Best-effort cleanup, non-critical
-		}
+		s.clearFilesTracking(ctx, state.SessionID)
 		logging.Debug(logCtx, "post-commit: carry-forward decision (content-aware)",
 			slog.String("session_id", state.SessionID),
 			slog.Int("files_touched_before", len(filesTouchedBefore)),
@@ -1127,9 +1125,7 @@ func (s *ManualCommitStrategy) condenseAndUpdateState(
 	state.PendingPromptAttribution = nil
 	state.FilesTouched = nil
 	// Clear the file tracking file alongside state.FilesTouched
-	if store, storeErr := s.getStateStore(ctx); storeErr == nil {
-		_ = store.ClearFilesTouched(ctx, state.SessionID) //nolint:errcheck // Best-effort cleanup, non-critical
-	}
+	s.clearFilesTracking(ctx, state.SessionID)
 
 	// NOTE: filesystem prompt.txt is NOT cleared here. The caller (PostCommit handler)
 	// decides whether to clear it based on carry-forward: if remaining files exist,
@@ -1468,21 +1464,26 @@ func (s *ManualCommitStrategy) sessionHasNewContentFromLiveTranscript(ctx contex
 // Handles PrepareTranscript internally before falling back to extraction,
 // so callers don't need to prepare the transcript first.
 func (s *ManualCommitStrategy) resolveFilesTouched(ctx context.Context, state *SessionState) []string {
+	logCtx := logging.WithComponent(ctx, "checkpoint")
 	var tracked []string
-	if store, err := s.getStateStore(ctx); err == nil {
-		tracked, _ = store.ReadFilesTouched(ctx, state.SessionID) //nolint:errcheck // Best-effort read, falls back to transcript
+	if store, err := s.getStateStore(ctx); err != nil {
+		logging.Debug(logCtx, "resolveFilesTouched: could not get state store, falling back to transcript",
+			slog.String("session_id", state.SessionID),
+			slog.String("error", err.Error()),
+		)
+	} else if files, readErr := store.ReadFilesTouched(ctx, state.SessionID); readErr != nil {
+		logging.Debug(logCtx, "resolveFilesTouched: could not read tracking file, falling back to transcript",
+			slog.String("session_id", state.SessionID),
+			slog.String("error", readErr.Error()),
+		)
+	} else {
+		tracked = files
 	}
 
 	if len(state.FilesTouched) > 0 || len(tracked) > 0 {
 		seen := make(map[string]struct{})
 		var result []string
-		for _, f := range state.FilesTouched {
-			if _, ok := seen[f]; !ok {
-				seen[f] = struct{}{}
-				result = append(result, f)
-			}
-		}
-		for _, f := range tracked {
+		for _, f := range append(state.FilesTouched, tracked...) {
 			if _, ok := seen[f]; !ok {
 				seen[f] = struct{}{}
 				result = append(result, f)
@@ -1496,6 +1497,22 @@ func (s *ManualCommitStrategy) resolveFilesTouched(ctx context.Context, state *S
 	prepareTranscriptForState(ctx, state)
 
 	return s.extractModifiedFilesFromLiveTranscript(ctx, state, state.CheckpointTranscriptStart)
+}
+
+// clearFilesTracking removes the session's file tracking file (best-effort).
+// Logs at Debug level on failure to aid debugging stale data accumulation.
+func (s *ManualCommitStrategy) clearFilesTracking(ctx context.Context, sessionID string) {
+	store, storeErr := s.getStateStore(ctx)
+	if storeErr != nil {
+		return
+	}
+	if clearErr := store.ClearFilesTouched(ctx, sessionID); clearErr != nil {
+		logCtx := logging.WithComponent(ctx, "checkpoint")
+		logging.Debug(logCtx, "failed to clear tracking file (non-critical)",
+			slog.String("session_id", sessionID),
+			slog.String("error", clearErr.Error()),
+		)
+	}
 }
 
 // hasNewTranscriptWork checks if the agent has done work since the last condensation.

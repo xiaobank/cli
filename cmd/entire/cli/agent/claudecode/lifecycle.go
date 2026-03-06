@@ -52,7 +52,7 @@ func (c *ClaudeCodeAgent) HookNames() []string {
 
 // ParseHookEvent translates a Claude Code hook into a normalized lifecycle Event.
 // Returns nil if the hook has no lifecycle significance.
-func (c *ClaudeCodeAgent) ParseHookEvent(_ context.Context, hookName string, stdin io.Reader) (*agent.Event, error) {
+func (c *ClaudeCodeAgent) ParseHookEvent(ctx context.Context, hookName string, stdin io.Reader) (*agent.Event, error) {
 	switch hookName {
 	case HookNameSessionStart:
 		return c.parseSessionStart(stdin)
@@ -67,7 +67,7 @@ func (c *ClaudeCodeAgent) ParseHookEvent(_ context.Context, hookName string, std
 	case HookNamePostTask:
 		return c.parseSubagentEnd(stdin)
 	case HookNamePostFileEdit:
-		return c.parseFileEdit(stdin)
+		return c.parseFileEdit(ctx, stdin)
 	case HookNamePostTodo:
 		// PostTodo is Claude-specific; handled outside the generic dispatcher.
 		return nil, nil //nolint:nilnil // nil event = no lifecycle action
@@ -192,7 +192,7 @@ type fileEditToolInput struct {
 	FilePath string `json:"file_path"`
 }
 
-func (c *ClaudeCodeAgent) parseFileEdit(stdin io.Reader) (*agent.Event, error) {
+func (c *ClaudeCodeAgent) parseFileEdit(ctx context.Context, stdin io.Reader) (*agent.Event, error) {
 	raw, err := agent.ReadAndParseHookInput[postToolHookInputRaw](stdin)
 	if err != nil {
 		return nil, err
@@ -200,8 +200,12 @@ func (c *ClaudeCodeAgent) parseFileEdit(stdin io.Reader) (*agent.Event, error) {
 
 	var toolInput fileEditToolInput
 	if err := json.Unmarshal(raw.ToolInput, &toolInput); err != nil {
-		// tool_input doesn't match expected schema — skip silently
-		return nil, nil //nolint:nilnil,nilerr // not our tool format
+		// Write/Edit hooks should always have file_path — log unexpected format
+		logCtx := logging.WithComponent(ctx, "agent.claudecode")
+		logging.Debug(logCtx, "parseFileEdit: unexpected tool_input format",
+			slog.String("error", err.Error()),
+		)
+		return nil, nil //nolint:nilnil // skip event but don't block agent
 	}
 	if toolInput.FilePath == "" {
 		return nil, nil //nolint:nilnil // no file_path = skip

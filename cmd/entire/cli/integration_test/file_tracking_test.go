@@ -3,11 +3,11 @@
 package integration
 
 import (
-	"os"
+	"context"
 	"path/filepath"
-	"sort"
-	"strings"
 	"testing"
+
+	"github.com/entireio/cli/cmd/entire/cli/session"
 )
 
 // TestPostFileEdit_TracksEditedFiles tests the end-to-end flow of file tracking
@@ -44,33 +44,21 @@ func TestPostFileEdit_TracksEditedFiles(t *testing.T) {
 		t.Fatalf("SimulatePostFileEdit (README.md) failed: %v", err)
 	}
 
-	// Verify the tracking file has both files (repo-relative, sorted)
-	trackingFile := filepath.Join(env.RepoDir, ".git", "entire-sessions", sess.ID+".files")
-	data, err := os.ReadFile(trackingFile)
+	// Verify via ReadFilesTouched (deduplicates and sorts)
+	stateDir := filepath.Join(env.RepoDir, ".git", "entire-sessions")
+	store := session.NewStateStoreWithDir(stateDir)
+	files, err := store.ReadFilesTouched(context.Background(), sess.ID)
 	if err != nil {
-		t.Fatalf("Failed to read tracking file %s: %v", trackingFile, err)
+		t.Fatalf("ReadFilesTouched failed: %v", err)
 	}
-
-	// Parse lines, deduplicate and sort (matching ReadFilesTouched behavior)
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	seen := make(map[string]bool)
-	var unique []string
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line != "" && !seen[line] {
-			seen[line] = true
-			unique = append(unique, line)
-		}
-	}
-	sort.Strings(unique)
 
 	expected := []string{"README.md", "src/main.go"}
-	if len(unique) != len(expected) {
-		t.Fatalf("Expected %d tracked files, got %d: %v", len(expected), len(unique), unique)
+	if len(files) != len(expected) {
+		t.Fatalf("Expected %d tracked files, got %d: %v", len(expected), len(files), files)
 	}
 	for i, want := range expected {
-		if unique[i] != want {
-			t.Errorf("Tracked file [%d]: want %q, got %q", i, want, unique[i])
+		if files[i] != want {
+			t.Errorf("Tracked file [%d]: want %q, got %q", i, want, files[i])
 		}
 	}
 }
