@@ -32,6 +32,7 @@ func (g *GeminiCLIAgent) HookNames() []string {
 		HookNameAfterTool,
 		HookNamePreCompress,
 		HookNameNotification,
+		HookNamePostFileEdit,
 	}
 }
 
@@ -51,6 +52,8 @@ func (g *GeminiCLIAgent) ParseHookEvent(_ context.Context, hookName string, stdi
 		return g.parseCompaction(stdin)
 	case HookNameBeforeModel:
 		return g.parseBeforeModel(stdin)
+	case HookNamePostFileEdit:
+		return g.parseFileEdit(stdin)
 	case HookNameBeforeTool, HookNameAfterTool,
 		HookNameAfterModel, HookNameBeforeToolSelection, HookNameNotification:
 		// Acknowledged hooks with no lifecycle action
@@ -174,6 +177,49 @@ func (g *GeminiCLIAgent) parseBeforeModel(stdin io.Reader) (*agent.Event, error)
 		SessionID: raw.SessionID,
 		Model:     model,
 		Timestamp: time.Now(),
+	}, nil
+}
+
+// fileEditToolInput extracts file_path from Gemini CLI tool input.
+// Gemini tools use file_path, path, or filename depending on the tool.
+type fileEditToolInput struct {
+	FilePath string `json:"file_path"`
+	Path     string `json:"path"`
+	Filename string `json:"filename"`
+}
+
+// filePath returns the first non-empty path field.
+func (f fileEditToolInput) filePath() string {
+	if f.FilePath != "" {
+		return f.FilePath
+	}
+	if f.Path != "" {
+		return f.Path
+	}
+	return f.Filename
+}
+
+func (g *GeminiCLIAgent) parseFileEdit(stdin io.Reader) (*agent.Event, error) {
+	raw, err := agent.ReadAndParseHookInput[afterToolHookInputRaw](stdin)
+	if err != nil {
+		return nil, err
+	}
+
+	var toolInput fileEditToolInput
+	if err := json.Unmarshal(raw.ToolInput, &toolInput); err != nil {
+		return nil, nil //nolint:nilnil,nilerr // tool_input doesn't match expected schema
+	}
+	path := toolInput.filePath()
+	if path == "" {
+		return nil, nil //nolint:nilnil // no file path = skip
+	}
+
+	return &agent.Event{
+		Type:       agent.FileEdit,
+		SessionID:  raw.SessionID,
+		SessionRef: raw.TranscriptPath,
+		FilePath:   path,
+		Timestamp:  time.Now(),
 	}, nil
 }
 

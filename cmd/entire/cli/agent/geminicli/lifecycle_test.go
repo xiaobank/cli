@@ -197,6 +197,82 @@ func TestParseHookEvent_BeforeModel_EmptyModel_ReturnsNil(t *testing.T) {
 	}
 }
 
+func TestParseHookEvent_FileEdit(t *testing.T) {
+	t.Parallel()
+
+	ag := &GeminiCLIAgent{}
+	input := `{
+		"session_id": "gem-sess-1",
+		"transcript_path": "/tmp/gem.json",
+		"tool_name": "write_file",
+		"tool_input": {"file_path": "docs/hello.md", "content": "hello"}
+	}`
+
+	event, err := ag.ParseHookEvent(context.Background(), HookNamePostFileEdit, strings.NewReader(input))
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if event == nil {
+		t.Fatal("expected event, got nil")
+	}
+	if event.Type != agent.FileEdit {
+		t.Errorf("expected event type %v, got %v", agent.FileEdit, event.Type)
+	}
+	if event.SessionID != "gem-sess-1" {
+		t.Errorf("expected session_id 'gem-sess-1', got %q", event.SessionID)
+	}
+	if event.FilePath != "docs/hello.md" {
+		t.Errorf("expected file_path 'docs/hello.md', got %q", event.FilePath)
+	}
+}
+
+func TestParseHookEvent_FileEdit_FallbackPath(t *testing.T) {
+	t.Parallel()
+
+	ag := &GeminiCLIAgent{}
+	// Some Gemini tools use "path" instead of "file_path"
+	input := `{
+		"session_id": "gem-sess-2",
+		"transcript_path": "/tmp/gem.json",
+		"tool_name": "replace",
+		"tool_input": {"path": "src/main.go", "old_string": "a", "new_string": "b"}
+	}`
+
+	event, err := ag.ParseHookEvent(context.Background(), HookNamePostFileEdit, strings.NewReader(input))
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if event == nil {
+		t.Fatal("expected event, got nil")
+	}
+	if event.FilePath != "src/main.go" {
+		t.Errorf("expected file_path 'src/main.go', got %q", event.FilePath)
+	}
+}
+
+func TestParseHookEvent_FileEdit_NoFilePath(t *testing.T) {
+	t.Parallel()
+
+	ag := &GeminiCLIAgent{}
+	input := `{
+		"session_id": "gem-sess-3",
+		"transcript_path": "/tmp/gem.json",
+		"tool_name": "write_file",
+		"tool_input": {"content": "no path here"}
+	}`
+
+	event, err := ag.ParseHookEvent(context.Background(), HookNamePostFileEdit, strings.NewReader(input))
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if event != nil {
+		t.Errorf("expected nil event for missing file_path, got %+v", event)
+	}
+}
+
 func TestParseHookEvent_PassThroughHooks_ReturnNil(t *testing.T) {
 	t.Parallel()
 
@@ -317,6 +393,11 @@ func TestParseHookEvent_AllLifecycleHooks(t *testing.T) {
 			hookName:      HookNameAfterTool,
 			expectNil:     true,
 			inputTemplate: `{"session_id": "s7", "transcript_path": "/t"}`,
+		},
+		{
+			hookName:      HookNamePostFileEdit,
+			expectedType:  agent.FileEdit,
+			inputTemplate: `{"session_id": "s7b", "transcript_path": "/t", "tool_name": "write_file", "tool_input": {"file_path": "f.txt"}}`,
 		},
 		{
 			hookName:      HookNameBeforeModel,

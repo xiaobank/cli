@@ -478,10 +478,11 @@ func TestGeminiCLIHookInstallation(t *testing.T) {
 			t.Fatalf("InstallHooks() error = %v", err)
 		}
 
-		// Should install 12 hooks: SessionStart, SessionEnd (exit+logout), BeforeAgent, AfterAgent,
-		// BeforeModel, AfterModel, BeforeToolSelection, BeforeTool, AfterTool, PreCompress, Notification
-		if count != 12 {
-			t.Errorf("InstallHooks() count = %d, want 12", count)
+		// Should install 16 hooks: SessionStart, SessionEnd (exit+logout), BeforeAgent, AfterAgent,
+		// BeforeModel, AfterModel, BeforeToolSelection, BeforeTool, AfterTool,
+		// PostFileEdit (write_file, edit_file, save_file, replace), PreCompress, Notification
+		if count != 16 {
+			t.Errorf("InstallHooks() count = %d, want 16", count)
 		}
 
 		// Verify hooks are installed
@@ -665,8 +666,8 @@ func TestGeminiCLIHookInstallation(t *testing.T) {
 		if err != nil {
 			t.Fatalf("force InstallHooks() error = %v", err)
 		}
-		if count != 12 {
-			t.Errorf("force InstallHooks() count = %d, want 12", count)
+		if count != 16 {
+			t.Errorf("force InstallHooks() count = %d, want 16", count)
 		}
 	})
 }

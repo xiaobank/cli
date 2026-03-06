@@ -28,6 +28,7 @@ const (
 	HookNameAfterTool           = "after-tool"
 	HookNamePreCompress         = "pre-compress"
 	HookNameNotification        = "notification"
+	HookNamePostFileEdit        = "post-file-edit"
 )
 
 // GeminiSettingsFileName is the settings file used by Gemini CLI.
@@ -160,22 +161,29 @@ func (g *GeminiCLIAgent) InstallHooks(ctx context.Context, localDev bool, force 
 	beforeTool = addGeminiHook(beforeTool, "*", "entire-before-tool", cmdPrefix+"before-tool")
 	afterTool = addGeminiHook(afterTool, "*", "entire-after-tool", cmdPrefix+"after-tool")
 
+	// File-edit hooks (AfterTool with specific matchers for file-modifying tools)
+	postFileEditCmd := cmdPrefix + "post-file-edit"
+	for _, toolName := range FileModificationTools {
+		afterTool = addGeminiHook(afterTool, toolName, "entire-post-file-edit-"+toolName, postFileEditCmd)
+	}
+
 	// Compression hook (before chat history compression)
 	preCompress = addGeminiHook(preCompress, "", "entire-pre-compress", cmdPrefix+"pre-compress")
 
 	// Notification hook (errors, warnings, info)
 	notification = addGeminiHook(notification, "", "entire-notification", cmdPrefix+"notification")
 
-	// 12 hooks total:
+	// 16 hooks total:
 	// - session-start (1)
 	// - session-end exit + logout (2)
 	// - before-agent, after-agent (2)
 	// - before-model, after-model (2)
 	// - before-tool-selection (1)
 	// - before-tool, after-tool (2)
+	// - post-file-edit: write_file, edit_file, save_file, replace (4)
 	// - pre-compress (1)
 	// - notification (1)
-	count := 12
+	count := 16
 
 	// Marshal modified hook types back to rawHooks
 	marshalGeminiHookType(rawHooks, "SessionStart", sessionStart)

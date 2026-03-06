@@ -20,10 +20,11 @@ func TestInstallHooks_FreshInstall(t *testing.T) {
 		t.Fatalf("InstallHooks() error = %v", err)
 	}
 
-	// 12 hooks: SessionStart, SessionEnd (exit+logout), BeforeAgent, AfterAgent,
-	// BeforeModel, AfterModel, BeforeToolSelection, BeforeTool, AfterTool, PreCompress, Notification
-	if count != 12 {
-		t.Errorf("InstallHooks() count = %d, want 12", count)
+	// 16 hooks: SessionStart, SessionEnd (exit+logout), BeforeAgent, AfterAgent,
+	// BeforeModel, AfterModel, BeforeToolSelection, BeforeTool, AfterTool,
+	// PostFileEdit (write_file, edit_file, save_file, replace), PreCompress, Notification
+	if count != 16 {
+		t.Errorf("InstallHooks() count = %d, want 16", count)
 	}
 
 	// Verify settings.json was created with hooks
@@ -51,8 +52,9 @@ func TestInstallHooks_FreshInstall(t *testing.T) {
 	if len(settings.Hooks.BeforeTool) != 1 {
 		t.Errorf("BeforeTool hooks = %d, want 1", len(settings.Hooks.BeforeTool))
 	}
-	if len(settings.Hooks.AfterTool) != 1 {
-		t.Errorf("AfterTool hooks = %d, want 1", len(settings.Hooks.AfterTool))
+	// AfterTool has 5 matchers: * (all tools) + 4 file-edit tools
+	if len(settings.Hooks.AfterTool) != 5 {
+		t.Errorf("AfterTool hooks = %d, want 5 (* + 4 file-edit tools)", len(settings.Hooks.AfterTool))
 	}
 	if len(settings.Hooks.BeforeModel) != 1 {
 		t.Errorf("BeforeModel hooks = %d, want 1", len(settings.Hooks.BeforeModel))
@@ -81,6 +83,10 @@ func TestInstallHooks_FreshInstall(t *testing.T) {
 	verifyHookCommand(t, settings.Hooks.BeforeToolSelection, "", "entire hooks gemini before-tool-selection")
 	verifyHookCommand(t, settings.Hooks.BeforeTool, "*", "entire hooks gemini before-tool")
 	verifyHookCommand(t, settings.Hooks.AfterTool, "*", "entire hooks gemini after-tool")
+	verifyHookCommand(t, settings.Hooks.AfterTool, "write_file", "entire hooks gemini post-file-edit")
+	verifyHookCommand(t, settings.Hooks.AfterTool, "edit_file", "entire hooks gemini post-file-edit")
+	verifyHookCommand(t, settings.Hooks.AfterTool, "save_file", "entire hooks gemini post-file-edit")
+	verifyHookCommand(t, settings.Hooks.AfterTool, "replace", "entire hooks gemini post-file-edit")
 	verifyHookCommand(t, settings.Hooks.PreCompress, "", "entire hooks gemini pre-compress")
 	verifyHookCommand(t, settings.Hooks.Notification, "", "entire hooks gemini notification")
 }
@@ -121,8 +127,8 @@ func TestInstallHooks_Idempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first InstallHooks() error = %v", err)
 	}
-	if count1 != 12 {
-		t.Errorf("first InstallHooks() count = %d, want 12", count1)
+	if count1 != 16 {
+		t.Errorf("first InstallHooks() count = %d, want 16", count1)
 	}
 
 	// Second install should add 0 hooks
@@ -161,8 +167,8 @@ func TestInstallHooks_Force(t *testing.T) {
 	if err != nil {
 		t.Fatalf("force InstallHooks() error = %v", err)
 	}
-	if count != 12 {
-		t.Errorf("force InstallHooks() count = %d, want 12", count)
+	if count != 16 {
+		t.Errorf("force InstallHooks() count = %d, want 16", count)
 	}
 }
 
@@ -483,6 +489,7 @@ func TestHookNames(t *testing.T) {
 		HookNameAfterTool,
 		HookNamePreCompress,
 		HookNameNotification,
+		HookNamePostFileEdit,
 	}
 
 	if len(names) != len(expected) {
