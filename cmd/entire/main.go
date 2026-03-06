@@ -17,7 +17,7 @@ func main() {
 	// Create a cancellable context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Handle interrupt signals
+	// Listen for interrupt signals to trigger cancellation
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	go func() {
