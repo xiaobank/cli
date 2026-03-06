@@ -1,0 +1,1076 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Entire CLI — Checkpoint Playground</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --bg: #0d1117; --surface: #161b22; --border: #30363d;
+  --text: #e6edf3; --text-dim: #8b949e; --text-bright: #f0f6fc;
+  --blue: #58a6ff; --purple: #bc8cff; --green: #3fb950;
+  --orange: #d29922; --red: #f85149; --cyan: #79c0ff;
+  --blue-bg: rgba(88,166,255,0.12); --purple-bg: rgba(188,140,255,0.12);
+  --green-bg: rgba(63,185,80,0.12); --orange-bg: rgba(210,153,34,0.12);
+  --radius: 8px; --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --mono: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+body { background: var(--bg); color: var(--text); font-family: var(--font); line-height: 1.5; overflow-x: hidden; }
+h1 { font-size: 1.8rem; font-weight: 700; color: var(--text-bright); margin-bottom: 0.25rem; }
+h2 { font-size: 1.2rem; font-weight: 600; color: var(--text-bright); margin-bottom: 0.5rem; }
+h3 { font-size: 0.95rem; font-weight: 600; color: var(--text); margin-bottom: 0.4rem; }
+p, .desc { color: var(--text-dim); font-size: 0.875rem; line-height: 1.6; }
+code { font-family: var(--mono); font-size: 0.8rem; background: var(--surface); padding: 2px 6px; border-radius: 4px; color: var(--cyan); }
+
+.header { padding: 2rem 2rem 1rem; border-bottom: 1px solid var(--border); }
+.header p { max-width: 700px; margin-top: 0.25rem; }
+.tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); padding: 0 2rem; background: var(--surface); position: sticky; top: 0; z-index: 100; }
+.tab { padding: 0.75rem 1.25rem; cursor: pointer; color: var(--text-dim); font-size: 0.85rem; font-weight: 500; border-bottom: 2px solid transparent; transition: all 0.2s; user-select: none; }
+.tab:hover { color: var(--text); background: rgba(255,255,255,0.03); }
+.tab.active { color: var(--blue); border-bottom-color: var(--blue); }
+.tab .num { display: inline-block; background: var(--border); color: var(--text-dim); font-size: 0.7rem; width: 18px; height: 18px; line-height: 18px; text-align: center; border-radius: 50%; margin-right: 6px; }
+.tab.active .num { background: var(--blue); color: var(--bg); }
+
+.panel { display: none; padding: 2rem; max-width: 1200px; margin: 0 auto; }
+.panel.active { display: block; }
+
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.25rem; margin-bottom: 1rem; }
+.card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; }
+
+.btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 0.8rem; font-family: var(--font); cursor: pointer; transition: all 0.15s; user-select: none; }
+.btn:hover { background: var(--border); }
+.btn:active { transform: scale(0.97); }
+.btn.primary { background: var(--blue); color: var(--bg); border-color: var(--blue); font-weight: 600; }
+.btn.primary:hover { opacity: 0.9; }
+.btn.purple { background: var(--purple-bg); color: var(--purple); border-color: rgba(188,140,255,0.3); }
+.btn.green { background: var(--green-bg); color: var(--green); border-color: rgba(63,185,80,0.3); }
+.btn.orange { background: var(--orange-bg); color: var(--orange); border-color: rgba(210,153,34,0.3); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-group { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.sm-container { display: flex; gap: 2rem; align-items: flex-start; flex-wrap: wrap; }
+.sm-viz { flex: 1; min-width: 400px; }
+.sm-controls { width: 280px; }
+.phase-nodes { display: flex; gap: 1.5rem; justify-content: center; margin: 1.5rem 0; }
+.phase-node { width: 120px; height: 120px; border-radius: 50%; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 3px solid var(--border); transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1); position: relative; }
+.phase-node .label { font-weight: 700; font-size: 0.95rem; }
+.phase-node .sub { font-size: 0.7rem; color: var(--text-dim); margin-top: 2px; }
+.phase-node.current { transform: scale(1.12); }
+.phase-node.idle { border-color: var(--blue); }
+.phase-node.idle.current { background: var(--blue-bg); box-shadow: 0 0 30px rgba(88,166,255,0.3); }
+.phase-node.active-phase { border-color: var(--green); }
+.phase-node.active-phase.current { background: var(--green-bg); box-shadow: 0 0 30px rgba(63,185,80,0.3); }
+.phase-node.ended { border-color: var(--red); }
+.phase-node.ended.current { background: rgba(248,81,73,0.12); box-shadow: 0 0 30px rgba(248,81,73,0.3); }
+
+.action-toast { background: var(--orange-bg); border: 1px solid rgba(210,153,34,0.3); color: var(--orange); padding: 10px 16px; border-radius: var(--radius); font-size: 0.8rem; font-family: var(--mono); min-height: 40px; display: flex; align-items: center; gap: 8px; transition: all 0.3s; }
+.action-toast.flash { animation: flashAction 0.6s ease; }
+@keyframes flashAction { 0% { transform: scale(1); } 30% { transform: scale(1.03); background: rgba(210,153,34,0.25); } 100% { transform: scale(1); } }
+
+.transition-log { max-height: 200px; overflow-y: auto; font-family: var(--mono); font-size: 0.75rem; }
+.log-entry { padding: 4px 8px; border-left: 2px solid var(--border); margin-bottom: 4px; }
+.log-entry.latest { border-left-color: var(--blue); background: var(--blue-bg); }
+.invalid-msg { color: var(--red); font-size: 0.8rem; padding: 8px; background: rgba(248,81,73,0.1); border-radius: var(--radius); animation: shake 0.3s ease; }
+@keyframes shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
+
+.branch-canvas { width: 100%; height: 320px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--border); }
+.file-tree { font-family: var(--mono); font-size: 0.78rem; color: var(--text-dim); line-height: 1.8; padding: 0.5rem 0; }
+.file-tree .dir { color: var(--blue); }
+.file-tree .file { color: var(--text); }
+.file-tree .indent { display: inline-block; width: 20px; }
+
+.cond-flow { display: grid; grid-template-columns: 1fr 80px 1fr; gap: 0; align-items: start; }
+.cond-flow .arrow-col { display: flex; flex-direction: column; align-items: center; justify-content: center; padding-top: 3rem; }
+.cond-arrow { width: 60px; height: 3px; background: var(--border); position: relative; transition: background 0.5s; }
+.cond-arrow::after { content: ''; position: absolute; right: -2px; top: -5px; border: 6px solid transparent; border-left-color: var(--border); transition: border-left-color 0.5s; }
+.cond-arrow.active { background: var(--green); }
+.cond-arrow.active::after { border-left-color: var(--green); }
+
+.checkpoint-id { font-family: var(--mono); font-size: 1.1rem; color: var(--green); letter-spacing: 2px; font-weight: 700; }
+.shard-path { font-family: var(--mono); font-size: 0.8rem; }
+.shard-path .prefix { color: var(--orange); }
+.shard-path .rest { color: var(--cyan); }
+.shard-path .sep { color: var(--text-dim); }
+
+.json-block { background: #0d1117; border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; font-family: var(--mono); font-size: 0.75rem; line-height: 1.7; overflow-x: auto; white-space: pre; }
+
+.rewind-points { display: flex; flex-direction: column; gap: 8px; }
+.rewind-point { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; transition: all 0.2s; }
+.rewind-point:hover { border-color: var(--purple); background: var(--purple-bg); }
+.rewind-point.selected { border-color: var(--purple); background: var(--purple-bg); }
+.rp-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--purple); flex-shrink: 0; }
+.rp-info { flex: 1; }
+.rp-title { font-size: 0.85rem; font-weight: 500; }
+.rp-meta { font-size: 0.72rem; color: var(--text-dim); font-family: var(--mono); }
+
+.file-change { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 0.8rem; font-family: var(--mono); }
+.file-change .badge { font-size: 0.65rem; padding: 1px 6px; border-radius: 3px; font-weight: 600; text-transform: uppercase; }
+.badge.restore { background: var(--green-bg); color: var(--green); }
+.badge.delete { background: rgba(248,81,73,0.12); color: var(--red); }
+.badge.revert { background: var(--orange-bg); color: var(--orange); }
+
+.link-viz { display: grid; grid-template-columns: 1fr 100px 1fr; gap: 0; align-items: center; min-height: 200px; }
+.link-arrow { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.link-box { border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; background: var(--surface); transition: all 0.4s; }
+.link-box.highlight { border-color: var(--green); box-shadow: 0 0 20px rgba(63,185,80,0.15); }
+
+.commit-block { font-family: var(--mono); font-size: 0.78rem; line-height: 1.8; }
+.commit-block .hash { color: var(--orange); }
+.commit-block .msg { color: var(--text); }
+.commit-block .trailer { color: var(--green); }
+.commit-block .trailer-label { color: var(--text-dim); }
+
+.fade-in { animation: fadeIn 0.4s ease; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+@media (max-width: 800px) { .two-col { grid-template-columns: 1fr; } .sm-container { flex-direction: column; } .sm-controls { width: 100%; } .cond-flow, .link-viz { grid-template-columns: 1fr; } }
+
+.dedup-msg { color: var(--orange); font-size: 0.8rem; font-style: italic; padding: 8px 12px; background: var(--orange-bg); border-radius: var(--radius); animation: fadeIn 0.3s ease; }
+.step-counter { font-size: 0.75rem; color: var(--text-dim); }
+.tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: 600; }
+.tag.shadow { background: var(--purple-bg); color: var(--purple); }
+.tag.meta { background: var(--green-bg); color: var(--green); }
+.tag.main { background: var(--blue-bg); color: var(--blue); }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Entire CLI &mdash; Checkpoint Playground</h1>
+  <p>Interactive explorer for understanding how Entire checkpoints capture, condense, and restore your AI coding sessions.</p>
+</div>
+
+<div class="tabs">
+  <div class="tab active" onclick="switchTab(0)"><span class="num">1</span>Session Phases</div>
+  <div class="tab" onclick="switchTab(1)"><span class="num">2</span>Shadow Branch</div>
+  <div class="tab" onclick="switchTab(2)"><span class="num">3</span>Condensation</div>
+  <div class="tab" onclick="switchTab(3)"><span class="num">4</span>Rewind</div>
+  <div class="tab" onclick="switchTab(4)"><span class="num">5</span>Checkpoint Linking</div>
+</div>
+
+<!-- Panel 1: Session Phases -->
+<div class="panel active" id="panel-0">
+  <div class="desc" style="margin-bottom:1.5rem;">
+    Sessions track their lifecycle through a state machine with three phases. Events from agent hooks trigger transitions that emit actions like condensing checkpoints or updating timestamps.
+  </div>
+  <div class="sm-container">
+    <div class="sm-viz">
+      <div class="phase-nodes">
+        <div class="phase-node idle current" id="pn-idle">
+          <div class="label">IDLE</div>
+          <div class="sub">Between turns</div>
+        </div>
+        <div class="phase-node active-phase" id="pn-active">
+          <div class="label">ACTIVE</div>
+          <div class="sub">Agent working</div>
+        </div>
+        <div class="phase-node ended" id="pn-ended">
+          <div class="label">ENDED</div>
+          <div class="sub">Session stopped</div>
+        </div>
+      </div>
+      <div class="card" style="margin-top:1rem;">
+        <h3>Last Action</h3>
+        <div class="action-toast" id="action-toast">
+          <span id="action-text">Click an event to trigger a transition</span>
+        </div>
+      </div>
+      <div class="card" style="margin-top:0.75rem;">
+        <h3>Transition Log</h3>
+        <div class="transition-log" id="transition-log"></div>
+      </div>
+    </div>
+    <div class="sm-controls">
+      <div class="card">
+        <h3>Fire Event</h3>
+        <p style="margin-bottom:0.75rem;">Click an event to see which phase transition and action it triggers from the current state.</p>
+        <div class="btn-group" style="flex-direction:column;">
+          <button class="btn green" onclick="fireEvent('TurnStart')">TurnStart</button>
+          <button class="btn green" onclick="fireEvent('TurnEnd')">TurnEnd</button>
+          <button class="btn primary" onclick="fireEvent('GitCommit')">GitCommit</button>
+          <button class="btn" onclick="fireEvent('SessionStart')">SessionStart</button>
+          <button class="btn orange" onclick="fireEvent('SessionStop')">SessionStop</button>
+        </div>
+      </div>
+      <div class="card" style="margin-top:0.75rem;">
+        <h3>Reset</h3>
+        <button class="btn" onclick="resetStateMachine()">Reset to IDLE</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Panel 2: Shadow Branch -->
+<div class="panel" id="panel-1">
+  <div class="desc" style="margin-bottom:1.5rem;">
+    When an agent works, each step is saved as a commit on a <span class="tag shadow">shadow branch</span>. The shadow branch forks from the current HEAD and stores full file snapshots + session metadata. It never touches your working branch.
+  </div>
+  <div class="card">
+    <div class="card-header">
+      <h3>Branch Visualization</h3>
+      <div class="step-counter" id="step-counter">0 checkpoints</div>
+    </div>
+    <canvas class="branch-canvas" id="branch-canvas"></canvas>
+  </div>
+  <div class="two-col">
+    <div class="card">
+      <h3>Controls</h3>
+      <div class="btn-group" style="flex-direction:column;">
+        <button class="btn purple" onclick="addCheckpoint(false)">Save Step (agent checkpoint)</button>
+        <button class="btn purple" onclick="addCheckpoint(true)">Save Step (duplicate &mdash; dedup test)</button>
+        <button class="btn primary" onclick="addMainCommit()">User Commit on main</button>
+        <button class="btn" onclick="resetBranch()">Reset</button>
+      </div>
+      <div id="dedup-area" style="margin-top:0.75rem;"></div>
+    </div>
+    <div class="card">
+      <h3>Shadow Branch Metadata</h3>
+      <div class="file-tree" id="shadow-tree">
+        <em class="desc">Save a step to see the metadata tree</em>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Panel 3: Condensation -->
+<div class="panel" id="panel-2">
+  <div class="desc" style="margin-bottom:1.5rem;">
+    When you make a git commit, the PostCommit hook triggers <strong>condensation</strong>: session data flows from the <span class="tag shadow">shadow branch</span> to the permanent <span class="tag meta">entire/checkpoints/v1</span> metadata branch, linked by a 12-char checkpoint ID.
+  </div>
+  <div class="card">
+    <div class="card-header"><h3>Condensation Flow</h3></div>
+    <div class="cond-flow">
+      <div class="card" id="cond-source" style="border-color:var(--purple);">
+        <h3><span class="tag shadow">Shadow Branch</span></h3>
+        <div id="cond-source-content">
+          <p>Session data stored here during agent work:</p>
+          <div class="file-tree" style="margin-top:0.5rem;">
+            <div><span class="dir">.entire/metadata/2026-03-06-abc/</span></div>
+            <div><span class="indent"></span><span class="file">full.jsonl</span> &mdash; transcript</div>
+            <div><span class="indent"></span><span class="file">prompt.txt</span> &mdash; user prompt</div>
+          </div>
+        </div>
+      </div>
+      <div class="arrow-col">
+        <div class="cond-arrow" id="cond-arrow"></div>
+        <div style="font-size:0.7rem;color:var(--text-dim);margin-top:8px;text-align:center;" id="cond-flow-label">click below</div>
+      </div>
+      <div class="card" id="cond-target" style="border-color:var(--green); opacity:0.5;">
+        <h3><span class="tag meta">entire/checkpoints/v1</span></h3>
+        <div id="cond-target-content">
+          <p style="color:var(--text-dim)">Metadata will appear here after condensation...</p>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="two-col">
+    <div class="card">
+      <h3>Controls</h3>
+      <div class="btn-group" style="flex-direction:column;">
+        <button class="btn primary" onclick="runCondensation()" id="btn-condense">Trigger Condensation (git commit)</button>
+        <button class="btn green" onclick="addSecondSession()">Add Second Session</button>
+        <button class="btn" onclick="resetCondensation()">Reset</button>
+      </div>
+      <div id="cond-status" style="margin-top:0.75rem;"></div>
+    </div>
+    <div class="card">
+      <h3>User Commit</h3>
+      <div class="commit-block" id="cond-commit">
+        <div><span class="hash">abc1234</span> <span class="msg">Implement login feature</span></div>
+        <div style="margin-top:4px;color:var(--text-dim);font-size:0.72rem;">No checkpoint trailer yet</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Panel 4: Rewind -->
+<div class="panel" id="panel-3">
+  <div class="desc" style="margin-bottom:1.5rem;">
+    Rewind restores your working directory to a previous checkpoint. Unlike <code>git reset</code>, it reads files directly from the checkpoint's git tree and writes them to disk, preserving your branch history.
+  </div>
+  <div class="two-col">
+    <div class="card">
+      <h3>Rewind Points</h3>
+      <p style="margin-bottom:0.75rem;">Click a checkpoint to preview the rewind:</p>
+      <div class="rewind-points" id="rewind-points"></div>
+    </div>
+    <div class="card" id="rewind-preview-card" style="opacity:0.5;">
+      <h3>Rewind Preview</h3>
+      <div id="rewind-preview">
+        <p class="desc">Select a rewind point to see what would change</p>
+      </div>
+    </div>
+  </div>
+  <div class="card" style="margin-top:1rem;">
+    <h3>How Rewind Works (Step by Step)</h3>
+    <div class="desc" style="line-height:2;">
+      <strong>1.</strong> Read checkpoint commit tree from shadow branch<br>
+      <strong>2.</strong> Compare files in tree vs. current working directory<br>
+      <strong>3.</strong> Compute <code>FilesToRestore</code> &mdash; files from checkpoint to write<br>
+      <strong>4.</strong> Compute <code>FilesToDelete</code> &mdash; untracked files created after checkpoint<br>
+      <strong>5.</strong> Compute <code>TrackedChanges</code> &mdash; uncommitted tracked changes to revert<br>
+      <strong>6.</strong> Write files from git tree to disk (no <code>git reset</code>)<br>
+      <strong>7.</strong> Session metadata is preserved for reference
+    </div>
+  </div>
+</div>
+
+<!-- Panel 5: Checkpoint Linking -->
+<div class="panel" id="panel-4">
+  <div class="desc" style="margin-bottom:1.5rem;">
+    A 12-hex-char <strong>checkpoint ID</strong> creates a bidirectional link between your git commit and the session metadata. The ID is embedded as a trailer in your commit and used as a sharded directory path on the metadata branch.
+  </div>
+  <div class="card">
+    <div class="card-header"><h3>Bidirectional Linking</h3></div>
+    <div class="link-viz">
+      <div class="link-box" id="link-commit">
+        <h3><span class="tag main">User Commit</span></h3>
+        <div class="commit-block" style="margin-top:0.75rem;">
+          <div><span class="hash">e7f2a91</span> <span class="msg">Implement login feature</span></div>
+          <div style="margin-top:6px;"><span class="trailer-label">Entire-Checkpoint:</span> <span class="trailer" id="link-id-commit">a3b2c4d5e6f7</span></div>
+        </div>
+      </div>
+      <div class="link-arrow">
+        <svg id="link-arrow-right" width="80" height="30" viewBox="0 0 80 30">
+          <line x1="0" y1="12" x2="60" y2="12" stroke="#30363d" stroke-width="2"/>
+          <polygon points="60,6 72,12 60,18" fill="#30363d"/>
+          <text x="36" y="28" font-size="9" fill="#8b949e" text-anchor="middle">lookup</text>
+        </svg>
+        <svg id="link-arrow-left" width="80" height="30" viewBox="0 0 80 30" style="margin-top:4px;">
+          <line x1="20" y1="12" x2="80" y2="12" stroke="#30363d" stroke-width="2"/>
+          <polygon points="20,6 8,12 20,18" fill="#30363d"/>
+          <text x="46" y="28" font-size="9" fill="#8b949e" text-anchor="middle">search</text>
+        </svg>
+      </div>
+      <div class="link-box" id="link-meta">
+        <h3><span class="tag meta">Metadata Branch</span></h3>
+        <div style="margin-top:0.75rem;">
+          <div class="shard-path"><span class="prefix">a3</span><span class="sep">/</span><span class="rest">b2c4d5e6f7</span><span class="sep">/</span></div>
+          <div class="file-tree" style="margin-top:0.4rem;">
+            <div><span class="file">metadata.json</span></div>
+            <div><span class="dir">0/</span></div>
+            <div><span class="indent"></span><span class="file">full.jsonl</span></div>
+            <div><span class="indent"></span><span class="file">prompt.txt</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="two-col">
+    <div class="card">
+      <h3>Try It: Forward Lookup</h3>
+      <p style="margin-bottom:0.5rem;">Extract the trailer from a user commit to find its metadata:</p>
+      <button class="btn primary" onclick="animateLinkForward()">Commit &rarr; Metadata</button>
+      <div id="link-fwd-result" style="margin-top:0.75rem;"></div>
+    </div>
+    <div class="card">
+      <h3>Try It: Reverse Lookup</h3>
+      <p style="margin-bottom:0.5rem;">Given a checkpoint ID, search commit history for matches:</p>
+      <button class="btn green" onclick="animateLinkReverse()">Metadata &rarr; Commit</button>
+      <div id="link-rev-result" style="margin-top:0.75rem;"></div>
+    </div>
+  </div>
+  <div class="card" style="margin-top:1rem;">
+    <h3>Sharding Explained</h3>
+    <p>The checkpoint ID <code>a3b2c4d5e6f7</code> is split: first 2 chars become a directory prefix (<code>a3/</code>), remaining 10 become a subdirectory (<code>b2c4d5e6f7/</code>). This creates up to 256 shards (00-ff), preventing any single directory from holding too many entries.</p>
+    <div style="margin-top:0.75rem;">
+      <button class="btn" onclick="generateNewId()">Generate New ID</button>
+      <span id="generated-shard" style="margin-left:12px;"></span>
+    </div>
+  </div>
+</div>
+
+<script>
+// ==================== Utilities ====================
+function randHex(n) {
+  var s = '';
+  for (var i = 0; i < n; i++) s += Math.floor(Math.random() * 16).toString(16);
+  return s;
+}
+
+function esc(str) {
+  var d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+
+function setHTML(id, html) {
+  document.getElementById(id).innerHTML = html;
+}
+
+// ==================== Tab switching ====================
+function switchTab(i) {
+  document.querySelectorAll('.tab').forEach(function(t, j) { t.classList.toggle('active', j === i); });
+  document.querySelectorAll('.panel').forEach(function(p, j) { p.classList.toggle('active', j === i); });
+  if (i === 1) drawBranch();
+}
+
+// ==================== Panel 1: State Machine ====================
+var SM_TRANSITIONS = {
+  'IDLE': {
+    'TurnStart':    { next: 'ACTIVE',  action: 'ActionUpdateLastInteraction' },
+    'GitCommit':    { next: 'IDLE',    action: 'ActionCondense' },
+    'SessionStop':  { next: 'ENDED',   action: null },
+    'SessionStart': { next: 'IDLE',    action: 'ActionWarnStaleSession' },
+  },
+  'ACTIVE': {
+    'TurnEnd':      { next: 'IDLE',    action: null },
+    'GitCommit':    { next: 'ACTIVE',  action: 'ActionCondense' },
+    'SessionStop':  { next: 'ENDED',   action: null },
+  },
+  'ENDED': {
+    'TurnStart':    { next: 'ACTIVE',  action: 'ActionClearEndedAt, ActionUpdateLastInteraction' },
+    'GitCommit':    { next: 'ENDED',   action: 'ActionDiscardIfNoFiles' },
+    'SessionStart': { next: 'IDLE',    action: null },
+  }
+};
+
+var currentPhase = 'IDLE';
+var transitionLog = [];
+
+function fireEvent(event) {
+  var trans = SM_TRANSITIONS[currentPhase] ? SM_TRANSITIONS[currentPhase][event] : null;
+  if (!trans) {
+    showAction('Invalid: ' + esc(event) + ' not allowed in ' + currentPhase, true);
+    return;
+  }
+  var from = currentPhase;
+  currentPhase = trans.next;
+  updatePhaseViz();
+  var actionStr = trans.action || '(no action)';
+  showAction(from + ' + ' + event + ' \u2192 ' + currentPhase + '  \u27F9  ' + actionStr);
+  transitionLog.unshift({ from: from, event: event, to: currentPhase, action: actionStr });
+  renderLog();
+}
+
+function updatePhaseViz() {
+  document.querySelectorAll('.phase-node').forEach(function(n) { n.classList.remove('current'); });
+  var map = { 'IDLE': 'pn-idle', 'ACTIVE': 'pn-active', 'ENDED': 'pn-ended' };
+  document.getElementById(map[currentPhase]).classList.add('current');
+}
+
+function showAction(text, isError) {
+  var toast = document.getElementById('action-toast');
+  document.getElementById('action-text').textContent = text;
+  toast.classList.remove('flash');
+  if (isError) {
+    toast.style.background = 'rgba(248,81,73,0.12)';
+    toast.style.borderColor = 'rgba(248,81,73,0.3)';
+    toast.style.color = 'var(--red)';
+  } else {
+    toast.style.background = '';
+    toast.style.borderColor = '';
+    toast.style.color = '';
+  }
+  void toast.offsetWidth;
+  toast.classList.add('flash');
+}
+
+function renderLog() {
+  var el = document.getElementById('transition-log');
+  el.textContent = '';
+  transitionLog.forEach(function(e, i) {
+    var div = document.createElement('div');
+    div.className = 'log-entry' + (i === 0 ? ' latest' : '');
+    div.textContent = e.from + ' + ' + e.event + ' \u2192 ' + e.to + '  \u27F9  ' + e.action;
+    el.appendChild(div);
+  });
+}
+
+function resetStateMachine() {
+  currentPhase = 'IDLE';
+  transitionLog = [];
+  updatePhaseViz();
+  document.getElementById('action-text').textContent = 'Click an event to trigger a transition';
+  document.getElementById('transition-log').textContent = '';
+}
+
+// ==================== Panel 2: Shadow Branch ====================
+var mainCommits = [
+  { hash: 'a1b2c3d', msg: 'Initial commit', x: 0 },
+  { hash: 'e4f5678', msg: 'Add auth module', x: 0 },
+];
+var shadowCommits = [];
+var SESSION_ID = '2026-03-06-' + randHex(4);
+
+function addCheckpoint(isDuplicate) {
+  var dedupArea = document.getElementById('dedup-area');
+  if (isDuplicate && shadowCommits.length > 0) {
+    dedupArea.textContent = '';
+    var msg = document.createElement('div');
+    msg.className = 'dedup-msg fade-in';
+    msg.textContent = 'Skipped: tree hash matches previous checkpoint (deduplication)';
+    dedupArea.appendChild(msg);
+    return;
+  }
+  dedupArea.textContent = '';
+  var step = shadowCommits.length + 1;
+  var msgs = ['Edit auth logic','Add handler','Refactor middleware','Update tests'];
+  var files = ['src/auth.go', 'src/handler.go'];
+  if (step > 2) files.push('src/middleware.go');
+  shadowCommits.push({
+    hash: randHex(7),
+    msg: 'Step ' + step + ': ' + msgs[step % 4],
+    files: files,
+    sessionId: SESSION_ID,
+  });
+  document.getElementById('step-counter').textContent = shadowCommits.length + ' checkpoint' + (shadowCommits.length !== 1 ? 's' : '');
+  updateShadowTree();
+  drawBranch();
+  populateRewindPoints();
+}
+
+function addMainCommit() {
+  mainCommits.push({ hash: randHex(7), msg: 'User commit #' + (mainCommits.length - 1) });
+  drawBranch();
+}
+
+function resetBranch() {
+  mainCommits = [
+    { hash: 'a1b2c3d', msg: 'Initial commit' },
+    { hash: 'e4f5678', msg: 'Add auth module' },
+  ];
+  shadowCommits = [];
+  document.getElementById('step-counter').textContent = '0 checkpoints';
+  var tree = document.getElementById('shadow-tree');
+  tree.textContent = '';
+  var em = document.createElement('em');
+  em.className = 'desc';
+  em.textContent = 'Save a step to see the metadata tree';
+  tree.appendChild(em);
+  document.getElementById('dedup-area').textContent = '';
+  drawBranch();
+  populateRewindPoints();
+}
+
+function updateShadowTree() {
+  var el = document.getElementById('shadow-tree');
+  var sid = SESSION_ID.length > 20 ? SESSION_ID.substring(0, 20) + '...' : SESSION_ID;
+  var lines = [
+    { cls: 'dir', text: '.entire/metadata/' + sid + '/', indent: 0 },
+    { cls: 'file', text: 'full.jsonl', indent: 1, note: ' \u2014 ' + shadowCommits.length + ' entries' },
+    { cls: 'file', text: 'prompt.txt', indent: 1, note: ' \u2014 latest prompt' },
+  ];
+  if (shadowCommits.length > 2) {
+    lines.push({ cls: 'dir', text: 'tasks/toolu_01X.../', indent: 1 });
+    lines.push({ cls: 'file', text: 'checkpoint.json', indent: 2 });
+    lines.push({ cls: 'file', text: 'agent-sub1.jsonl', indent: 2 });
+  }
+  el.textContent = '';
+  lines.forEach(function(l) {
+    var div = document.createElement('div');
+    for (var i = 0; i < l.indent; i++) {
+      var sp = document.createElement('span');
+      sp.className = 'indent';
+      div.appendChild(sp);
+    }
+    var span = document.createElement('span');
+    span.className = l.cls;
+    span.textContent = l.text;
+    div.appendChild(span);
+    if (l.note) {
+      var note = document.createTextNode(l.note);
+      div.appendChild(note);
+    }
+    el.appendChild(div);
+  });
+}
+
+function drawBranch() {
+  var canvas = document.getElementById('branch-canvas');
+  var ctx = canvas.getContext('2d');
+  var dpr = window.devicePixelRatio || 1;
+  canvas.width = canvas.clientWidth * dpr;
+  canvas.height = canvas.clientHeight * dpr;
+  ctx.scale(dpr, dpr);
+  var W = canvas.clientWidth, H = canvas.clientHeight;
+  ctx.clearRect(0, 0, W, H);
+
+  var mainY = 100, shadowY = 220;
+  var total = Math.max(mainCommits.length + shadowCommits.length, 4);
+  var startX = 80, gap = Math.min(120, (W - 160) / total);
+
+  // Main branch line
+  ctx.strokeStyle = '#58a6ff';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(startX - 40, mainY);
+  ctx.lineTo(startX + (mainCommits.length - 1) * gap + 40, mainY);
+  ctx.stroke();
+
+  // Main commits
+  mainCommits.forEach(function(c, i) {
+    c.x = startX + i * gap;
+    drawCommitNode(ctx, c.x, mainY, '#58a6ff', c.hash, c.msg);
+  });
+
+  // Main branch label
+  ctx.font = 'bold 12px -apple-system, sans-serif';
+  ctx.fillStyle = '#58a6ff';
+  ctx.textAlign = 'start';
+  ctx.fillText('main', startX - 40, mainY - 28);
+
+  if (shadowCommits.length > 0) {
+    var forkX = mainCommits[mainCommits.length - 1].x;
+    var shadowStartX = forkX + gap * 0.5;
+
+    // Fork line (dashed)
+    ctx.strokeStyle = '#bc8cff';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    ctx.moveTo(forkX, mainY);
+    ctx.quadraticCurveTo(forkX + 20, mainY + 50, shadowStartX, shadowY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Shadow branch line
+    ctx.strokeStyle = '#bc8cff';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(shadowStartX, shadowY);
+    ctx.lineTo(shadowStartX + (shadowCommits.length - 1) * gap + 40, shadowY);
+    ctx.stroke();
+
+    // Shadow commits
+    shadowCommits.forEach(function(c, i) {
+      drawCommitNode(ctx, shadowStartX + i * gap, shadowY, '#bc8cff', c.hash, c.msg);
+    });
+
+    // Shadow branch label
+    var baseHash = mainCommits[mainCommits.length - 1].hash.substring(0, 7);
+    ctx.font = 'bold 11px SF Mono, Fira Code, monospace';
+    ctx.fillStyle = '#bc8cff';
+    ctx.textAlign = 'start';
+    ctx.fillText('entire/' + baseHash + '-x4f2a1', shadowStartX - 10, shadowY - 28);
+  }
+}
+
+function drawCommitNode(ctx, x, y, color, hash, msg) {
+  ctx.beginPath();
+  ctx.arc(x, y, 10, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(x, y, 7, 0, Math.PI * 2);
+  ctx.fillStyle = '#0d1117';
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(x, y, 4, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+
+  ctx.font = '10px SF Mono, Fira Code, monospace';
+  ctx.fillStyle = '#d29922';
+  ctx.textAlign = 'center';
+  ctx.fillText(hash.substring(0, 7), x, y + 24);
+
+  ctx.font = '11px -apple-system, sans-serif';
+  ctx.fillStyle = '#8b949e';
+  var truncMsg = msg.length > 18 ? msg.substring(0, 16) + '...' : msg;
+  ctx.fillText(truncMsg, x, y + 38);
+  ctx.textAlign = 'start';
+}
+
+// ==================== Panel 3: Condensation ====================
+var condState = 'ready';
+var checkpointId = null;
+
+function runCondensation() {
+  if (condState !== 'ready') return;
+  checkpointId = randHex(12);
+  condState = 'condensed';
+
+  document.getElementById('cond-arrow').classList.add('active');
+  document.getElementById('cond-flow-label').textContent = 'condensing...';
+  document.getElementById('cond-target').style.opacity = '1';
+
+  setTimeout(function() {
+    document.getElementById('cond-flow-label').textContent = 'complete';
+    var prefix = checkpointId.substring(0, 2);
+    var rest = checkpointId.substring(2);
+    renderCondensedTarget(prefix, rest, ['"2026-03-06-abc"'], 1);
+    renderCondCommit(checkpointId);
+    var status = document.getElementById('cond-status');
+    status.textContent = '';
+    var div = document.createElement('div');
+    div.className = 'fade-in';
+    div.style.color = 'var(--green)';
+    div.style.fontSize = '0.8rem';
+    div.textContent = 'Condensation complete. Checkpoint ID: ' + checkpointId;
+    status.appendChild(div);
+  }, 800);
+}
+
+function renderCondensedTarget(prefix, rest, sessionIds, count) {
+  var target = document.getElementById('cond-target-content');
+  target.textContent = '';
+  var wrap = document.createElement('div');
+  wrap.className = 'fade-in';
+
+  var idDiv = document.createElement('div');
+  idDiv.className = 'checkpoint-id';
+  idDiv.style.marginBottom = '0.75rem';
+  idDiv.textContent = checkpointId;
+  wrap.appendChild(idDiv);
+
+  var shardDiv = document.createElement('div');
+  shardDiv.className = 'shard-path';
+  shardDiv.style.marginBottom = '0.5rem';
+  shardDiv.appendChild(makeSpan('prefix', prefix));
+  shardDiv.appendChild(makeSpan('sep', '/'));
+  shardDiv.appendChild(makeSpan('rest', rest));
+  shardDiv.appendChild(makeSpan('sep', '/'));
+  wrap.appendChild(shardDiv);
+
+  var jsonBlock = document.createElement('div');
+  jsonBlock.className = 'json-block';
+  jsonBlock.textContent =
+    '{\n' +
+    '  "checkpoint_id": "' + checkpointId + '",\n' +
+    '  "session_ids": [' + sessionIds.join(', ') + '],\n' +
+    '  "session_count": ' + count + ',\n' +
+    '  "strategy": "manual-commit",\n' +
+    '  "files_touched": ["src/auth.go", "src/handler.go"]\n' +
+    '}';
+  wrap.appendChild(jsonBlock);
+
+  var tree = document.createElement('div');
+  tree.className = 'file-tree';
+  tree.style.marginTop = '0.75rem';
+  var treeLines = [
+    { cls: 'dir', text: prefix + '/' + rest + '/', indent: 0 },
+    { cls: 'file', text: 'metadata.json', indent: 1 },
+    { cls: 'dir', text: '0/', indent: 1 },
+    { cls: 'file', text: 'metadata.json, full.jsonl, prompt.txt', indent: 2 },
+  ];
+  if (count > 1) {
+    treeLines.push({ cls: 'dir', text: '1/', indent: 1, highlight: true });
+    treeLines.push({ cls: 'file', text: 'metadata.json, full.jsonl, prompt.txt', indent: 2 });
+  }
+  treeLines.forEach(function(l) {
+    var div = document.createElement('div');
+    for (var i = 0; i < l.indent; i++) {
+      var sp = document.createElement('span');
+      sp.className = 'indent';
+      div.appendChild(sp);
+    }
+    var span = document.createElement('span');
+    span.className = l.cls;
+    span.textContent = l.text;
+    if (l.highlight) span.style.color = 'var(--green)';
+    div.appendChild(span);
+    tree.appendChild(div);
+  });
+  wrap.appendChild(tree);
+  target.appendChild(wrap);
+}
+
+function renderCondCommit(cpId) {
+  var el = document.getElementById('cond-commit');
+  el.textContent = '';
+  var wrap = document.createElement('div');
+  wrap.className = 'fade-in';
+  var line1 = document.createElement('div');
+  var hashSpan = makeSpan('hash', 'abc1234');
+  var msgSpan = makeSpan('msg', ' Implement login feature');
+  line1.appendChild(hashSpan);
+  line1.appendChild(msgSpan);
+  wrap.appendChild(line1);
+  var line2 = document.createElement('div');
+  line2.style.marginTop = '6px';
+  line2.appendChild(makeSpan('trailer-label', 'Entire-Checkpoint: '));
+  line2.appendChild(makeSpan('trailer', cpId));
+  wrap.appendChild(line2);
+  el.appendChild(wrap);
+}
+
+function makeSpan(cls, text) {
+  var s = document.createElement('span');
+  s.className = cls;
+  s.textContent = text;
+  return s;
+}
+
+function addSecondSession() {
+  if (condState !== 'condensed') {
+    var status = document.getElementById('cond-status');
+    status.textContent = '';
+    var div = document.createElement('div');
+    div.className = 'invalid-msg';
+    div.textContent = 'Run condensation first';
+    status.appendChild(div);
+    return;
+  }
+  condState = 'multi';
+  var prefix = checkpointId.substring(0, 2);
+  var rest = checkpointId.substring(2);
+  renderCondensedTarget(prefix, rest, ['"2026-03-06-abc"', '"2026-03-06-xyz"'], 2);
+  var status = document.getElementById('cond-status');
+  status.textContent = '';
+  var div = document.createElement('div');
+  div.className = 'fade-in';
+  div.style.color = 'var(--green)';
+  div.style.fontSize = '0.8rem';
+  div.textContent = 'Second session added to subfolder 1/. session_count incremented to 2.';
+  status.appendChild(div);
+}
+
+function resetCondensation() {
+  condState = 'ready';
+  checkpointId = null;
+  document.getElementById('cond-arrow').classList.remove('active');
+  document.getElementById('cond-flow-label').textContent = 'click below';
+  document.getElementById('cond-target').style.opacity = '0.5';
+  var target = document.getElementById('cond-target-content');
+  target.textContent = '';
+  var p = document.createElement('p');
+  p.style.color = 'var(--text-dim)';
+  p.textContent = 'Metadata will appear here after condensation...';
+  target.appendChild(p);
+  var commit = document.getElementById('cond-commit');
+  commit.textContent = '';
+  var d1 = document.createElement('div');
+  d1.appendChild(makeSpan('hash', 'abc1234'));
+  d1.appendChild(makeSpan('msg', ' Implement login feature'));
+  commit.appendChild(d1);
+  var d2 = document.createElement('div');
+  d2.style.marginTop = '4px';
+  d2.style.color = 'var(--text-dim)';
+  d2.style.fontSize = '0.72rem';
+  d2.textContent = 'No checkpoint trailer yet';
+  commit.appendChild(d2);
+  document.getElementById('cond-status').textContent = '';
+}
+
+// ==================== Panel 4: Rewind ====================
+var SAMPLE_REWIND = [
+  { id: 'cp3', hash: 'f1a2b3c', prompt: 'Add error handling to auth', files: ['src/auth.go', 'src/errors.go'], step: 3 },
+  { id: 'cp2', hash: 'd4e5f6a', prompt: 'Create handler for /login', files: ['src/handler.go', 'src/auth.go'], step: 2 },
+  { id: 'cp1', hash: 'b7c8d9e', prompt: 'Set up auth module', files: ['src/auth.go'], step: 1 },
+];
+
+function getRewindData() {
+  if (shadowCommits.length > 0) {
+    return shadowCommits.map(function(c, i) {
+      return { id: 'cp' + (i + 1), hash: c.hash, prompt: c.msg, files: c.files, step: i + 1 };
+    }).reverse();
+  }
+  return SAMPLE_REWIND;
+}
+
+function populateRewindPoints() {
+  var el = document.getElementById('rewind-points');
+  el.textContent = '';
+  var points = getRewindData();
+  points.forEach(function(p) {
+    var div = document.createElement('div');
+    div.className = 'rewind-point';
+    div.setAttribute('data-id', p.id);
+    div.addEventListener('click', function() { selectRewind(p.id, div); });
+
+    var dot = document.createElement('div');
+    dot.className = 'rp-dot';
+    div.appendChild(dot);
+
+    var info = document.createElement('div');
+    info.className = 'rp-info';
+    var title = document.createElement('div');
+    title.className = 'rp-title';
+    title.textContent = 'Step ' + p.step + ': ' + p.prompt;
+    info.appendChild(title);
+    var meta = document.createElement('div');
+    meta.className = 'rp-meta';
+    meta.textContent = p.hash + ' \u00B7 ' + p.files.length + ' file' + (p.files.length !== 1 ? 's' : '');
+    info.appendChild(meta);
+    div.appendChild(info);
+
+    el.appendChild(div);
+  });
+}
+
+function selectRewind(id, el) {
+  document.querySelectorAll('.rewind-point').forEach(function(p) { p.classList.remove('selected'); });
+  el.classList.add('selected');
+  document.getElementById('rewind-preview-card').style.opacity = '1';
+  var points = getRewindData();
+  var point = null;
+  for (var i = 0; i < points.length; i++) {
+    if (points[i].id === id) { point = points[i]; break; }
+  }
+  if (!point) return;
+
+  var preview = document.getElementById('rewind-preview');
+  preview.textContent = '';
+  var wrap = document.createElement('div');
+  wrap.className = 'fade-in';
+
+  var h = document.createElement('h3');
+  h.style.marginBottom = '0.5rem';
+  h.textContent = 'Restoring to Step ' + point.step;
+  wrap.appendChild(h);
+
+  var desc = document.createElement('p');
+  desc.className = 'desc';
+  desc.style.marginBottom = '0.75rem';
+  desc.textContent = 'Commit: ' + point.hash;
+  wrap.appendChild(desc);
+
+  // Files to Restore
+  var rh = document.createElement('h3');
+  rh.style.color = 'var(--green)';
+  rh.style.marginBottom = '0.4rem';
+  rh.textContent = 'Files to Restore';
+  wrap.appendChild(rh);
+  point.files.forEach(function(f) {
+    wrap.appendChild(makeFileChange('restore', f));
+  });
+
+  // Files to Delete (if not latest)
+  if (point.step < points.length) {
+    var dh = document.createElement('h3');
+    dh.style.color = 'var(--red)';
+    dh.style.marginTop = '0.75rem';
+    dh.style.marginBottom = '0.4rem';
+    dh.textContent = 'Files to Delete';
+    wrap.appendChild(dh);
+    wrap.appendChild(makeFileChange('delete', 'src/new_feature.go'));
+  }
+
+  // Tracked Changes
+  var th = document.createElement('h3');
+  th.style.color = 'var(--orange)';
+  th.style.marginTop = '0.75rem';
+  th.style.marginBottom = '0.4rem';
+  th.textContent = 'Tracked Changes to Revert';
+  wrap.appendChild(th);
+  wrap.appendChild(makeFileChange('revert', 'src/handler.go'));
+
+  // Explanation box
+  var box = document.createElement('div');
+  box.style.cssText = 'margin-top:1rem;padding:10px;background:var(--purple-bg);border-radius:var(--radius);font-size:0.8rem;color:var(--purple);';
+  box.textContent = 'Files are read directly from the checkpoint\'s git tree and written to disk. No git reset is used \u2014 your branch history stays intact.';
+  wrap.appendChild(box);
+
+  preview.appendChild(wrap);
+}
+
+function makeFileChange(type, filename) {
+  var div = document.createElement('div');
+  div.className = 'file-change';
+  var badge = document.createElement('span');
+  badge.className = 'badge ' + type;
+  badge.textContent = type;
+  div.appendChild(badge);
+  var name = document.createElement('span');
+  name.textContent = filename;
+  div.appendChild(name);
+  return div;
+}
+
+// ==================== Panel 5: Linking ====================
+function animateLinkForward() {
+  var commitBox = document.getElementById('link-commit');
+  var metaBox = document.getElementById('link-meta');
+  var arrow = document.getElementById('link-arrow-right');
+
+  commitBox.classList.add('highlight');
+  arrow.querySelector('line').setAttribute('stroke', '#3fb950');
+  arrow.querySelector('polygon').setAttribute('fill', '#3fb950');
+
+  setTimeout(function() {
+    metaBox.classList.add('highlight');
+    var result = document.getElementById('link-fwd-result');
+    result.textContent = '';
+    var div = document.createElement('div');
+    div.className = 'fade-in';
+    div.style.fontSize = '0.8rem';
+    var b = document.createElement('strong');
+    b.style.color = 'var(--green)';
+    b.textContent = 'Found! ';
+    div.appendChild(b);
+    div.appendChild(document.createTextNode('Extract trailer Entire-Checkpoint: a3b2c4d5e6f7'));
+    div.appendChild(document.createElement('br'));
+    div.appendChild(document.createTextNode('\u2192 Read tree at entire/checkpoints/v1 HEAD'));
+    div.appendChild(document.createElement('br'));
+    div.appendChild(document.createTextNode('\u2192 Path: a3/b2c4d5e6f7/metadata.json'));
+    result.appendChild(div);
+  }, 500);
+
+  setTimeout(function() {
+    commitBox.classList.remove('highlight');
+    metaBox.classList.remove('highlight');
+    arrow.querySelector('line').setAttribute('stroke', '#30363d');
+    arrow.querySelector('polygon').setAttribute('fill', '#30363d');
+  }, 3000);
+}
+
+function animateLinkReverse() {
+  var commitBox = document.getElementById('link-commit');
+  var metaBox = document.getElementById('link-meta');
+  var arrow = document.getElementById('link-arrow-left');
+
+  metaBox.classList.add('highlight');
+  arrow.querySelector('line').setAttribute('stroke', '#58a6ff');
+  arrow.querySelector('polygon').setAttribute('fill', '#58a6ff');
+
+  setTimeout(function() {
+    commitBox.classList.add('highlight');
+    var result = document.getElementById('link-rev-result');
+    result.textContent = '';
+    var div = document.createElement('div');
+    div.className = 'fade-in';
+    div.style.fontSize = '0.8rem';
+    var b = document.createElement('strong');
+    b.style.color = 'var(--blue)';
+    b.textContent = 'Found! ';
+    div.appendChild(b);
+    div.appendChild(document.createTextNode('Given checkpoint ID a3b2c4d5e6f7'));
+    div.appendChild(document.createElement('br'));
+    div.appendChild(document.createTextNode('\u2192 Search git log for trailer Entire-Checkpoint: a3b2c4d5e6f7'));
+    div.appendChild(document.createElement('br'));
+    div.appendChild(document.createTextNode('\u2192 Match: commit e7f2a91 "Implement login feature"'));
+    result.appendChild(div);
+  }, 500);
+
+  setTimeout(function() {
+    commitBox.classList.remove('highlight');
+    metaBox.classList.remove('highlight');
+    arrow.querySelector('line').setAttribute('stroke', '#30363d');
+    arrow.querySelector('polygon').setAttribute('fill', '#30363d');
+  }, 3000);
+}
+
+function generateNewId() {
+  var id = randHex(12);
+  var prefix = id.substring(0, 2);
+  var rest = id.substring(2);
+  var el = document.getElementById('generated-shard');
+  el.textContent = '';
+  var sp = document.createElement('span');
+  sp.className = 'shard-path';
+  sp.appendChild(makeSpan('prefix', prefix));
+  sp.appendChild(makeSpan('sep', '/'));
+  sp.appendChild(makeSpan('rest', rest));
+  sp.appendChild(makeSpan('sep', '/'));
+  el.appendChild(sp);
+  var info = document.createElement('span');
+  info.style.cssText = 'color:var(--text-dim);font-size:0.75rem;margin-left:8px;';
+  info.textContent = 'shard bucket: 0x' + prefix + ' (' + parseInt(prefix, 16) + '/255)';
+  el.appendChild(info);
+}
+
+// ==================== Init ====================
+window.addEventListener('resize', function() {
+  if (document.getElementById('panel-1').classList.contains('active')) drawBranch();
+});
+populateRewindPoints();
+</script>
+</body>
+</html>

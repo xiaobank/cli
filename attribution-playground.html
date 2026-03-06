@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Code Attribution Playground - Entire CLI</title>
+<style>
+  :root {
+    --bg: #0d1117; --bg2: #161b22; --bg3: #21262d; --border: #30363d;
+    --text: #e6edf3; --text2: #8b949e; --text3: #6e7681;
+    --human: #6cb6ff; --human-bg: rgba(108,182,255,0.08); --human-border: rgba(108,182,255,0.25);
+    --agent: #3fb950; --agent-bg: rgba(63,185,80,0.08); --agent-border: rgba(63,185,80,0.25);
+    --base: #8b949e; --base-bg: rgba(139,148,158,0.06);
+    --removed: #f85149; --removed-bg: rgba(248,81,73,0.1);
+    --accent: #d2a8ff; --accent2: #f0883e;
+    --mono: 'SF Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: var(--sans); background: var(--bg); color: var(--text); min-height: 100vh; }
+  .app { display: grid; grid-template-columns: 300px 1fr; grid-template-rows: auto 1fr auto; height: 100vh; }
+  .header { grid-column: 1 / -1; padding: 14px 24px; border-bottom: 1px solid var(--border); background: var(--bg2); display: flex; align-items: center; gap: 16px; }
+  .header h1 { font-size: 15px; font-weight: 600; }
+  .header .sub { color: var(--text2); font-size: 12px; }
+  .sidebar { grid-column: 1; overflow-y: auto; border-right: 1px solid var(--border); background: var(--bg2); padding: 14px; }
+  .main { grid-column: 2; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+  .prompt-bar { grid-column: 1 / -1; border-top: 1px solid var(--border); background: var(--bg2); padding: 10px 20px; display: flex; align-items: flex-start; gap: 12px; }
+  .prompt-bar pre { flex: 1; font-family: var(--mono); font-size: 11px; color: var(--text2); white-space: pre-wrap; max-height: 72px; overflow-y: auto; line-height: 1.5; }
+  .copy-btn { padding: 5px 14px; background: var(--bg3); border: 1px solid var(--border); color: var(--text); border-radius: 6px; cursor: pointer; font-size: 11px; white-space: nowrap; }
+  .copy-btn:hover { background: var(--border); }
+  .sec { margin-bottom: 16px; }
+  .sec-title { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text3); margin-bottom: 6px; }
+  .panel { background: var(--bg2); border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+  .panel-hdr { padding: 8px 14px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; }
+  .panel-body { padding: 14px; }
+  .vtabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); }
+  .vtab { padding: 8px 16px; font-size: 12px; cursor: pointer; color: var(--text2); border-bottom: 2px solid transparent; }
+  .vtab:hover { color: var(--text); }
+  .vtab.active { color: var(--text); border-bottom-color: var(--accent); }
+  .vc { display: none; }
+  .vc.active { display: block; }
+  .pct-bar { height: 6px; border-radius: 3px; background: var(--bg3); overflow: hidden; margin-top: 6px; display: flex; }
+  .pf-a { background: var(--agent); transition: width 0.4s; }
+  .pf-h { background: var(--human); transition: width 0.4s; }
+  ::-webkit-scrollbar { width: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--bg3); border-radius: 3px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="header">
+    <h1>Code Attribution Playground</h1>
+    <span class="sub">How Entire CLI tracks human vs AI code contributions</span>
+    <div style="flex:1"></div>
+    <div id="legend" style="display:flex;gap:14px;font-size:10px;color:var(--text2)"></div>
+  </div>
+  <div class="sidebar">
+    <div class="sec"><div class="sec-title">Scenarios</div><div id="presets"></div></div>
+    <div class="sec"><div class="sec-title">Session Timeline</div><div id="timeline"></div><div id="navBar" style="display:flex;gap:6px;margin-top:8px"></div></div>
+    <div class="sec" id="fileSection" style="margin-top:4px"><div class="sec-title">File</div><div id="fileTabs" style="display:flex;gap:0"></div></div>
+  </div>
+  <div class="main">
+    <div id="callout" style="padding:10px 14px;background:var(--bg);border-radius:5px;border-left:3px solid var(--accent);font-size:12px;line-height:1.6;color:var(--text2)"></div>
+    <div class="vtabs" id="viewTabs"></div>
+    <div class="vc active" id="v-code">
+      <div class="panel">
+        <div class="panel-hdr"><span id="codeTitle">main.go</span><div style="flex:1"></div><span id="codeState" style="font-size:10px;color:var(--text3)"></span></div>
+        <div class="panel-body"><div id="codeView" style="font-family:var(--mono);font-size:12px;line-height:1.7"></div></div>
+      </div>
+      <div class="panel" style="margin-top:12px">
+        <div class="panel-hdr">Attribution Calculation</div>
+        <div class="panel-body"><div id="calcView" style="font-family:var(--mono);font-size:11px;line-height:1.8"></div></div>
+      </div>
+    </div>
+    <div class="vc" id="v-trees">
+      <div class="panel">
+        <div class="panel-hdr">Three-Tree Model</div>
+        <div class="panel-body">
+          <div id="treeCallout" style="padding:10px 14px;background:var(--bg);border-radius:5px;border-left:3px solid var(--agent);font-size:12px;line-height:1.6;color:var(--text2);margin-bottom:12px"></div>
+          <div id="treeDia" style="display:flex;align-items:center;justify-content:center;gap:24px;padding:16px;flex-wrap:wrap"></div>
+          <div id="treeDiffs" style="margin-top:16px;font-family:var(--mono);font-size:11px;line-height:1.8"></div>
+        </div>
+      </div>
+    </div>
+    <div class="vc" id="v-lifo">
+      <div class="panel">
+        <div class="panel-hdr">LIFO Heuristic: Per-File Pool Tracking</div>
+        <div class="panel-body">
+          <div id="lifoCallout" style="padding:10px 14px;background:var(--bg);border-radius:5px;border-left:3px solid var(--accent);font-size:12px;line-height:1.6;color:var(--text2);margin-bottom:12px"></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+            <div id="lifoLinesPanel" style="background:var(--bg);border-radius:5px;padding:10px;border:1px solid var(--border)"></div>
+            <div id="lifoResultPanel" style="background:var(--bg);border-radius:5px;padding:10px;border:1px solid var(--border)"></div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px">
+            <div id="lifoWithPanel" style="background:var(--bg);border-radius:5px;padding:10px;border:1px solid var(--border)"></div>
+            <div id="lifoWithoutPanel" style="background:var(--bg);border-radius:5px;padding:10px;border:1px solid var(--border)"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="prompt-bar">
+    <pre id="promptOut"></pre>
+    <button class="copy-btn" id="copyBtn">Copy</button>
+  </div>
+</div>
+
+<script>
+// ── Helpers ──────────────────────────────────────────────
+function el(tag, attrs, children) {
+  const e = document.createElement(tag);
+  if (attrs) for (const [k,v] of Object.entries(attrs)) {
+    if (k === 'style' && typeof v === 'object') Object.assign(e.style, v);
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+    else if (k === 'cls') e.className = v;
+    else e.setAttribute(k, v);
+  }
+  if (children != null) {
+    if (typeof children === 'string') e.textContent = children;
+    else if (Array.isArray(children)) children.forEach(c => { if (c) e.appendChild(c); });
+    else e.appendChild(children);
+  }
+  return e;
+}
+function clear(e) { while (e.firstChild) e.removeChild(e.firstChild); }
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function $(id) { return document.getElementById(id); }
+
+// ── State ────────────────────────────────────────────────
+const S = { preset:'mixed', step:0, file:'main.go', view:'code', lifoRm:new Set() };
+let lines = {}, pAs = [], agentFiles = new Set();
+
+// ── Presets ──────────────────────────────────────────────
+const P = {
+  simple: {
+    name:'Agent Only', desc:'Agent writes everything, no human edits', pct:'100%',
+    files:{ 'main.go':{ base:[{t:'package main',o:'base'},{t:'',o:'base'},{t:'func main() {',o:'base'},{t:'}',o:'base'}]}},
+    steps:[
+      {l:'Session start',g:'s',d:'Base commit established. File has 4 lines of boilerplate.'},
+      {l:'Prompt submitted',g:'s',d:'CalculatePromptAttribution() runs. No user edits to capture: UserLinesAdded=0, UserAddedPerFile={}.'},
+      {l:'Agent writes code',g:'a',d:'Agent adds 8 lines: imports, fmt.Println, and a helper function. Checkpoint saved to shadow branch.',
+        acts:{'main.go':{add:[{a:1,ls:[{t:'import "fmt"',o:'agent'}]},{a:3,ls:[{t:'    fmt.Println("Hello")',o:'agent'},{t:'    result := compute(42)',o:'agent'},{t:'    fmt.Println(result)',o:'agent'}]},{a:99,ls:[{t:'',o:'agent'},{t:'func compute(n int) int {',o:'agent'},{t:'    return n * 2',o:'agent'},{t:'}',o:'agent'}]}]}}},
+      {l:'User commits',g:'s',d:'CalculateAttributionWithAccumulated(): Agent wrote all 8 new lines. No human edits. Result: 100% agent.'}
+    ]
+  },
+  mixed: {
+    name:'Mixed Contributions', desc:'Both agent and human contribute code', pct:'~60%',
+    files:{ 'main.go':{ base:[{t:'package main',o:'base'},{t:'',o:'base'},{t:'func main() {',o:'base'},{t:'}',o:'base'}]}},
+    steps:[
+      {l:'Session start',g:'s',d:'Base commit: minimal main.go with 4 lines.'},
+      {l:'User adds code',g:'h',d:'Human adds 3 lines: an import and two print statements.',
+        acts:{'main.go':{add:[{a:1,ls:[{t:'import "fmt"',o:'human'}]},{a:3,ls:[{t:'    fmt.Println("starting")',o:'human'},{t:'    fmt.Println("ready")',o:'human'}]}]}}},
+      {l:'Prompt submitted',g:'s',d:'CalculatePromptAttribution() captures: UserLinesAdded=3, UserAddedPerFile={"main.go": 3}. These edits are recorded before the agent runs.'},
+      {l:'Agent writes code',g:'a',d:'Agent adds 6 lines: error handling, a helper function. Shadow branch checkpoint saved.',
+        acts:{'main.go':{add:[{a:2,ls:[{t:'import "os"',o:'agent'}]},{a:6,ls:[{t:'    if err := run(); err != nil {',o:'agent'},{t:'        os.Exit(1)',o:'agent'},{t:'    }',o:'agent'}]},{a:99,ls:[{t:'',o:'agent'},{t:'func run() error {',o:'agent'},{t:'    return nil',o:'agent'}]}]}}},
+      {l:'User makes final edit',g:'h',d:'Human adds 1 more line after agent\'s work.',
+        acts:{'main.go':{add:[{a:99,ls:[{t:'}',o:'human'}]}]}}},
+      {l:'User commits',g:'s',d:'CalculateAttributionWithAccumulated(): base->shadow=9 lines (3 human + 6 agent). Accumulated user=3, so agent=6. Post-checkpoint: +1 human. Total: 6+4=10. Agent: 60%.'}
+    ]
+  },
+  heavy_edit: {
+    name:'Heavy Editing', desc:'Human rewrites most of agent\'s code', pct:'~25%',
+    files:{ 'main.go':{ base:[{t:'package main',o:'base'},{t:'',o:'base'},{t:'import "fmt"',o:'base'},{t:'',o:'base'},{t:'func main() {',o:'base'},{t:'    fmt.Println("hello")',o:'base'},{t:'}',o:'base'}]}},
+    steps:[
+      {l:'Session start',g:'s',d:'Base commit: simple hello-world program, 7 lines.'},
+      {l:'Prompt submitted',g:'s',d:'CalculatePromptAttribution(): no user edits yet. UserAddedPerFile={}.'},
+      {l:'Agent writes code',g:'a',d:'Agent adds 8 lines: a struct, constructor, and method. Shadow checkpoint saved.',
+        acts:{'main.go':{add:[{a:7,ls:[{t:'',o:'agent'},{t:'type Server struct {',o:'agent'},{t:'    port int',o:'agent'},{t:'}',o:'agent'},{t:'',o:'agent'},{t:'func NewServer() *Server {',o:'agent'},{t:'    return &Server{port: 8080}',o:'agent'},{t:'}',o:'agent'}]}]}}},
+      {l:'User rewrites agent code',g:'h',d:'Human removes 6 of 8 agent lines, replaces with own implementation. Per-file LIFO: user had 0 prior adds to main.go, so all 6 removals target agent lines.',
+        acts:{'main.go':{rm:[8,9,10,11,12,13],add:[{a:7,ls:[{t:'',o:'human'},{t:'type App struct {',o:'human'},{t:'    name string',o:'human'},{t:'    port int',o:'human'},{t:'}',o:'human'},{t:'',o:'human'}]}]}}},
+      {l:'User commits',g:'s',d:'Agent added 8, user removed 6 agent lines (LIFO: 0 self-mods). Surviving agent=2, user added=6. Total=8. Agent: 25%.'}
+    ]
+  },
+  self_mod: {
+    name:'Self-Modification', desc:'User edits own code; LIFO preserves agent credit', pct:'~67%',
+    files:{ 'main.go':{ base:[{t:'package main',o:'base'},{t:'',o:'base'},{t:'func main() {',o:'base'},{t:'}',o:'base'}]}},
+    steps:[
+      {l:'Session start',g:'s',d:'Base commit: minimal main.go.'},
+      {l:'User adds 5 lines',g:'h',d:'Human writes 5 lines of setup code.',
+        acts:{'main.go':{add:[{a:1,ls:[{t:'import "fmt"',o:'human'}]},{a:3,ls:[{t:'    name := "world"',o:'human'},{t:'    greeting := "hello"',o:'human'},{t:'    msg := greeting + " " + name',o:'human'},{t:'    fmt.Println(msg)',o:'human'}]}]}}},
+      {l:'Prompt submitted',g:'s',d:'CalculatePromptAttribution(): UserLinesAdded=5, UserAddedPerFile={"main.go": 5}. This per-file data is critical for the LIFO heuristic.'},
+      {l:'Agent adds 10 lines',g:'a',d:'Agent adds error handling and a helper function. Shadow checkpoint saved.',
+        acts:{'main.go':{add:[{a:2,ls:[{t:'import "os"',o:'agent'}]},{a:8,ls:[{t:'    if err := validate(msg); err != nil {',o:'agent'},{t:'        fmt.Fprintf(os.Stderr, "error: %v\\n", err)',o:'agent'},{t:'        os.Exit(1)',o:'agent'},{t:'    }',o:'agent'}]},{a:99,ls:[{t:'',o:'agent'},{t:'func validate(s string) error {',o:'agent'},{t:'    if s == "" {',o:'agent'},{t:'        return fmt.Errorf("empty")',o:'agent'},{t:'    }',o:'agent'},{t:'    return nil',o:'agent'}]}]}}},
+      {l:'User modifies own 3 lines',g:'h',d:'Human removes 3 of their own lines and replaces with 3 new ones. LIFO: user added 5 to main.go, removed 3. selfMod=min(3,5)=3. Agent lines untouched!',
+        acts:{'main.go':{rm:[5,6,7],add:[{a:4,ls:[{t:'    name := "Gopher"',o:'human'},{t:'    greeting := "Hi"',o:'human'},{t:'    msg := fmt.Sprintf("%s, %s!", greeting, name)',o:'human'}]}]}}},
+      {l:'User commits',g:'s',d:'LIFO: removed 3 from main.go, user added 5 prior. selfMod=min(3,5)=3, humanModifiedAgent=0. Agent lines=10. Total=10+5=15. Agent: 66.7%. Without LIFO, it would incorrectly be 46.7%!'}
+    ]
+  },
+  multi_file: {
+    name:'Multi-File', desc:'Per-file tracking across multiple files', pct:'~63%',
+    files:{
+      'main.go':{ base:[{t:'package main',o:'base'},{t:'',o:'base'},{t:'func main() {',o:'base'},{t:'}',o:'base'}]},
+      'utils.go':{ base:[{t:'package main',o:'base'}]}
+    },
+    steps:[
+      {l:'Session start',g:'s',d:'Base commit: two files, main.go (4 lines) and utils.go (1 line).'},
+      {l:'User edits main.go',g:'h',d:'Human adds 3 lines to main.go only.',
+        acts:{'main.go':{add:[{a:3,ls:[{t:'    result := add(1, 2)',o:'human'},{t:'    println(result)',o:'human'},{t:'    println("done")',o:'human'}]}]}}},
+      {l:'Prompt submitted',g:'s',d:'CalculatePromptAttribution(): UserAddedPerFile={"main.go": 3}. Human only touched main.go, not utils.go.'},
+      {l:'Agent writes both files',g:'a',d:'Agent adds 3 lines to main.go and 5 to utils.go. Shadow checkpoint captures both.',
+        acts:{
+          'main.go':{add:[{a:6,ls:[{t:'    diff := subtract(5, 3)',o:'agent'},{t:'    println(diff)',o:'agent'},{t:'    println("computed")',o:'agent'}]}]},
+          'utils.go':{add:[{a:1,ls:[{t:'',o:'agent'},{t:'func add(a, b int) int {',o:'agent'},{t:'    return a + b',o:'agent'},{t:'}',o:'agent'},{t:'',o:'agent'}]}]}
+        }},
+      {l:'User edits both files',g:'h',d:'Human removes 2 lines from main.go (own code) and adds 3 to utils.go. LIFO per-file: main.go removals=2, prior adds=3 => selfMod=min(2,3)=2.',
+        acts:{
+          'main.go':{rm:[5,6]},
+          'utils.go':{add:[{a:6,ls:[{t:'func subtract(a, b int) int {',o:'human'},{t:'    return a - b',o:'human'},{t:'}',o:'human'}]}]}
+        }},
+      {l:'User commits',g:'s',d:'Per-file LIFO: main.go selfMod=min(2,3)=2, utils.go selfMod=0. Agent lines=8, user added=4. Total=12. Agent: 62.5%.'}
+    ]
+  }
+};
+
+// ── Simulation ───────────────────────────────────────────
+function reset() {
+  const p = P[S.preset];
+  lines = {}; pAs = []; agentFiles = new Set();
+  for (const [f,d] of Object.entries(p.files)) lines[f] = d.base.map(x=>({...x}));
+}
+
+function applyStep(i) {
+  const st = P[S.preset].steps[i];
+  if (!st || !st.acts) return;
+  for (const [f,a] of Object.entries(st.acts)) {
+    if (!lines[f]) lines[f] = [];
+    let ls = lines[f];
+    if (a.rm) { const r=[...a.rm].sort((a,b)=>b-a); for(const idx of r) if(idx-1<ls.length) ls.splice(idx-1,1); }
+    if (a.add) { const sorted=[...a.add].sort((a,b)=>b.a-a.a); for(const ad of sorted){ const p=ad.a>=99?ls.length:Math.min(ad.a,ls.length); ls.splice(p,0,...ad.ls.map(x=>({...x}))); } }
+    if (st.g==='a') agentFiles.add(f);
+    lines[f] = ls;
+  }
+}
+
+function capturePA() {
+  const pa = {userAdded:0, perFile:{}};
+  for (const f of Object.keys(P[S.preset].files)) {
+    const n = (lines[f]||[]).filter(x=>x.o==='human').length;
+    if (n>0) { pa.userAdded+=n; pa.perFile[f]=n; }
+  }
+  pAs.push(pa);
+}
+
+function simTo(step) {
+  reset();
+  for (let i = 0; i <= step; i++) {
+    applyStep(i);
+    const st = P[S.preset].steps[i];
+    if (st.g === 's' && st.l.includes('Prompt')) capturePA();
+  }
+}
+
+function lastAgentStep() {
+  const ss = P[S.preset].steps;
+  for (let i = S.step; i >= 0; i--) if (ss[i].g === 'a') return i;
+  return -1;
+}
+
+// ── Attribution Calc ─────────────────────────────────────
+function calcAttr() {
+  const p = P[S.preset], files = Object.keys(p.files);
+  let aL=0, hL=0;
+  for (const f of files) for (const l of (lines[f]||[])) { if(l.o==='agent')aL++; else if(l.o==='human')hL++; }
+
+  let accU=0, accPF={};
+  for (const pa of pAs) { accU+=pa.userAdded; for(const[f,n]of Object.entries(pa.perFile)) accPF[f]=(accPF[f]||0)+n; }
+
+  const las = lastAgentStep();
+  let shA=0, shH=0;
+  if (las >= 0) {
+    const savedL=JSON.parse(JSON.stringify(lines)), savedPA=[...pAs], savedAF=new Set(agentFiles);
+    simTo(las);
+    for (const f of files) for (const l of (lines[f]||[])) { if(l.o==='agent')shA++; else if(l.o==='human')shH++; }
+    lines = savedL; pAs = savedPA; agentFiles = savedAF;
+  }
+
+  const b2s=shA+shH, tAgentAdded=Math.max(0,b2s-accU);
+  const postUA=Math.max(0,hL-accU);
+  let postUR=0, postURPF={};
+  for (const f of files) { const cur=(lines[f]||[]).filter(x=>x.o==='human').length; const acc=accPF[f]||0; if(cur<acc){ const r=acc-cur; postUR+=r; postURPF[f]=r; } }
+  let selfMod=0;
+  for (const[f,r]of Object.entries(postURPF)) selfMod+=Math.min(r,accPF[f]||0);
+  const tHM=Math.min(hL+postUA,postUR), hMA=Math.max(0,tHM-selfMod);
+  const pUA=Math.max(0,hL-tHM), pUR=Math.max(0,postUR-tHM);
+  const aInC=Math.max(0,tAgentAdded-pUR-hMA);
+  let tC=aInC+pUA; if(tC<=0)tC=Math.max(0,tAgentAdded);
+  const pct=tC>0?(aInC/tC*100):0;
+  return {aL,hL,accU,accPF,b2s,tAgentAdded,postUA,postUR,postURPF,selfMod,hMA,pUA,pUR,aInC,tC,pct,shA,shH};
+}
+
+// ── Rendering ────────────────────────────────────────────
+function render() {
+  renderLegend();
+  renderPresets();
+  renderTimeline();
+  renderNav();
+  renderFileTabs();
+  renderCallout();
+  renderViewTabs();
+  renderCodeView();
+  renderCalcView();
+  renderTrees();
+  renderLIFO();
+  updatePrompt();
+}
+
+function renderLegend() {
+  const c = $('legend');
+  clear(c);
+  [{color:'var(--base)',label:'Base'},{color:'var(--human)',label:'Human'},{color:'var(--agent)',label:'Agent'}].forEach(x => {
+    const dot = el('span',{style:{width:'8px',height:'8px',borderRadius:'2px',background:x.color,display:'inline-block'}});
+    const item = el('span',{style:{display:'flex',alignItems:'center',gap:'3px'}}, [dot, el('span',null,x.label)]);
+    c.appendChild(item);
+  });
+}
+
+function renderPresets() {
+  const c = $('presets'); clear(c);
+  for (const [k,v] of Object.entries(P)) {
+    const btn = el('button',{
+      cls:'preset-btn'+(S.preset===k?' active':''),
+      style:{padding:'7px 10px',background:S.preset===k?'rgba(210,168,255,0.08)':'var(--bg)',border:'1px solid '+(S.preset===k?'var(--accent)':'var(--border)'),color:S.preset===k?'var(--accent)':'var(--text)',borderRadius:'5px',cursor:'pointer',fontSize:'11px',display:'flex',justifyContent:'space-between',width:'100%',marginBottom:'3px'},
+      onclick: () => selPreset(k)
+    });
+    btn.appendChild(el('span',null,v.name));
+    btn.appendChild(el('span',{style:{color:'var(--text3)',fontFamily:'var(--mono)',fontSize:'10px'}},v.pct));
+    c.appendChild(btn);
+  }
+}
+
+function renderTimeline() {
+  const c = $('timeline'); clear(c);
+  P[S.preset].steps.forEach((s,i) => {
+    const isDone = i < S.step, isActive = i === S.step;
+    const dot = el('span',{style:{width:'7px',height:'7px',borderRadius:'50%',background:isActive?'var(--accent)':(isDone?'var(--agent)':'var(--bg3)'),flexShrink:'0',boxShadow:isActive?'0 0 6px rgba(210,168,255,0.4)':'none'}});
+    const label = el('span',{style:{flex:'1',fontSize:'11px'}},s.l);
+    const tagColor = s.g==='h'?{bg:'var(--human-bg)',c:'var(--human)',border:'var(--human-border)'}:s.g==='a'?{bg:'var(--agent-bg)',c:'var(--agent)',border:'var(--agent-border)'}:{bg:'rgba(210,168,255,0.08)',c:'var(--accent)',border:'rgba(210,168,255,0.25)'};
+    const tagText = s.g==='h'?'human':s.g==='a'?'agent':'system';
+    const tag = el('span',{style:{fontSize:'9px',padding:'1px 5px',borderRadius:'3px',fontFamily:'var(--mono)',background:tagColor.bg,color:tagColor.c,border:'1px solid '+tagColor.border}},tagText);
+    const row = el('div',{style:{display:'flex',alignItems:'center',gap:'6px',padding:'5px 8px',borderRadius:'5px',cursor:'pointer',border:isActive?'1px solid var(--border)':'1px solid transparent',background:isActive?'var(--bg)':'transparent'},onclick:()=>goTo(i)},[dot,label,tag]);
+    c.appendChild(row);
+  });
+}
+
+function renderNav() {
+  const c = $('navBar'); clear(c);
+  const mkBtn = (text, disabled, onclick) => {
+    const b = el('button',{style:{flex:'1',padding:'6px',background:'var(--bg)',border:'1px solid var(--border)',color:'var(--text)',borderRadius:'5px',cursor:disabled?'default':'pointer',fontSize:'11px',opacity:disabled?'0.3':'1'},onclick:disabled?null:onclick},text);
+    return b;
+  };
+  c.appendChild(mkBtn('< Prev', S.step===0, prev));
+  c.appendChild(mkBtn('Next >', S.step===P[S.preset].steps.length-1, next));
+}
+
+function renderFileTabs() {
+  const files = Object.keys(P[S.preset].files);
+  const sec = $('fileSection');
+  sec.style.display = files.length > 1 ? 'block' : 'none';
+  const c = $('fileTabs'); clear(c);
+  files.forEach(f => {
+    const tab = el('div',{style:{padding:'5px 12px',fontSize:'11px',cursor:'pointer',color:S.file===f?'var(--text)':'var(--text2)',borderBottom:S.file===f?'2px solid var(--accent)':'2px solid transparent',fontFamily:'var(--mono)'},onclick:()=>selFile(f)},f);
+    c.appendChild(tab);
+  });
+}
+
+function renderCallout() {
+  const c = $('callout');
+  c.textContent = P[S.preset].steps[S.step].d;
+}
+
+function renderViewTabs() {
+  const c = $('viewTabs'); clear(c);
+  [{id:'code',label:'Code View'},{id:'trees',label:'Git Trees'},{id:'lifo',label:'LIFO Demo'}].forEach(v => {
+    const tab = el('div',{cls:'vtab'+(S.view===v.id?' active':''),style:{padding:'8px 16px',fontSize:'12px',cursor:'pointer',color:S.view===v.id?'var(--text)':'var(--text2)',borderBottom:S.view===v.id?'2px solid var(--accent)':'2px solid transparent'},
+      onclick:()=>{S.view=v.id; render();}
+    },v.label);
+    c.appendChild(tab);
+  });
+  document.querySelectorAll('.vc').forEach(e=>e.classList.remove('active'));
+  $('v-'+S.view).classList.add('active');
+}
+
+function renderCodeView() {
+  const ls = lines[S.file] || [];
+  $('codeTitle').textContent = S.file;
+  const st = P[S.preset].steps[S.step];
+  $('codeState').textContent = st.g==='a'?'shadow branch (checkpoint)':st.l.toLowerCase().includes('commit')?'HEAD (commit time)':'working tree';
+  const c = $('codeView'); clear(c);
+  if (ls.length === 0) {
+    c.appendChild(el('div',{style:{color:'var(--text3)',padding:'16px',textAlign:'center'}},'Empty file'));
+    return;
+  }
+  ls.forEach((l,i) => {
+    const bg = l.o==='human'?'var(--human-bg)':l.o==='agent'?'var(--agent-bg)':'transparent';
+    const ownerColor = l.o==='human'?'var(--human)':l.o==='agent'?'var(--agent)':'var(--text3)';
+    const ownerChar = l.o==='human'?'H':l.o==='agent'?'A':'\u00B7';
+    const row = el('div',{style:{display:'flex',padding:'0 10px',borderRadius:'2px',background:bg}},[
+      el('span',{style:{color:'var(--text3)',width:'28px',textAlign:'right',marginRight:'12px',userSelect:'none',flexShrink:'0'}},String(i+1)),
+      el('span',{style:{width:'14px',flexShrink:'0',marginRight:'6px',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'8px',fontWeight:'700',color:ownerColor}},ownerChar),
+      el('span',{style:{flex:'1',whiteSpace:'pre',fontFamily:'var(--mono)'}},l.t)
+    ]);
+    c.appendChild(row);
+  });
+}
+
+function renderCalcView() {
+  const c = $('calcView'); clear(c);
+  const las = lastAgentStep();
+  if (las < 0) {
+    const hc = Object.values(lines).flat().filter(l=>l.o==='human').length;
+    const ac = Object.values(lines).flat().filter(l=>l.o==='agent').length;
+    const s = el('div');
+    s.appendChild(mkCalcTitle('Current State'));
+    s.appendChild(mkCalcLine(['Human lines: ',mkSpan(String(hc),'var(--human)')]));
+    s.appendChild(mkCalcLine(['Agent lines: ',mkSpan(String(ac),'var(--agent)')]));
+    s.appendChild(mkCalcLine([mkSpan('Full calculation shown after agent runs','var(--text3)')]));
+    c.appendChild(s);
+    return;
+  }
+  const a = calcAttr();
+
+  // Prompt attributions
+  if (pAs.length > 0) {
+    const s = el('div',{style:{marginBottom:'10px'}});
+    s.appendChild(mkCalcTitle('Prompt Attributions (accumulated)'));
+    pAs.forEach((pa,i) => {
+      const pf = Object.entries(pa.perFile).map(([f,n])=>f+':'+n).join(', ');
+      s.appendChild(mkCalcLine(['PA #'+(i+1)+': ',mkSpan('+'+pa.userAdded,'var(--human)'),' user lines',pf?mkSpan(' ('+pf+')','var(--text3)'):null]));
+    });
+    c.appendChild(s);
+  }
+
+  // Steps
+  const s1 = el('div',{style:{marginBottom:'10px'}});
+  s1.appendChild(mkCalcTitle('Step 1: base \u2192 shadow diff'));
+  s1.appendChild(mkCalcLine(['Total in shadow: ',mkSpan(String(a.b2s),'var(--text)'), ' lines ',mkSpan('('+a.shA+' agent + '+a.shH+' human baked in)','var(--text3)')]));
+  c.appendChild(s1);
+
+  const s2 = el('div',{style:{marginBottom:'10px'}});
+  s2.appendChild(mkCalcTitle('Step 2: Isolate agent work'));
+  s2.appendChild(mkCalcLine(['Agent = ',mkSpan(String(a.b2s),'var(--text)'),' ',mkSpan('\u2212','var(--text3)'),' ',mkSpan(String(a.accU),'var(--human)'),' accumulated user ',mkSpan('=','var(--text3)'),' ',mkSpan(String(a.tAgentAdded),'var(--agent)')]));
+  c.appendChild(s2);
+
+  const s3 = el('div',{style:{marginBottom:'10px'}});
+  s3.appendChild(mkCalcTitle('Step 3: shadow \u2192 head (post-checkpoint)'));
+  s3.appendChild(mkCalcLine(['User added: ',mkSpan('+'+a.postUA,'var(--human)'),', removed: ',mkSpan(String(a.postUR),'var(--removed)')]));
+  c.appendChild(s3);
+
+  if (a.postUR > 0) {
+    const s4 = el('div',{style:{marginBottom:'10px'}});
+    s4.appendChild(mkCalcTitle('Step 4: LIFO self-modification'));
+    for (const [f,r] of Object.entries(a.postURPF)) {
+      const ua = a.accPF[f]||0;
+      s4.appendChild(mkCalcLine([f+': removed ',mkSpan(String(r),'var(--removed)'),', user prior adds ',mkSpan(String(ua),'var(--human)'),' \u2192 selfMod=min('+r+','+ua+')=',mkSpan(String(Math.min(r,ua)),'var(--text)')]));
+    }
+    s4.appendChild(mkCalcLine(['Modified agent lines: ',mkSpan(String(a.hMA),'var(--text)')]));
+    c.appendChild(s4);
+  }
+
+  const s5 = el('div',{style:{marginBottom:'10px'}});
+  s5.appendChild(mkCalcTitle('Step 5: Final calculation'));
+  s5.appendChild(mkCalcLine(['Agent in commit: ',mkSpan(String(a.aInC),'var(--agent)'),' ',mkSpan('= '+a.tAgentAdded+' \u2212 '+a.pUR+' removed \u2212 '+a.hMA+' modified','var(--text3)')]));
+  s5.appendChild(mkCalcLine(['Pure user added: ',mkSpan(String(a.pUA),'var(--human)')]));
+  s5.appendChild(mkCalcLine(['Total committed: ',mkSpan(String(a.tC),'var(--text)')]));
+  c.appendChild(s5);
+
+  // Result box
+  const hp = (100-a.pct).toFixed(1);
+  const rb = el('div',{style:{marginTop:'8px',padding:'12px',background:'var(--bg)',borderRadius:'5px',border:'1px solid var(--border)'}});
+  const bigPct = el('div',{style:{fontSize:'28px',fontWeight:'700',fontFamily:'var(--mono)'}});
+  bigPct.appendChild(mkSpan(a.pct.toFixed(1)+'%','var(--agent)'));
+  bigPct.appendChild(mkSpan(' / ','var(--text3)'));
+  bigPct.appendChild(mkSpan(hp+'%','var(--human)'));
+  rb.appendChild(bigPct);
+  rb.appendChild(el('div',{style:{fontSize:'10px',color:'var(--text3)',marginTop:'2px'}},'agent / human'));
+  const bar = el('div',{style:{height:'6px',borderRadius:'3px',background:'var(--bg3)',overflow:'hidden',marginTop:'6px',display:'flex'}});
+  bar.appendChild(el('div',{style:{background:'var(--agent)',width:a.pct+'%',transition:'width 0.4s'}}));
+  bar.appendChild(el('div',{style:{background:'var(--human)',width:hp+'%',transition:'width 0.4s'}}));
+  rb.appendChild(bar);
+  c.appendChild(rb);
+}
+
+function mkCalcTitle(text) {
+  return el('div',{style:{color:'var(--accent)',fontWeight:'600',marginBottom:'2px'}},text);
+}
+function mkCalcLine(parts) {
+  const d = el('div',{style:{color:'var(--text2)',paddingLeft:'14px'}});
+  parts.forEach(p => { if (p) { if (typeof p === 'string') d.appendChild(document.createTextNode(p)); else d.appendChild(p); } });
+  return d;
+}
+function mkSpan(text, color) {
+  return el('span',{style:{color:color}},text);
+}
+
+function renderTrees() {
+  const las = lastAgentStep(), st = P[S.preset].steps[S.step];
+  const bhl = S.step===0, shl = st.g==='a', hhl = st.l.toLowerCase().includes('commit')||st.g==='h';
+
+  $('treeCallout').textContent = 'Attribution compares three git trees: baseTree (session start), shadowTree (last checkpoint on shadow branch), and headTree (worktree at commit). The shadow branch captures agent work + any user edits baked into checkpoints.';
+
+  const c = $('treeDia'); clear(c);
+  [{label:'baseTree',sub:'Session start',hl:bhl},{arrow:true,text:'agent work +\nbaked-in user edits'},{label:'shadowTree',sub:'Last checkpoint',hl:shl,dim:las<0},{arrow:true,text:'post-checkpoint\nuser edits'},{label:'headTree',sub:'Worktree / commit',hl:hhl}].forEach(item => {
+    if (item.arrow) {
+      const d = el('div',{style:{textAlign:'center'}});
+      d.appendChild(el('div',{style:{color:'var(--text3)',fontSize:'18px'}},'\u2192'));
+      d.appendChild(el('div',{style:{fontSize:'9px',color:'var(--text3)',textAlign:'center',maxWidth:'90px',whiteSpace:'pre-wrap'}},item.text));
+      c.appendChild(d);
+    } else {
+      const d = el('div',{style:{textAlign:'center'}});
+      const box = el('div',{style:{padding:'8px 16px',borderRadius:'6px',border:'2px solid '+(item.hl?'var(--accent)':'var(--border)'),fontFamily:'var(--mono)',fontSize:'12px',marginBottom:'3px',boxShadow:item.hl?'0 0 10px rgba(210,168,255,0.2)':'none',opacity:item.dim?'0.3':'1'}},item.label);
+      d.appendChild(box);
+      d.appendChild(el('div',{style:{fontSize:'9px',color:'var(--text3)'}},item.sub));
+      c.appendChild(d);
+    }
+  });
+
+  const td = $('treeDiffs'); clear(td);
+  if (las < 0) {
+    td.appendChild(el('div',{style:{color:'var(--text3)',textAlign:'center'}},'No checkpoint yet'));
+    return;
+  }
+  const a = calcAttr();
+
+  const d1 = el('div',{style:{marginBottom:'10px'}});
+  d1.appendChild(mkCalcTitle('base \u2192 shadow'));
+  d1.appendChild(mkCalcLine([mkSpan(String(a.shA),'var(--agent)'),' agent + ',mkSpan(String(a.shH),'var(--human)'),' human = ',mkSpan(String(a.b2s),'var(--text)'),' total']));
+  td.appendChild(d1);
+
+  const d2 = el('div',{style:{marginBottom:'10px'}});
+  d2.appendChild(mkCalcTitle('shadow \u2192 head'));
+  d2.appendChild(mkCalcLine(['User: ',mkSpan('+'+a.postUA,'var(--human)'),' added, ',mkSpan(String(a.postUR),'var(--removed)'),' removed']));
+  td.appendChild(d2);
+
+  const d3 = el('div',{style:{marginBottom:'10px'}});
+  d3.appendChild(mkCalcTitle('base \u2192 head (final)'));
+  d3.appendChild(mkCalcLine([mkSpan(String(a.aInC),'var(--agent)'),' agent + ',mkSpan(String(a.pUA),'var(--human)'),' human = ',mkSpan(String(a.tC),'var(--text)'),' net']));
+  td.appendChild(d3);
+}
+
+function renderLIFO() {
+  $('lifoCallout').textContent = 'When a user removes lines, who originally wrote them? The CLI uses a LIFO heuristic: assume users modify their own recent additions first. Click lines below to "remove" them and see how attribution changes.';
+
+  const allLines = [
+    {t:'func main() {',o:'base',id:0},{t:'    name := "world"',o:'human',id:1},{t:'    greeting := "hello"',o:'human',id:2},
+    {t:'    msg := greeting + " " + name',o:'human',id:3},{t:'    fmt.Println(msg)',o:'human',id:4},
+    {t:'    if err := validate(msg); err != nil {',o:'agent',id:5},{t:'        log.Fatal(err)',o:'agent',id:6},
+    {t:'    }',o:'agent',id:7},{t:'    result := process(msg)',o:'agent',id:8},{t:'    fmt.Println(result)',o:'agent',id:9},
+    {t:'}',o:'base',id:10}
+  ];
+  const hTotal = allLines.filter(l=>l.o==='human').length;
+  const aTotal = allLines.filter(l=>l.o==='agent').length;
+
+  // Lines panel
+  const lp = $('lifoLinesPanel'); clear(lp);
+  lp.appendChild(el('div',{style:{fontSize:'11px',marginBottom:'6px',color:'var(--text2)',fontWeight:'600'}},'main.go \u2014 Click lines to remove'));
+  allLines.filter(l=>l.o!=='base').forEach(l => {
+    const struck = S.lifoRm.has(l.id);
+    const bg = l.o==='human'?'var(--human-bg)':'var(--agent-bg)';
+    const chipColor = l.o==='human'?'var(--human)':'var(--agent)';
+    const chip = el('span',{style:{fontSize:'8px',padding:'1px 4px',borderRadius:'2px',fontWeight:'700',background:l.o==='human'?'var(--human-bg)':'var(--agent-bg)',color:chipColor}},l.o==='human'?'H':'A');
+    const row = el('div',{
+      style:{display:'flex',alignItems:'center',gap:'6px',padding:'3px 6px',borderRadius:'3px',marginBottom:'2px',fontFamily:'var(--mono)',fontSize:'11px',cursor:'pointer',background:bg,textDecoration:struck?'line-through':'none',opacity:struck?'0.3':'1'},
+      onclick:()=>togLifo(l.id)
+    },[chip, el('span',null,l.t)]);
+    lp.appendChild(row);
+  });
+
+  // Calculations
+  const rmH = allLines.filter(l=>l.o==='human'&&S.lifoRm.has(l.id)).length;
+  const rmA = allLines.filter(l=>l.o==='agent'&&S.lifoRm.has(l.id)).length;
+  const tot = rmH + rmA;
+  const selfLIFO = Math.min(tot, hTotal);
+  const agentModLIFO = Math.max(0, tot - selfLIFO);
+
+  // Result panel
+  const rp = $('lifoResultPanel'); clear(rp);
+  rp.appendChild(el('div',{style:{fontSize:'11px',marginBottom:'6px',color:'var(--text2)',fontWeight:'600'}},'LIFO Attribution Impact'));
+  const r = el('div',{style:{fontFamily:'var(--mono)',fontSize:'10px',lineHeight:'1.7',whiteSpace:'pre-wrap',padding:'8px',background:'var(--bg2)',borderRadius:'5px'}});
+  const addLine = (parts) => { const d = el('div'); parts.forEach(p=>{if(typeof p==='string')d.appendChild(document.createTextNode(p));else d.appendChild(p);}); r.appendChild(d); };
+
+  addLine(['Lines removed: '+tot]);
+  addLine(['  Actually human: ',mkSpan(String(rmH),'var(--human)')]);
+  addLine(['  Actually agent: ',mkSpan(String(rmA),'var(--agent)')]);
+  addLine(['']);
+  addLine([mkSpan('LIFO estimate:','var(--accent)')]);
+  addLine(['  Self-modified: min('+tot+', '+hTotal+') = ',mkSpan(String(selfLIFO),'var(--text)')]);
+  addLine(['  Modified agent: max(0, '+tot+' - '+selfLIFO+') = ',mkSpan(String(agentModLIFO),'var(--text)')]);
+  addLine(['']);
+  const correct = agentModLIFO === rmA;
+  addLine([mkSpan(correct ? 'Correct!' : 'Off by '+Math.abs(agentModLIFO-rmA)+' (actual agent mod: '+rmA+')', correct?'var(--agent)':'var(--removed)')]);
+  rp.appendChild(r);
+
+  // With tracking
+  const aSurv = aTotal - agentModLIFO, hRem = hTotal - rmH;
+  const tWith = aSurv + hRem, pWith = tWith > 0 ? (aSurv/tWith*100).toFixed(1) : '0.0';
+
+  const wp = $('lifoWithPanel'); clear(wp);
+  wp.appendChild(el('div',{style:{fontSize:'11px',marginBottom:'6px',color:'var(--agent)',fontWeight:'600'}},'With Per-File Tracking (actual)'));
+  const wr = el('div',{style:{fontFamily:'var(--mono)',fontSize:'10px',lineHeight:'1.7',whiteSpace:'pre-wrap',padding:'8px',background:'var(--bg2)',borderRadius:'5px'}});
+  const addWLine = (parts) => { const d = el('div'); parts.forEach(p=>{if(typeof p==='string')d.appendChild(document.createTextNode(p));else d.appendChild(p);}); wr.appendChild(d); };
+  addWLine(['Agent surviving: ',mkSpan(aSurv+'/'+aTotal,'var(--agent)')]);
+  addWLine(['Human remaining: ',mkSpan(hRem+'/'+hTotal,'var(--human)')]);
+  addWLine(['Total: ',mkSpan(String(tWith),'var(--text)')]);
+  addWLine([mkSpan('Agent: '+pWith+'%','var(--agent)')]);
+  const bar1 = el('div',{style:{height:'6px',borderRadius:'3px',background:'var(--bg3)',overflow:'hidden',marginTop:'6px',display:'flex'}});
+  bar1.appendChild(el('div',{style:{background:'var(--agent)',width:pWith+'%'}}));
+  bar1.appendChild(el('div',{style:{background:'var(--human)',width:(100-parseFloat(pWith))+'%'}}));
+  wr.appendChild(bar1);
+  wp.appendChild(wr);
+
+  // Without tracking
+  const naiveAMod = tot, aSurvN = Math.max(0, aTotal - naiveAMod);
+  const tWo = aSurvN + hRem, pWo = tWo > 0 ? (aSurvN/tWo*100).toFixed(1) : '0.0';
+
+  const wop = $('lifoWithoutPanel'); clear(wop);
+  wop.appendChild(el('div',{style:{fontSize:'11px',marginBottom:'6px',color:'var(--removed)',fontWeight:'600'}},'Without Per-File Tracking (naive)'));
+  const wor = el('div',{style:{fontFamily:'var(--mono)',fontSize:'10px',lineHeight:'1.7',whiteSpace:'pre-wrap',padding:'8px',background:'var(--bg2)',borderRadius:'5px'}});
+  const addWoLine = (parts) => { const d = el('div'); parts.forEach(p=>{if(typeof p==='string')d.appendChild(document.createTextNode(p));else d.appendChild(p);}); wor.appendChild(d); };
+  addWoLine(['Agent surviving: ',mkSpan(aSurvN+'/'+aTotal,'var(--agent)'),' ',mkSpan('(over-penalized)','var(--removed)')]);
+  addWoLine(['Human remaining: ',mkSpan(hRem+'/'+hTotal,'var(--human)')]);
+  addWoLine(['Total: ',mkSpan(String(tWo),'var(--text)')]);
+  addWoLine([mkSpan('Agent: '+pWo+'%','var(--removed)')]);
+  const bar2 = el('div',{style:{height:'6px',borderRadius:'3px',background:'var(--bg3)',overflow:'hidden',marginTop:'6px',display:'flex'}});
+  bar2.appendChild(el('div',{style:{background:'var(--agent)',width:pWo+'%'}}));
+  bar2.appendChild(el('div',{style:{background:'var(--human)',width:(100-parseFloat(pWo))+'%'}}));
+  wor.appendChild(bar2);
+  wor.appendChild(el('div',{style:{marginTop:'6px',color:'var(--text3)',fontSize:'9px'}},'Naive approach: ALL removals penalize agent, even when user edited their own code.'));
+  wop.appendChild(wor);
+}
+
+function updatePrompt() {
+  const p = P[S.preset], st = p.steps[S.step], las = lastAgentStep();
+  const parts = ['Entire CLI attribution: three-tree model (baseTree, shadowTree, headTree).'];
+  parts.push('Scenario: "'+p.name+'" - '+p.desc+'.');
+  parts.push('Step: "'+st.l+'" ('+String(S.step+1)+'/'+p.steps.length+').');
+  if (las >= 0) {
+    const a = calcAttr();
+    parts.push('Agent: '+a.aInC+' lines ('+a.pct.toFixed(1)+'%), Human: '+a.pUA+' lines ('+(100-a.pct).toFixed(1)+'%).');
+    if (a.selfMod > 0) parts.push('LIFO: '+a.selfMod+' self-modifications detected (user editing own code).');
+    if (Object.keys(a.accPF).length > 1) parts.push('Per-file: '+Object.entries(a.accPF).map(([f,n])=>f+':'+n).join(', ')+'.');
+  }
+  parts.push('Key fn: CalculateAttributionWithAccumulated() in manual_commit_attribution.go');
+  $('promptOut').textContent = parts.join('\n');
+}
+
+// ── Actions ──────────────────────────────────────────────
+function selPreset(k) { S.preset=k; S.step=0; S.file=Object.keys(P[k].files)[0]; S.lifoRm=new Set(); simTo(0); render(); }
+function goTo(i) { S.step=i; simTo(i); render(); }
+function next() { if(S.step<P[S.preset].steps.length-1) goTo(S.step+1); }
+function prev() { if(S.step>0) goTo(S.step-1); }
+function selFile(f) { S.file=f; render(); }
+function togLifo(id) { if(S.lifoRm.has(id))S.lifoRm.delete(id);else S.lifoRm.add(id); renderLIFO(); updatePrompt(); }
+
+$('copyBtn').addEventListener('click', function() {
+  navigator.clipboard.writeText($('promptOut').textContent);
+  this.textContent = 'Copied!';
+  setTimeout(() => { this.textContent = 'Copy'; }, 1500);
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key==='ArrowRight'||e.key==='ArrowDown') { e.preventDefault(); next(); }
+  if (e.key==='ArrowLeft'||e.key==='ArrowUp') { e.preventDefault(); prev(); }
+  if (e.key>='1'&&e.key<='5') { const ks=Object.keys(P); if(parseInt(e.key)-1<ks.length) selPreset(ks[parseInt(e.key)-1]); }
+});
+
+// ── Init ─────────────────────────────────────────────────
+simTo(0);
+render();
+</script>
+</body>
+</html>
