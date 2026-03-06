@@ -25,7 +25,7 @@ func main() {
 		cancel()
 	}()
 
-	// Create and execute root command
+	// Initialize and run the root CLI command
 	rootCmd := cli.NewRootCmd()
 	err := rootCmd.ExecuteContext(ctx)
 
