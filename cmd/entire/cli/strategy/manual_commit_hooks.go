@@ -1490,8 +1490,18 @@ func (s *ManualCommitStrategy) resolveFilesTouched(ctx context.Context, state *S
 			}
 		}
 		sort.Strings(result)
+		logging.Debug(logCtx, "resolveFilesTouched: using hook-tracked files",
+			slog.String("session_id", state.SessionID),
+			slog.Int("from_state", len(state.FilesTouched)),
+			slog.Int("from_tracking_file", len(tracked)),
+			slog.Int("merged", len(result)),
+		)
 		return result
 	}
+
+	logging.Debug(logCtx, "resolveFilesTouched: no hook-tracked files, falling back to transcript extraction",
+		slog.String("session_id", state.SessionID),
+	)
 
 	// Prepare transcript before extraction (e.g., OpenCode `opencode export`).
 	prepareTranscriptForState(ctx, state)
