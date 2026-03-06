@@ -62,3 +62,55 @@ func TestPostFileEdit_TracksEditedFiles(t *testing.T) {
 		}
 	}
 }
+
+// TestGeminiPostFileEdit_TracksEditedFiles tests the end-to-end flow of file
+// tracking via the Gemini CLI post-file-edit hook. Gemini hooks use the AfterTool
+// schema (tool_name + tool_input) rather than Claude Code's PostToolUse schema.
+func TestGeminiPostFileEdit_TracksEditedFiles(t *testing.T) {
+	t.Parallel()
+
+	env := NewFeatureBranchEnv(t)
+	sess := env.NewSession()
+
+	// Start session via Gemini's BeforeAgent hook (equivalent to user-prompt-submit)
+	if err := env.SimulateGeminiBeforeAgent(sess.ID); err != nil {
+		t.Fatalf("SimulateGeminiBeforeAgent failed: %v", err)
+	}
+
+	// Simulate file edits via Gemini's post-file-edit hook (AfterTool schema)
+	if err := env.SimulateGeminiPostFileEdit(GeminiPostFileEditInput{
+		SessionID:      sess.ID,
+		TranscriptPath: sess.TranscriptPath,
+		ToolName:       "write_file",
+		FilePath:       filepath.Join(env.RepoDir, "src", "app.go"),
+	}); err != nil {
+		t.Fatalf("SimulateGeminiPostFileEdit (src/app.go) failed: %v", err)
+	}
+
+	if err := env.SimulateGeminiPostFileEdit(GeminiPostFileEditInput{
+		SessionID:      sess.ID,
+		TranscriptPath: sess.TranscriptPath,
+		ToolName:       "replace",
+		FilePath:       filepath.Join(env.RepoDir, "docs", "guide.md"),
+	}); err != nil {
+		t.Fatalf("SimulateGeminiPostFileEdit (docs/guide.md) failed: %v", err)
+	}
+
+	// Verify via ReadFilesTouched (deduplicates and sorts)
+	stateDir := filepath.Join(env.RepoDir, ".git", "entire-sessions")
+	store := session.NewStateStoreWithDir(stateDir)
+	files, err := store.ReadFilesTouched(context.Background(), sess.ID)
+	if err != nil {
+		t.Fatalf("ReadFilesTouched failed: %v", err)
+	}
+
+	expected := []string{"docs/guide.md", "src/app.go"}
+	if len(files) != len(expected) {
+		t.Fatalf("Expected %d tracked files, got %d: %v", len(expected), len(files), files)
+	}
+	for i, want := range expected {
+		if files[i] != want {
+			t.Errorf("Tracked file [%d]: want %q, got %q", i, want, files[i])
+		}
+	}
+}

@@ -1458,7 +1458,8 @@ func (s *ManualCommitStrategy) sessionHasNewContentFromLiveTranscript(ctx contex
 }
 
 // resolveFilesTouched returns the file list for a session.
-// Prefers hook-populated state.FilesTouched, falls back to transcript extraction.
+// Merges hook-populated state.FilesTouched with the session's .files tracking file,
+// falling back to transcript extraction when neither has data.
 // All call sites that need "what files did the agent touch?" should use this.
 //
 // Handles PrepareTranscript internally before falling back to extraction,
@@ -1514,6 +1515,11 @@ func (s *ManualCommitStrategy) resolveFilesTouched(ctx context.Context, state *S
 func (s *ManualCommitStrategy) clearFilesTracking(ctx context.Context, sessionID string) {
 	store, storeErr := s.getStateStore(ctx)
 	if storeErr != nil {
+		logCtx := logging.WithComponent(ctx, "checkpoint")
+		logging.Debug(logCtx, "clearFilesTracking: could not get state store (non-critical)",
+			slog.String("session_id", sessionID),
+			slog.String("error", storeErr.Error()),
+		)
 		return
 	}
 	if clearErr := store.ClearFilesTouched(ctx, sessionID); clearErr != nil {

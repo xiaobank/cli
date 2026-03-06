@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/logging"
 )
 
 // Compile-time interface assertions for new interfaces.
@@ -38,7 +40,7 @@ func (g *GeminiCLIAgent) HookNames() []string {
 
 // ParseHookEvent translates a Gemini CLI hook into a normalized lifecycle Event.
 // Returns nil if the hook has no lifecycle significance (e.g., pass-through hooks).
-func (g *GeminiCLIAgent) ParseHookEvent(_ context.Context, hookName string, stdin io.Reader) (*agent.Event, error) {
+func (g *GeminiCLIAgent) ParseHookEvent(ctx context.Context, hookName string, stdin io.Reader) (*agent.Event, error) {
 	switch hookName {
 	case HookNameSessionStart:
 		return g.parseSessionStart(stdin)
@@ -53,7 +55,7 @@ func (g *GeminiCLIAgent) ParseHookEvent(_ context.Context, hookName string, stdi
 	case HookNameBeforeModel:
 		return g.parseBeforeModel(stdin)
 	case HookNamePostFileEdit:
-		return g.parseFileEdit(stdin)
+		return g.parseFileEdit(ctx, stdin)
 	case HookNameBeforeTool, HookNameAfterTool,
 		HookNameAfterModel, HookNameBeforeToolSelection, HookNameNotification:
 		// Acknowledged hooks with no lifecycle action
@@ -180,8 +182,8 @@ func (g *GeminiCLIAgent) parseBeforeModel(stdin io.Reader) (*agent.Event, error)
 	}, nil
 }
 
-// fileEditToolInput extracts file_path from Gemini CLI tool input.
-// Gemini tools use file_path, path, or filename depending on the tool.
+// fileEditToolInput extracts the edited file's path from Gemini CLI tool input.
+// Different tools use different field names: file_path, path, or filename.
 type fileEditToolInput struct {
 	FilePath string `json:"file_path"`
 	Path     string `json:"path"`
@@ -199,7 +201,7 @@ func (f fileEditToolInput) filePath() string {
 	return f.Filename
 }
 
-func (g *GeminiCLIAgent) parseFileEdit(stdin io.Reader) (*agent.Event, error) {
+func (g *GeminiCLIAgent) parseFileEdit(ctx context.Context, stdin io.Reader) (*agent.Event, error) {
 	raw, err := agent.ReadAndParseHookInput[afterToolHookInputRaw](stdin)
 	if err != nil {
 		return nil, err
@@ -207,7 +209,11 @@ func (g *GeminiCLIAgent) parseFileEdit(stdin io.Reader) (*agent.Event, error) {
 
 	var toolInput fileEditToolInput
 	if err := json.Unmarshal(raw.ToolInput, &toolInput); err != nil {
-		return nil, nil //nolint:nilnil,nilerr // tool_input doesn't match expected schema
+		logCtx := logging.WithComponent(ctx, "agent.geminicli")
+		logging.Debug(logCtx, "parseFileEdit: unexpected tool_input format",
+			slog.String("error", err.Error()),
+		)
+		return nil, nil //nolint:nilnil // skip event but don't block agent
 	}
 	path := toolInput.filePath()
 	if path == "" {

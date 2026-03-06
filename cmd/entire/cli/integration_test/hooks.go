@@ -408,7 +408,7 @@ func (env *TestEnv) SimulatePostTodo(input PostTodoInput) error {
 	return runner.SimulatePostTodo(input)
 }
 
-// PostFileEditInput contains the input for PostToolUse[Write/Edit] hook.
+// PostFileEditInput contains the input for the post-file-edit hook.
 type PostFileEditInput struct {
 	SessionID      string
 	TranscriptPath string
@@ -416,7 +416,7 @@ type PostFileEditInput struct {
 	FilePath       string
 }
 
-// SimulatePostFileEdit simulates the PostToolUse[Write/Edit] hook.
+// SimulatePostFileEdit simulates the post-file-edit hook (file-modifying tool completion).
 func (r *HookRunner) SimulatePostFileEdit(input PostFileEditInput) error {
 	r.T.Helper()
 
@@ -820,6 +820,37 @@ func (env *TestEnv) SimulateGeminiAfterAgent(sessionID, transcriptPath string) e
 	env.T.Helper()
 	runner := NewGeminiHookRunner(env.RepoDir, env.GeminiProjectDir, env.T)
 	return runner.SimulateGeminiAfterAgent(sessionID, transcriptPath)
+}
+
+// GeminiPostFileEditInput contains the input for the Gemini post-file-edit hook.
+type GeminiPostFileEditInput struct {
+	SessionID      string
+	TranscriptPath string
+	ToolName       string
+	FilePath       string
+}
+
+// SimulateGeminiPostFileEdit simulates the post-file-edit hook for Gemini CLI.
+func (r *GeminiHookRunner) SimulateGeminiPostFileEdit(input GeminiPostFileEditInput) error {
+	r.T.Helper()
+
+	hookInput := map[string]interface{}{
+		"session_id":      input.SessionID,
+		"transcript_path": input.TranscriptPath,
+		"tool_name":       input.ToolName,
+		"tool_input": map[string]string{
+			"file_path": input.FilePath,
+		},
+	}
+
+	return r.runGeminiHookWithInput("post-file-edit", hookInput)
+}
+
+// SimulateGeminiPostFileEdit is a convenience method on TestEnv.
+func (env *TestEnv) SimulateGeminiPostFileEdit(input GeminiPostFileEditInput) error {
+	env.T.Helper()
+	runner := NewGeminiHookRunner(env.RepoDir, env.GeminiProjectDir, env.T)
+	return runner.SimulateGeminiPostFileEdit(input)
 }
 
 // SimulateGeminiSessionEnd is a convenience method on TestEnv.

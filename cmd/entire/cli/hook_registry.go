@@ -80,7 +80,7 @@ func getHookType(hookName string) string {
 	case claudecode.HookNamePreTask, claudecode.HookNamePostTask, claudecode.HookNamePostTodo:
 		return "subagent"
 	case geminicli.HookNameBeforeTool, geminicli.HookNameAfterTool,
-		claudecode.HookNamePostFileEdit: // same value for all agents: "post-file-edit"
+		claudecode.HookNamePostFileEdit: // all agents use "post-file-edit"; only one constant needed (Go disallows duplicate case values)
 		return "tool"
 	default:
 		return "agent"

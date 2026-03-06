@@ -121,8 +121,8 @@ type Event struct {
 	ModifiedFiles []string
 
 	// FilePath is the path to a file that was edited (for FileEdit events).
-	// Populated by agents from tool_input.file_path. May be absolute — the
-	// framework normalizes to repo-relative before persisting.
+	// Populated by agents from tool input (field name varies by agent).
+	// May be absolute — the framework normalizes to repo-relative before persisting.
 	FilePath string
 
 	// ResponseMessage is an optional message to display to the user via the agent.

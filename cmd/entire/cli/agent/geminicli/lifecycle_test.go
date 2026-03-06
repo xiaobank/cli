@@ -252,6 +252,31 @@ func TestParseHookEvent_FileEdit_FallbackPath(t *testing.T) {
 	}
 }
 
+func TestParseHookEvent_FileEdit_FallbackFilename(t *testing.T) {
+	t.Parallel()
+
+	ag := &GeminiCLIAgent{}
+	// Some Gemini tools use "filename" instead of "file_path" or "path"
+	input := `{
+		"session_id": "gem-sess-4",
+		"transcript_path": "/tmp/gem.json",
+		"tool_name": "save_file",
+		"tool_input": {"filename": "config.yaml", "content": "key: value"}
+	}`
+
+	event, err := ag.ParseHookEvent(context.Background(), HookNamePostFileEdit, strings.NewReader(input))
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if event == nil {
+		t.Fatal("expected event, got nil")
+	}
+	if event.FilePath != "config.yaml" {
+		t.Errorf("expected file_path 'config.yaml', got %q", event.FilePath)
+	}
+}
+
 func TestParseHookEvent_FileEdit_NoFilePath(t *testing.T) {
 	t.Parallel()
 
