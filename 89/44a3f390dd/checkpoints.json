@@ -3,6 +3,12 @@
     {
       "checkpoint_id": "d7ebe011b701",
       "commit_sha": "f4bd5bcac36f8b1490b83562eec186fd7de4b6a2",
+      "created_at": "2026-03-06T11:50:06.255797Z",
+      "summary": "they all seem reasonable, let's do them all"
+    },
+    {
+      "checkpoint_id": "d7ebe011b701",
+      "commit_sha": "f4bd5bcac36f8b1490b83562eec186fd7de4b6a2",
       "created_at": "2026-03-06T11:50:05.808802Z",
       "summary": "let's create a draft pr"
     },
