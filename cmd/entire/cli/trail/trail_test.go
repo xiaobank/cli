@@ -105,11 +105,10 @@ func TestStatus_IsValid(t *testing.T) {
 		valid  bool
 	}{
 		{StatusDraft, true},
-		{StatusOpen, true},
-		{StatusInProgress, true},
-		{StatusInReview, true},
-		{StatusMerged, true},
-		{StatusClosed, true},
+		{StatusActive, true},
+		{StatusValidating, true},
+		{StatusDone, true},
+		{StatusAbandoned, true},
 		{"invalid", false},
 		{"", false},
 	}
@@ -124,19 +123,57 @@ func TestStatus_IsValid(t *testing.T) {
 	}
 }
 
+func TestStatus_OldStatusesInvalid(t *testing.T) {
+	t.Parallel()
+
+	oldStatuses := []Status{"open", "in_progress", "in_review", "merged", "closed"}
+	for _, s := range oldStatuses {
+		t.Run(string(s), func(t *testing.T) {
+			t.Parallel()
+			if s.IsValid() {
+				t.Errorf("old status %q should no longer be valid", s)
+			}
+		})
+	}
+}
+
 func TestValidStatuses(t *testing.T) {
 	t.Parallel()
 
 	statuses := ValidStatuses()
-	if len(statuses) != 6 {
-		t.Errorf("expected 6 statuses, got %d", len(statuses))
+	if len(statuses) != 5 {
+		t.Errorf("expected 5 statuses, got %d", len(statuses))
 	}
 	// Verify lifecycle order
-	expected := []Status{StatusDraft, StatusOpen, StatusInProgress, StatusInReview, StatusMerged, StatusClosed}
+	expected := []Status{StatusDraft, StatusActive, StatusValidating, StatusDone, StatusAbandoned}
 	for i, s := range expected {
 		if statuses[i] != s {
 			t.Errorf("status[%d] = %q, want %q", i, statuses[i], s)
 		}
+	}
+}
+
+func TestBranchStatus_IsValid(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		status BranchStatus
+		valid  bool
+	}{
+		{BranchOpen, true},
+		{BranchMerged, true},
+		{BranchDiscarded, true},
+		{"invalid", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.status), func(t *testing.T) {
+			t.Parallel()
+			if got := tt.status.IsValid(); got != tt.valid {
+				t.Errorf("BranchStatus(%q).IsValid() = %v, want %v", tt.status, got, tt.valid)
+			}
+		})
 	}
 }
 

@@ -143,10 +143,10 @@ func runTrailListAll(w io.Writer, statusFilter string, jsonOutput, showAll bool)
 		}
 		trails = filtered
 	} else if !showAll {
-		// By default, hide merged and closed trails
+		// By default, hide done and abandoned trails
 		var filtered []*trail.Metadata
 		for _, t := range trails {
-			if t.Status != trail.StatusMerged && t.Status != trail.StatusClosed {
+			if t.Status != trail.StatusDone && t.Status != trail.StatusAbandoned {
 				filtered = append(filtered, t)
 			}
 		}
@@ -407,11 +407,11 @@ func runTrailUpdate(w io.Writer, statusStr, title, body, branch string, labelAdd
 	noFlags := statusStr == "" && title == "" && body == "" && labelAdd == nil && labelRemove == nil
 	if noFlags {
 		// Build status options with current value as default.
-		// Exclude "merged" and "closed" unless the trail is already in that status
+		// Exclude "done" and "abandoned" unless the trail is already in that status
 		// (otherwise the select would silently reset to the first option).
 		var statusOptions []huh.Option[string]
 		for _, s := range trail.ValidStatuses() {
-			if (s == trail.StatusMerged || s == trail.StatusClosed) && s != metadata.Status {
+			if (s == trail.StatusDone || s == trail.StatusAbandoned) && s != metadata.Status {
 				continue
 			}
 			label := string(s)
@@ -517,10 +517,10 @@ func runTrailCreateInteractive(title, body, branch, statusStr *string) error {
 	suggested := slugifyTitle(*title)
 	*branch = suggested
 
-	// Build status options, excluding done/closed
+	// Build status options, excluding done/abandoned
 	var statusOptions []huh.Option[string]
 	for _, s := range trail.ValidStatuses() {
-		if s == trail.StatusMerged || s == trail.StatusClosed {
+		if s == trail.StatusDone || s == trail.StatusAbandoned {
 			continue
 		}
 		statusOptions = append(statusOptions, huh.NewOption(string(s), string(s)))

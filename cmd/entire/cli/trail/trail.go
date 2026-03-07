@@ -75,22 +75,20 @@ type Status string
 
 const (
 	StatusDraft      Status = "draft"
-	StatusOpen       Status = "open"
-	StatusInProgress Status = "in_progress"
-	StatusInReview   Status = "in_review"
-	StatusMerged     Status = "merged"
-	StatusClosed     Status = "closed"
+	StatusActive     Status = "active"
+	StatusValidating Status = "validating"
+	StatusDone       Status = "done"
+	StatusAbandoned  Status = "abandoned"
 )
 
 // ValidStatuses returns all valid trail statuses in lifecycle order.
 func ValidStatuses() []Status {
 	return []Status{
 		StatusDraft,
-		StatusOpen,
-		StatusInProgress,
-		StatusInReview,
-		StatusMerged,
-		StatusClosed,
+		StatusActive,
+		StatusValidating,
+		StatusDone,
+		StatusAbandoned,
 	}
 }
 
@@ -139,6 +137,70 @@ const (
 type Reviewer struct {
 	Login  string         `json:"login"`
 	Status ReviewerStatus `json:"status"`
+}
+
+// BranchStatus represents the status of a branch within a trail.
+type BranchStatus string
+
+const (
+	BranchOpen      BranchStatus = "open"
+	BranchMerged    BranchStatus = "merged"
+	BranchDiscarded BranchStatus = "discarded"
+)
+
+// IsValid returns true if the branch status is a recognized value.
+func (s BranchStatus) IsValid() bool {
+	switch s {
+	case BranchOpen, BranchMerged, BranchDiscarded:
+		return true
+	}
+	return false
+}
+
+// Intent describes the human intent behind a trail.
+type Intent struct {
+	Kind       string      `json:"kind"`
+	Value      string      `json:"value"`
+	Content    string      `json:"content,omitempty"`
+	Amendments []Amendment `json:"amendments,omitempty"`
+}
+
+// Amendment records a change to the trail's intent.
+type Amendment struct {
+	Description string    `json:"description"`
+	Reasoning   string    `json:"reasoning"`
+	Timestamp   time.Time `json:"timestamp"`
+}
+
+// BranchEntry represents a branch associated with a trail.
+type BranchEntry struct {
+	ID         string       `json:"id"`
+	Name       string       `json:"name"`
+	BaseBranch string       `json:"base_branch"`
+	BaseCommit string       `json:"base_commit,omitempty"`
+	Status     BranchStatus `json:"status"`
+	PR         *PRRef       `json:"pr,omitempty"`
+	AddedAt    time.Time    `json:"added_at"`
+}
+
+// PRRef holds a reference to a pull request.
+type PRRef struct {
+	Number int    `json:"number"`
+	URL    string `json:"url,omitempty"`
+}
+
+// VerificationEvent records a single verification event for a trail.
+type VerificationEvent struct {
+	Kind      string    `json:"kind"`
+	BranchID  string    `json:"branch_id,omitempty"`
+	Status    string    `json:"status"`
+	Timestamp time.Time `json:"timestamp"`
+	Details   string    `json:"details,omitempty"`
+}
+
+// Verification holds the verification events for a trail.
+type Verification struct {
+	Events []VerificationEvent `json:"events"`
 }
 
 // Metadata represents the metadata for a trail, matching the web PR format.

@@ -254,7 +254,7 @@ func TestStore_Update(t *testing.T) {
 	// Update
 	if err := store.Update(id, func(m *Metadata) {
 		m.Title = "Updated"
-		m.Status = StatusInProgress
+		m.Status = StatusActive
 		m.Labels = []string{"urgent"}
 	}); err != nil {
 		t.Fatalf("Update() error = %v", err)
@@ -268,8 +268,8 @@ func TestStore_Update(t *testing.T) {
 	if updated.Title != "Updated" {
 		t.Errorf("Read() title = %q, want %q", updated.Title, "Updated")
 	}
-	if updated.Status != StatusInProgress {
-		t.Errorf("Read() status = %q, want %q", updated.Status, StatusInProgress)
+	if updated.Status != StatusActive {
+		t.Errorf("Read() status = %q, want %q", updated.Status, StatusActive)
 	}
 	if len(updated.Labels) != 1 || updated.Labels[0] != "urgent" {
 		t.Errorf("Read() labels = %v, want [urgent]", updated.Labels)
@@ -385,7 +385,7 @@ func TestStore_AddCheckpointPreservesOtherFields(t *testing.T) {
 		Base:      "main",
 		Title:     "Preservation test",
 		Body:      "Verify AddCheckpoint doesn't corrupt other fields",
-		Status:    StatusInProgress,
+		Status:    StatusActive,
 		Author:    "tester",
 		Assignees: []string{"alice"},
 		Labels:    []string{"important"},
@@ -425,8 +425,8 @@ func TestStore_AddCheckpointPreservesOtherFields(t *testing.T) {
 	if gotMeta.Body != "Verify AddCheckpoint doesn't corrupt other fields" {
 		t.Errorf("metadata body changed: got %q", gotMeta.Body)
 	}
-	if gotMeta.Status != StatusInProgress {
-		t.Errorf("metadata status changed: got %q, want %q", gotMeta.Status, StatusInProgress)
+	if gotMeta.Status != StatusActive {
+		t.Errorf("metadata status changed: got %q, want %q", gotMeta.Status, StatusActive)
 	}
 	if len(gotMeta.Assignees) != 1 || gotMeta.Assignees[0] != "alice" {
 		t.Errorf("metadata assignees changed: got %v", gotMeta.Assignees)
