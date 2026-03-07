@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
@@ -198,13 +199,14 @@ func runTrailListAll(w io.Writer, statusFilter string, jsonOutput, showAll bool)
 
 func newTrailCreateCmd() *cobra.Command {
 	var title, body, base, branch, status string
+	var intentFile, intentIssue, intentInline string
 	var checkout bool
 
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a trail for the current or a new branch",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runTrailCreate(cmd, title, body, base, branch, status, checkout)
+			return runTrailCreate(cmd, title, body, base, branch, status, intentFile, intentIssue, intentInline, checkout)
 		},
 	}
 
@@ -214,12 +216,15 @@ func newTrailCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&branch, "branch", "", "Branch for the trail (defaults to current branch)")
 	cmd.Flags().StringVar(&status, "status", "", "Initial status (defaults to draft)")
 	cmd.Flags().BoolVar(&checkout, "checkout", false, "Check out the branch after creating it")
+	cmd.Flags().StringVar(&intentFile, "intent-file", "", "Path to spec/intent file")
+	cmd.Flags().StringVar(&intentIssue, "intent-issue", "", "Issue ID (e.g., LIN-123)")
+	cmd.Flags().StringVar(&intentInline, "intent", "", "Inline intent description")
 
 	return cmd
 }
 
 //nolint:cyclop // sequential steps for creating a trail — splitting would obscure the flow
-func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr string, checkout bool) error {
+func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr, intentFile, intentIssue, intentInline string, checkout bool) error {
 	w := cmd.OutOrStdout()
 	errW := cmd.ErrOrStderr()
 
@@ -300,11 +305,31 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr str
 	// Get author (GitHub username, falls back to git user.name)
 	authorName := getTrailAuthor(repo)
 
+	// Build intent from flags
+	var intent *trail.Intent
+	switch {
+	case intentFile != "":
+		cleanPath := filepath.Clean(intentFile)
+		content, readErr := os.ReadFile(cleanPath)
+		if readErr != nil {
+			return fmt.Errorf("failed to read intent file: %w", readErr)
+		}
+		intent = &trail.Intent{Kind: "file", Value: intentFile, Content: string(content)}
+	case intentIssue != "":
+		intent = &trail.Intent{Kind: "issue", Value: intentIssue}
+	case intentInline != "":
+		intent = &trail.Intent{Kind: "inline", Value: intentInline, Content: intentInline}
+	}
+
+	// Generate branch entry ID
+	entryID, err := trail.GenerateID()
+	if err != nil {
+		return fmt.Errorf("failed to generate branch entry ID: %w", err)
+	}
+
 	now := time.Now()
 	metadata := &trail.Metadata{
 		TrailID:   trailID,
-		Branch:    branch,
-		Base:      base,
 		Title:     title,
 		Body:      body,
 		Status:    trailStatus,
@@ -313,6 +338,19 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr str
 		Labels:    []string{},
 		CreatedAt: now,
 		UpdatedAt: now,
+		Intent:    intent,
+		Branches: []trail.BranchEntry{
+			{
+				ID:         entryID.String(),
+				Name:       branch,
+				BaseBranch: base,
+				Status:     trail.BranchOpen,
+				AddedAt:    now,
+			},
+		},
+		// Legacy fields for backward compat
+		Branch: branch,
+		Base:   base,
 	}
 
 	if err := store.Write(metadata, nil, nil, nil); err != nil {
