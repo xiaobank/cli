@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -629,6 +630,8 @@ func newTrailBranchCmd() *cobra.Command {
 	}
 
 	cmd.AddCommand(newTrailBranchAddCmd())
+	cmd.AddCommand(newTrailBranchSetPRCmd())
+	cmd.AddCommand(newTrailBranchDiscardCmd())
 	return cmd
 }
 
@@ -725,6 +728,103 @@ func newTrailBranchAddCmd() *cobra.Command {
 	cmd.Flags().StringVar(&baseBranch, "base", "", "Base branch for stacking (default: repository default branch)")
 	cmd.Flags().StringVar(&trailFlag, "trail", "", "Trail ID to add branch to")
 
+	return cmd
+}
+
+func newTrailBranchSetPRCmd() *cobra.Command {
+	var branchFlag string
+
+	cmd := &cobra.Command{
+		Use:   "set-pr <number>",
+		Short: "Set or replace the PR reference for a branch",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			prNumber, err := strconv.Atoi(args[0])
+			if err != nil {
+				return fmt.Errorf("invalid PR number: %w", err)
+			}
+
+			repo, err := strategy.OpenRepository(context.Background())
+			if err != nil {
+				return fmt.Errorf("failed to open repository: %w", err)
+			}
+			store := trail.NewStore(repo)
+
+			branchName := branchFlag
+			if branchName == "" {
+				branchName, err = GetCurrentBranch(context.Background())
+				if err != nil {
+					return fmt.Errorf("could not determine current branch: %w", err)
+				}
+			}
+
+			found, entry, err := store.FindByBranch(branchName)
+			if err != nil {
+				return fmt.Errorf("failed to find branch: %w", err)
+			}
+			if found == nil || entry == nil {
+				return fmt.Errorf("branch %q not found in any trail", branchName)
+			}
+
+			if err := store.Update(found.TrailID, func(m *trail.Metadata) {
+				for i := range m.Branches {
+					if m.Branches[i].ID == entry.ID {
+						m.Branches[i].PR = &trail.PRRef{Number: prNumber}
+						break
+					}
+				}
+			}); err != nil {
+				return fmt.Errorf("failed to update trail: %w", err)
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "Set PR #%d on branch %q in trail %q\n", prNumber, branchName, found.Title)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&branchFlag, "branch", "", "Branch name (default: current branch)")
+	return cmd
+}
+
+func newTrailBranchDiscardCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "discard",
+		Short: "Mark the current branch as discarded",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			repo, err := strategy.OpenRepository(context.Background())
+			if err != nil {
+				return fmt.Errorf("failed to open repository: %w", err)
+			}
+			store := trail.NewStore(repo)
+
+			branchName, err := GetCurrentBranch(context.Background())
+			if err != nil {
+				return fmt.Errorf("could not determine current branch: %w", err)
+			}
+
+			found, entry, err := store.FindByBranch(branchName)
+			if err != nil {
+				return fmt.Errorf("failed to find branch: %w", err)
+			}
+			if found == nil || entry == nil {
+				return fmt.Errorf("branch %q not found in any trail", branchName)
+			}
+
+			if err := store.Update(found.TrailID, func(m *trail.Metadata) {
+				for i := range m.Branches {
+					if m.Branches[i].ID == entry.ID {
+						m.Branches[i].Status = trail.BranchDiscarded
+						break
+					}
+				}
+			}); err != nil {
+				return fmt.Errorf("failed to update trail: %w", err)
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "Marked branch %q as discarded in trail %q\n", branchName, found.Title)
+			return nil
+		},
+	}
 	return cmd
 }
 
