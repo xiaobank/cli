@@ -17,9 +17,10 @@ import (
 )
 
 const (
-	metadataFile    = "metadata.json"
-	discussionFile  = "discussion.json"
-	checkpointsFile = "checkpoints.json"
+	metadataFile     = "metadata.json"
+	discussionFile   = "discussion.json"
+	checkpointsFile  = "checkpoints.json"
+	verificationFile = "verification.json"
 )
 
 // ErrTrailNotFound is returned when a trail cannot be found.
@@ -62,9 +63,9 @@ func (s *Store) EnsureBranch() error {
 	return nil
 }
 
-// Write writes trail metadata, discussion, and checkpoints to the entire/trails/v1 branch.
-// If checkpoints is nil, an empty checkpoints list is written.
-func (s *Store) Write(metadata *Metadata, discussion *Discussion, checkpoints *Checkpoints) error {
+// Write writes trail metadata, discussion, checkpoints, and verification to the entire/trails/v1 branch.
+// Nil arguments are written as empty defaults.
+func (s *Store) Write(metadata *Metadata, discussion *Discussion, checkpoints *Checkpoints, verification *Verification) error {
 	if metadata.TrailID.IsEmpty() {
 		return errors.New("trail ID is required")
 	}
@@ -78,8 +79,8 @@ func (s *Store) Write(metadata *Metadata, discussion *Discussion, checkpoints *C
 		return fmt.Errorf("failed to get branch ref: %w", err)
 	}
 
-	// Build blob entries for the trail's 3 files
-	trailEntries, err := s.buildTrailEntries(metadata, discussion, checkpoints)
+	// Build blob entries for the trail's files
+	trailEntries, err := s.buildTrailEntries(metadata, discussion, checkpoints, verification)
 	if err != nil {
 		return err
 	}
@@ -100,13 +101,16 @@ func (s *Store) Write(metadata *Metadata, discussion *Discussion, checkpoints *C
 	return s.commitAndUpdateRef(newTreeHash, commitHash, commitMsg)
 }
 
-// buildTrailEntries creates blob objects for a trail's 3 files and returns them as tree entries.
-func (s *Store) buildTrailEntries(metadata *Metadata, discussion *Discussion, checkpoints *Checkpoints) ([]object.TreeEntry, error) {
+// buildTrailEntries creates blob objects for a trail's files and returns them as tree entries.
+func (s *Store) buildTrailEntries(metadata *Metadata, discussion *Discussion, checkpoints *Checkpoints, verification *Verification) ([]object.TreeEntry, error) {
 	if discussion == nil {
 		discussion = &Discussion{Comments: []Comment{}}
 	}
 	if checkpoints == nil {
 		checkpoints = &Checkpoints{Checkpoints: []CheckpointRef{}}
+	}
+	if verification == nil {
+		verification = &Verification{Events: []VerificationEvent{}}
 	}
 
 	type fileSpec struct {
@@ -117,6 +121,7 @@ func (s *Store) buildTrailEntries(metadata *Metadata, discussion *Discussion, ch
 		{metadataFile, metadata},
 		{discussionFile, discussion},
 		{checkpointsFile, checkpoints},
+		{verificationFile, verification},
 	}
 
 	entries := make([]object.TreeEntry, 0, len(files))
@@ -140,14 +145,14 @@ func (s *Store) buildTrailEntries(metadata *Metadata, discussion *Discussion, ch
 }
 
 // Read reads a trail by its ID from the entire/trails/v1 branch.
-func (s *Store) Read(trailID ID) (*Metadata, *Discussion, *Checkpoints, error) {
+func (s *Store) Read(trailID ID) (*Metadata, *Discussion, *Checkpoints, *Verification, error) {
 	if err := ValidateID(string(trailID)); err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	tree, err := s.getBranchTree()
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	basePath := trailID.Path() + "/"
@@ -155,21 +160,21 @@ func (s *Store) Read(trailID ID) (*Metadata, *Discussion, *Checkpoints, error) {
 	// Read metadata
 	metadataEntry, err := tree.FindEntry(basePath + metadataFile)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("trail %s not found: %w", trailID, err)
+		return nil, nil, nil, nil, fmt.Errorf("trail %s not found: %w", trailID, err)
 	}
 	metadataBlob, err := s.repo.BlobObject(metadataEntry.Hash)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to read metadata blob: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("failed to read metadata blob: %w", err)
 	}
 	metadataReader, err := metadataBlob.Reader()
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to open metadata reader: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("failed to open metadata reader: %w", err)
 	}
 	defer metadataReader.Close()
 
 	var metadata Metadata
 	if err := json.NewDecoder(metadataReader).Decode(&metadata); err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to decode metadata: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("failed to decode metadata: %w", err)
 	}
 
 	// Read discussion (optional, may not exist yet)
@@ -202,7 +207,22 @@ func (s *Store) Read(trailID ID) (*Metadata, *Discussion, *Checkpoints, error) {
 		}
 	}
 
-	return &metadata, &discussion, &checkpoints, nil
+	// Read verification (optional, may not exist for older trails)
+	var verification Verification
+	verificationEntry, err := tree.FindEntry(basePath + verificationFile)
+	if err == nil {
+		verificationBlob, blobErr := s.repo.BlobObject(verificationEntry.Hash)
+		if blobErr == nil {
+			verificationReader, readerErr := verificationBlob.Reader()
+			if readerErr == nil {
+				//nolint:errcheck,gosec // best-effort decode of optional verification
+				json.NewDecoder(verificationReader).Decode(&verification)
+				_ = verificationReader.Close()
+			}
+		}
+	}
+
+	return &metadata, &discussion, &checkpoints, &verification, nil
 }
 
 // FindByBranch finds a trail for the given branch name.
@@ -267,7 +287,7 @@ func (s *Store) List() ([]*Metadata, error) {
 // applies the provided update function, and writes it back.
 func (s *Store) Update(trailID ID, updateFn func(*Metadata)) error {
 	// ValidateID is called by Read, no need to duplicate here
-	metadata, discussion, checkpoints, err := s.Read(trailID)
+	metadata, discussion, checkpoints, verification, err := s.Read(trailID)
 	if err != nil {
 		return fmt.Errorf("failed to read trail for update: %w", err)
 	}
@@ -275,7 +295,7 @@ func (s *Store) Update(trailID ID, updateFn func(*Metadata)) error {
 	updateFn(metadata)
 	metadata.UpdatedAt = time.Now()
 
-	return s.Write(metadata, discussion, checkpoints)
+	return s.Write(metadata, discussion, checkpoints, verification)
 }
 
 // AddCheckpoint prepends a checkpoint reference to a trail's checkpoints list (newest first).

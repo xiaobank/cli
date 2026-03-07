@@ -95,12 +95,12 @@ func TestStore_WriteAndRead(t *testing.T) {
 
 	discussion := &Discussion{Comments: []Comment{}}
 
-	if err := store.Write(metadata, discussion, nil); err != nil {
+	if err := store.Write(metadata, discussion, nil, nil); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
 
 	// Read it back
-	gotMeta, gotDisc, _, err := store.Read(trailID)
+	gotMeta, gotDisc, _, _, err := store.Read(trailID)
 	if err != nil {
 		t.Fatalf("Read() error = %v", err)
 	}
@@ -150,7 +150,7 @@ func TestStore_FindByBranch(t *testing.T) {
 			CreatedAt: now,
 			UpdatedAt: now,
 		}
-		if err := store.Write(meta, nil, nil); err != nil {
+		if err := store.Write(meta, nil, nil, nil); err != nil {
 			t.Fatalf("Write() error = %v", err)
 		}
 	}
@@ -209,7 +209,7 @@ func TestStore_List(t *testing.T) {
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	if err := store.Write(meta, nil, nil); err != nil {
+	if err := store.Write(meta, nil, nil, nil); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
 
@@ -247,7 +247,7 @@ func TestStore_Update(t *testing.T) {
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	if err := store.Write(meta, nil, nil); err != nil {
+	if err := store.Write(meta, nil, nil, nil); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
 
@@ -261,7 +261,7 @@ func TestStore_Update(t *testing.T) {
 	}
 
 	// Verify
-	updated, _, _, err := store.Read(id)
+	updated, _, _, _, err := store.Read(id)
 	if err != nil {
 		t.Fatalf("Read() error = %v", err)
 	}
@@ -301,7 +301,7 @@ func TestStore_Delete(t *testing.T) {
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	if err := store.Write(meta, nil, nil); err != nil {
+	if err := store.Write(meta, nil, nil, nil); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
 
@@ -311,7 +311,7 @@ func TestStore_Delete(t *testing.T) {
 	}
 
 	// Verify it's gone
-	_, _, _, err = store.Read(id)
+	_, _, _, _, err = store.Read(id)
 	if err == nil {
 		t.Error("Read() should fail after delete")
 	}
@@ -326,7 +326,7 @@ func TestStore_ReadNonExistent(t *testing.T) {
 		t.Fatalf("EnsureBranch() error = %v", err)
 	}
 
-	_, _, _, err := store.Read(ID("abcdef123456"))
+	_, _, _, _, err := store.Read(ID("abcdef123456"))
 	if err == nil {
 		t.Error("Read() should fail for non-existent trail")
 	}
@@ -338,13 +338,13 @@ func TestStore_ReadInvalidID(t *testing.T) {
 	store := NewStore(repo)
 
 	// Invalid format: too short
-	_, _, _, err := store.Read(ID("abc"))
+	_, _, _, _, err := store.Read(ID("abc"))
 	if err == nil {
 		t.Error("Read() should fail for invalid trail ID")
 	}
 
 	// Path traversal attempt
-	_, _, _, err = store.Read(ID("../../etc/pass"))
+	_, _, _, _, err = store.Read(ID("../../etc/pass"))
 	if err == nil {
 		t.Error("Read() should fail for path traversal ID")
 	}
@@ -396,7 +396,7 @@ func TestStore_AddCheckpointPreservesOtherFields(t *testing.T) {
 		{ID: "c1", Author: "bob", Body: "looks good", CreatedAt: now},
 	}}
 
-	if err := store.Write(metadata, discussion, nil); err != nil {
+	if err := store.Write(metadata, discussion, nil, nil); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
 
@@ -413,7 +413,7 @@ func TestStore_AddCheckpointPreservesOtherFields(t *testing.T) {
 	}
 
 	// Read back and verify metadata + discussion are unchanged
-	gotMeta, gotDisc, gotCPs, err := store.Read(trailID)
+	gotMeta, gotDisc, gotCPs, _, err := store.Read(trailID)
 	if err != nil {
 		t.Fatalf("Read() error = %v", err)
 	}
@@ -463,7 +463,7 @@ func TestStore_AddCheckpointPreservesOtherFields(t *testing.T) {
 		t.Fatalf("AddCheckpoint() second call error = %v", err)
 	}
 
-	_, _, gotCPs2, err := store.Read(trailID)
+	_, _, gotCPs2, _, err := store.Read(trailID)
 	if err != nil {
 		t.Fatalf("Read() error = %v", err)
 	}
@@ -475,5 +475,149 @@ func TestStore_AddCheckpointPreservesOtherFields(t *testing.T) {
 	}
 	if gotCPs2.Checkpoints[1].CheckpointID != "aabbccddeeff" {
 		t.Errorf("older checkpoint should be second, got %q", gotCPs2.Checkpoints[1].CheckpointID)
+	}
+}
+
+func TestStore_WriteAndReadVerification(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewStore(repo)
+
+	trailID, err := GenerateID()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().Truncate(time.Second)
+	metadata := &Metadata{
+		TrailID:   trailID,
+		Title:     "Test verification",
+		Status:    StatusActive,
+		Author:    "tester",
+		Assignees: []string{},
+		Labels:    []string{},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	verification := &Verification{
+		Events: []VerificationEvent{
+			{Kind: "pr_checks", Status: "pass", Timestamp: now, BranchID: "uuid-1"},
+			{Kind: "trail_review", Status: "requested", Timestamp: now},
+		},
+	}
+
+	if err := store.Write(metadata, nil, nil, verification); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+
+	_, _, _, gotVerification, err := store.Read(trailID)
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+
+	if len(gotVerification.Events) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(gotVerification.Events))
+	}
+	if gotVerification.Events[0].Kind != "pr_checks" {
+		t.Errorf("expected pr_checks, got %s", gotVerification.Events[0].Kind)
+	}
+	if gotVerification.Events[0].Status != "pass" {
+		t.Errorf("expected pass, got %s", gotVerification.Events[0].Status)
+	}
+	if gotVerification.Events[0].BranchID != "uuid-1" {
+		t.Errorf("expected branch_id uuid-1, got %s", gotVerification.Events[0].BranchID)
+	}
+	if gotVerification.Events[1].Kind != "trail_review" {
+		t.Errorf("expected trail_review, got %s", gotVerification.Events[1].Kind)
+	}
+}
+
+func TestStore_ReadVerificationBackwardCompat(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewStore(repo)
+
+	trailID, err := GenerateID()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().Truncate(time.Second)
+	metadata := &Metadata{
+		TrailID:   trailID,
+		Title:     "No verification",
+		Status:    StatusDraft,
+		Author:    "tester",
+		Assignees: []string{},
+		Labels:    []string{},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	// Write without verification (nil)
+	if err := store.Write(metadata, nil, nil, nil); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+
+	// Read should return empty verification, not nil
+	_, _, _, gotVerification, err := store.Read(trailID)
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if gotVerification == nil {
+		t.Fatal("expected non-nil verification")
+	}
+	if len(gotVerification.Events) != 0 {
+		t.Errorf("expected 0 events, got %d", len(gotVerification.Events))
+	}
+}
+
+func TestStore_UpdatePreservesVerification(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewStore(repo)
+
+	trailID, err := GenerateID()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().Truncate(time.Second)
+	metadata := &Metadata{
+		TrailID:   trailID,
+		Title:     "Update preserves verification",
+		Status:    StatusActive,
+		Author:    "tester",
+		Assignees: []string{},
+		Labels:    []string{},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	verification := &Verification{
+		Events: []VerificationEvent{
+			{Kind: "pr_checks", Status: "pass", Timestamp: now},
+		},
+	}
+
+	if err := store.Write(metadata, nil, nil, verification); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+
+	// Update metadata only — verification should be preserved
+	if err := store.Update(trailID, func(m *Metadata) {
+		m.Title = "Updated title"
+	}); err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+
+	_, _, _, gotVerification, err := store.Read(trailID)
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if len(gotVerification.Events) != 1 {
+		t.Fatalf("expected 1 event after update, got %d", len(gotVerification.Events))
+	}
+	if gotVerification.Events[0].Kind != "pr_checks" {
+		t.Errorf("expected pr_checks, got %s", gotVerification.Events[0].Kind)
 	}
 }

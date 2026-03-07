@@ -313,7 +313,7 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr str
 		UpdatedAt: now,
 	}
 
-	if err := store.Write(metadata, nil, nil); err != nil {
+	if err := store.Write(metadata, nil, nil, nil); err != nil {
 		return fmt.Errorf("failed to create trail: %w", err)
 	}
 
