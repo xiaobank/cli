@@ -42,6 +42,7 @@ branch, or lists all trails if no trail exists for the current branch.`,
 	cmd.AddCommand(newTrailListCmd())
 	cmd.AddCommand(newTrailCreateCmd())
 	cmd.AddCommand(newTrailUpdateCmd())
+	cmd.AddCommand(newTrailBranchCmd())
 
 	return cmd
 }
@@ -619,6 +620,121 @@ func createBranch(repo *git.Repository, branchName string) error {
 		return fmt.Errorf("failed to create branch ref: %w", err)
 	}
 	return nil
+}
+
+func newTrailBranchCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "branch",
+		Short: "Manage branches within a trail",
+	}
+
+	cmd.AddCommand(newTrailBranchAddCmd())
+	return cmd
+}
+
+//nolint:cyclop // sequential steps for adding a branch — splitting would obscure the flow
+func newTrailBranchAddCmd() *cobra.Command {
+	var baseBranch string
+	var trailFlag string
+
+	cmd := &cobra.Command{
+		Use:   "add [branch-name]",
+		Short: "Add a branch to a trail",
+		Long:  "Adds the current branch (or a named branch) to a trail. Uses stateless lookup to find the trail from the current branch.",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repo, err := strategy.OpenRepository(context.Background())
+			if err != nil {
+				return fmt.Errorf("failed to open repository: %w", err)
+			}
+
+			store := trail.NewStore(repo)
+
+			// Determine branch name to add
+			var branchName string
+			if len(args) > 0 {
+				branchName = args[0]
+			} else {
+				branchName, err = GetCurrentBranch(context.Background())
+				if err != nil {
+					return fmt.Errorf("could not determine current branch: %w", err)
+				}
+			}
+
+			// Check if branch is already in a trail
+			existing, existingEntry, findErr := store.FindByBranch(branchName)
+			if findErr != nil {
+				return fmt.Errorf("failed to look up branch: %w", findErr)
+			}
+			if existing != nil && existingEntry != nil {
+				fmt.Fprintf(cmd.ErrOrStderr(), "Branch %q is already in trail %q\n", branchName, existing.Title)
+				return nil
+			}
+
+			// Resolve which trail to add to
+			var targetTrail *trail.Metadata
+			if trailFlag != "" {
+				if err := trail.ValidateID(trailFlag); err != nil {
+					return fmt.Errorf("invalid trail ID: %w", err)
+				}
+				targetTrail, _, _, _, err = store.Read(trail.ID(trailFlag))
+				if err != nil {
+					return fmt.Errorf("trail %s not found: %w", trailFlag, err)
+				}
+			} else {
+				// Try to find trail from current branch (if adding a different branch)
+				currentBranch, branchErr := GetCurrentBranch(context.Background())
+				if branchErr == nil && currentBranch != branchName {
+					targetTrail, _, _ = store.FindByBranch(currentBranch) //nolint:errcheck // best-effort lookup; nil targetTrail handled below
+				}
+				if targetTrail == nil {
+					return errors.New("cannot determine trail; use --trail <id> to specify")
+				}
+			}
+
+			// Determine base branch
+			if baseBranch == "" {
+				baseBranch = getDefaultBranch(repo)
+			}
+
+			// Generate branch entry ID
+			entryID, err := trail.GenerateID()
+			if err != nil {
+				return fmt.Errorf("failed to generate branch ID: %w", err)
+			}
+
+			entry := trail.BranchEntry{
+				ID:         entryID.String(),
+				Name:       branchName,
+				BaseBranch: baseBranch,
+				Status:     trail.BranchOpen,
+				AddedAt:    time.Now().UTC(),
+			}
+
+			if err := store.Update(targetTrail.TrailID, func(m *trail.Metadata) {
+				m.Branches = append(m.Branches, entry)
+			}); err != nil {
+				return fmt.Errorf("failed to add branch: %w", err)
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "Added branch %q to trail %q\n", branchName, targetTrail.Title)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&baseBranch, "base", "", "Base branch for stacking (default: repository default branch)")
+	cmd.Flags().StringVar(&trailFlag, "trail", "", "Trail ID to add branch to")
+
+	return cmd
+}
+
+// getDefaultBranch returns the default branch name for the repository.
+func getDefaultBranch(repo *git.Repository) string {
+	name := strategy.GetDefaultBranchName(repo)
+	if name == "" {
+		return defaultBaseBranch
+	}
+	return name
 }
 
 // pushBranchToOrigin pushes a branch to the origin remote.
