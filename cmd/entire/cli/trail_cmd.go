@@ -59,7 +59,7 @@ func runTrailShow(w io.Writer) error {
 	}
 
 	store := trail.NewStore(repo)
-	metadata, err := store.FindByBranch(branch)
+	metadata, _, err := store.FindByBranch(branch)
 	if err != nil || metadata == nil {
 		return runTrailListAll(w, "", false, false)
 	}
@@ -272,7 +272,7 @@ func runTrailCreate(cmd *cobra.Command, title, body, base, branch, statusStr str
 
 	// Check if trail already exists for this branch
 	store := trail.NewStore(repo)
-	existing, err := store.FindByBranch(branch)
+	existing, _, err := store.FindByBranch(branch)
 	if err == nil && existing != nil {
 		fmt.Fprintf(w, "Trail already exists for branch %q (ID: %s)\n", branch, existing.TrailID)
 		return nil
@@ -395,7 +395,7 @@ func runTrailUpdate(w io.Writer, statusStr, title, body, branch string, labelAdd
 	}
 
 	store := trail.NewStore(repo)
-	metadata, err := store.FindByBranch(branch)
+	metadata, _, err := store.FindByBranch(branch)
 	if err != nil {
 		return fmt.Errorf("failed to find trail: %w", err)
 	}

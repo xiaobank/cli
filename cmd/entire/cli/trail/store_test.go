@@ -156,7 +156,7 @@ func TestStore_FindByBranch(t *testing.T) {
 	}
 
 	// Find by branch
-	found, err := store.FindByBranch("feature/a")
+	found, entry, err := store.FindByBranch("feature/a")
 	if err != nil {
 		t.Fatalf("FindByBranch() error = %v", err)
 	}
@@ -166,14 +166,21 @@ func TestStore_FindByBranch(t *testing.T) {
 	if found.Branch != "feature/a" {
 		t.Errorf("FindByBranch() branch = %q, want %q", found.Branch, "feature/a")
 	}
+	// Legacy single-branch trails return nil entry
+	if entry != nil {
+		t.Error("FindByBranch() should return nil entry for legacy trail")
+	}
 
 	// Not found
-	notFound, err := store.FindByBranch("feature/c")
+	notFound, notFoundEntry, err := store.FindByBranch("feature/c")
 	if err != nil {
 		t.Fatalf("FindByBranch() error = %v", err)
 	}
 	if notFound != nil {
 		t.Error("FindByBranch() should return nil for non-existent branch")
+	}
+	if notFoundEntry != nil {
+		t.Error("FindByBranch() should return nil entry for non-existent branch")
 	}
 }
 
@@ -619,5 +626,111 @@ func TestStore_UpdatePreservesVerification(t *testing.T) {
 	}
 	if gotVerification.Events[0].Kind != "pr_checks" {
 		t.Errorf("expected pr_checks, got %s", gotVerification.Events[0].Kind)
+	}
+}
+
+func TestStore_FindByBranch_MultiBranch(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewStore(repo)
+
+	trailID, err := GenerateID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Truncate(time.Second)
+
+	metadata := &Metadata{
+		TrailID:   trailID,
+		Title:     "Multi-branch trail",
+		Status:    StatusActive,
+		Author:    "tester",
+		Assignees: []string{},
+		Labels:    []string{},
+		CreatedAt: now,
+		UpdatedAt: now,
+		Branches: []BranchEntry{
+			{ID: "uuid-1", Name: "feature/auth-core", BaseBranch: "main", Status: BranchOpen, AddedAt: now},
+			{ID: "uuid-2", Name: "feature/auth-api", BaseBranch: "feature/auth-core", Status: BranchOpen, AddedAt: now},
+		},
+	}
+
+	if err := store.Write(metadata, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Find by first branch
+	found, entry, err := store.FindByBranch("feature/auth-core")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found == nil {
+		t.Fatal("expected to find trail")
+	}
+	if entry == nil || entry.ID != "uuid-1" {
+		t.Error("expected branch entry uuid-1")
+	}
+
+	// Find by second branch
+	found, entry, err = store.FindByBranch("feature/auth-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found == nil {
+		t.Fatal("expected to find trail")
+	}
+	if entry == nil || entry.ID != "uuid-2" {
+		t.Error("expected branch entry uuid-2")
+	}
+
+	// Not found
+	found, entry, err = store.FindByBranch("nonexistent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found != nil || entry != nil {
+		t.Error("expected nil for nonexistent branch")
+	}
+}
+
+func TestStore_FindByBranch_LegacyFallback(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewStore(repo)
+
+	trailID, err := GenerateID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Truncate(time.Second)
+
+	// Legacy trail with Branch field, no Branches[]
+	metadata := &Metadata{
+		TrailID:   trailID,
+		Branch:    "feature/old-style",
+		Base:      "main",
+		Title:     "Legacy trail",
+		Status:    StatusDraft,
+		Author:    "tester",
+		Assignees: []string{},
+		Labels:    []string{},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	if err := store.Write(metadata, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	found, entry, err := store.FindByBranch("feature/old-style")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found == nil {
+		t.Fatal("expected to find legacy trail")
+	}
+	// entry is nil for legacy trails (no BranchEntry to return)
+	if entry != nil {
+		t.Error("expected nil entry for legacy trail")
 	}
 }

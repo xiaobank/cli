@@ -225,20 +225,33 @@ func (s *Store) Read(trailID ID) (*Metadata, *Discussion, *Checkpoints, *Verific
 	return &metadata, &discussion, &checkpoints, &verification, nil
 }
 
-// FindByBranch finds a trail for the given branch name.
-// Returns (nil, nil) if no trail exists for the branch.
-func (s *Store) FindByBranch(branchName string) (*Metadata, error) {
+// FindByBranch searches all trails for one containing the given branch name.
+// Returns (metadata, branchEntry, error). branchEntry is nil for legacy single-branch trails.
+// Returns (nil, nil, nil) if no trail matches.
+func (s *Store) FindByBranch(branchName string) (*Metadata, *BranchEntry, error) {
 	trails, err := s.List()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	for _, t := range trails {
-		if t.Branch == branchName {
-			return t, nil
+	for _, m := range trails {
+		// Check new Branches[] field first
+		if len(m.Branches) > 0 {
+			for i := range m.Branches {
+				if m.Branches[i].Name == branchName {
+					return m, &m.Branches[i], nil
+				}
+			}
+			continue
+		}
+
+		// Legacy fallback: single Branch field
+		if m.Branch == branchName {
+			return m, nil, nil
 		}
 	}
-	return nil, nil //nolint:nilnil // nil, nil means "not found" — callers check both
+
+	return nil, nil, nil
 }
 
 // List returns all trail metadata from the entire/trails/v1 branch.

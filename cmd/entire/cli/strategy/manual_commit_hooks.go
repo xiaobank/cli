@@ -1101,7 +1101,7 @@ func (s *ManualCommitStrategy) condenseAndUpdateState(
 	branchName := GetCurrentBranchName(repo)
 	if branchName != "" && branchName != GetDefaultBranchName(repo) {
 		store := trail.NewStore(repo)
-		existing, findErr := store.FindByBranch(branchName)
+		existing, _, findErr := store.FindByBranch(branchName)
 		if findErr == nil && existing != nil {
 			appendCheckpointToExistingTrail(store, existing.TrailID, result.CheckpointID, head.Hash(), result.Prompts)
 		}
