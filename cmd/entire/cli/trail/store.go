@@ -14,6 +14,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/filemode"
 	"github.com/go-git/go-git/v6/plumbing/object"
+	"github.com/go-git/go-git/v6/storage"
 )
 
 const (
@@ -21,6 +22,8 @@ const (
 	discussionFile   = "discussion.json"
 	checkpointsFile  = "checkpoints.json"
 	verificationFile = "verification.json"
+
+	maxCASRetries = 5
 )
 
 // ErrTrailNotFound is returned when a trail cannot be found.
@@ -313,6 +316,7 @@ func (s *Store) Update(trailID ID, updateFn func(*Metadata)) error {
 
 // AddCheckpoint prepends a checkpoint reference to a trail's checkpoints list (newest first).
 // Only reads and writes the checkpoints.json file — metadata and discussion are untouched.
+// Uses CAS retry to handle concurrent writes to the trails branch.
 func (s *Store) AddCheckpoint(trailID ID, ref CheckpointRef) error {
 	if err := ValidateID(string(trailID)); err != nil {
 		return err
@@ -322,6 +326,24 @@ func (s *Store) AddCheckpoint(trailID ID, ref CheckpointRef) error {
 		return fmt.Errorf("failed to ensure trails branch: %w", err)
 	}
 
+	for attempt := range maxCASRetries {
+		err := s.addCheckpointOnce(trailID, ref)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, storage.ErrReferenceHasChanged) {
+			return err
+		}
+		if attempt == maxCASRetries-1 {
+			return fmt.Errorf("failed to add checkpoint after %d retries: %w", maxCASRetries, err)
+		}
+	}
+	return nil
+}
+
+// addCheckpointOnce performs a single attempt to prepend a checkpoint reference.
+// Returns storage.ErrReferenceHasChanged (wrapped) if the branch moved concurrently.
+func (s *Store) addCheckpointOnce(trailID ID, ref CheckpointRef) error {
 	commitHash, rootTreeHash, err := s.getBranchRef()
 	if err != nil {
 		return fmt.Errorf("failed to get branch ref: %w", err)
@@ -465,16 +487,24 @@ func (s *Store) readCheckpointsFromTrailTree(trailTree *object.Tree) (*Checkpoin
 	return &checkpoints, nil
 }
 
-// commitAndUpdateRef creates a commit and updates the trails branch reference.
+// commitAndUpdateRef creates a commit and updates the trails branch reference using CAS.
 func (s *Store) commitAndUpdateRef(treeHash, parentHash plumbing.Hash, message string) error {
+	refName := plumbing.NewBranchReferenceName(paths.TrailsBranchName)
 	authorName, authorEmail := checkpoint.GetGitAuthorFromRepo(s.repo)
+
 	commitHash, err := checkpoint.CreateCommit(s.repo, treeHash, parentHash, message, authorName, authorEmail)
 	if err != nil {
 		return fmt.Errorf("failed to create commit: %w", err)
 	}
 
-	newRef := plumbing.NewHashReference(plumbing.NewBranchReferenceName(paths.TrailsBranchName), commitHash)
-	if err := s.repo.Storer.SetReference(newRef); err != nil {
+	newRef := plumbing.NewHashReference(refName, commitHash)
+	oldRef := plumbing.NewHashReference(refName, parentHash)
+
+	err = s.repo.Storer.CheckAndSetReference(newRef, oldRef)
+	if err != nil {
+		if errors.Is(err, storage.ErrReferenceHasChanged) {
+			return fmt.Errorf("trail branch ref changed concurrently: %w", err)
+		}
 		return fmt.Errorf("failed to update branch reference: %w", err)
 	}
 	return nil

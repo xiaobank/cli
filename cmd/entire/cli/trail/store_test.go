@@ -2,6 +2,7 @@ package trail
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -788,5 +789,53 @@ func TestStore_FindByBranch_LegacyFallback(t *testing.T) {
 	// entry is nil for legacy trails (no BranchEntry to return)
 	if entry != nil {
 		t.Error("expected nil entry for legacy trail")
+	}
+}
+
+func TestStore_SequentialAddCheckpoints(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewStore(repo)
+
+	trailID, err := GenerateID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Truncate(time.Second)
+
+	metadata := &Metadata{
+		TrailID:   trailID,
+		Title:     "CAS test",
+		Status:    StatusActive,
+		Author:    "tester",
+		Assignees: []string{},
+		Labels:    []string{},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	if err := store.Write(metadata, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := range 3 {
+		summary := fmt.Sprintf("checkpoint %d", i)
+		ref := CheckpointRef{
+			CheckpointID: fmt.Sprintf("aabbccddeef%d", i),
+			CommitSHA:    fmt.Sprintf("123456789%03d", i),
+			CreatedAt:    now,
+			Summary:      &summary,
+		}
+		if err := store.AddCheckpoint(trailID, ref); err != nil {
+			t.Fatalf("AddCheckpoint %d failed: %v", i, err)
+		}
+	}
+
+	_, _, checkpoints, _, err := store.Read(trailID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(checkpoints.Checkpoints) != 3 {
+		t.Fatalf("expected 3 checkpoints, got %d", len(checkpoints.Checkpoints))
 	}
 }
