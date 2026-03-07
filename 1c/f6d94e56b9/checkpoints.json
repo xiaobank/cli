@@ -1,3 +1,10 @@
 {
-  "checkpoints": []
+  "checkpoints": [
+    {
+      "checkpoint_id": "529aa68f3efe",
+      "commit_sha": "4dd78b35b0ef1067f5d2a124fe52ff15e10a85f5",
+      "created_at": "2026-03-07T02:53:16.363959Z",
+      "summary": "yep"
+    }
+  ]
 }
