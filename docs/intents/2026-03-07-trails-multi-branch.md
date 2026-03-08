@@ -30,9 +30,12 @@ Trail
 +--   kind             (file, url, issue, inline)
 +--   value            (path, URL, issue ID, inline text)
 +--   content          (resolved/cached text)
-+--   amendments[]     (spec changes with reasoning)
-+--     description
-+--     reasoning
++--   amendments[]     (typed spec changes — mirrors intent structure)
++--     kind            (commit, inline, external)
++--     value           (commit SHA, text, or external ref)
++--     content         (snapshot for external changes)
++--     reasoning       (why the intent changed)
++--     author          (who made or triggered the change)
 +--     timestamp
 +-- branches[]         (execution artifacts — the "how")
 +--   id               (stable UUID)
@@ -70,13 +73,38 @@ type Intent struct {
     Content    string      `json:"content,omitempty"`    // resolved intent text (cached)
     Amendments []Amendment `json:"amendments,omitempty"`
 }
+```
 
+### Amendment (typed, like Intent)
+
+Amendments track changes to the intent. The format depends on where the change
+originates:
+
+- **`commit`** — the intent file was changed in a git commit. For `file` kind
+  intents, the commit diff IS the amendment. Auto-detectable.
+- **`inline`** — free-text description of a spec change.
+- **`external`** — an external resource (Linear issue, GitHub issue, URL) was
+  updated. Includes a snapshot of what changed.
+
+All amendments share metadata: reasoning (why it changed), author, timestamp,
+and optional discussion/approvals.
+
+```go
 type Amendment struct {
-    Description string    `json:"description"`
-    Reasoning   string    `json:"reasoning"`
-    Timestamp   time.Time `json:"timestamp"`
+    Kind      string    `json:"kind"`                 // commit, inline, external
+    Value     string    `json:"value"`                // commit SHA, inline text, or external ref
+    Content   string    `json:"content,omitempty"`    // snapshot of the change (for external)
+    Reasoning string    `json:"reasoning,omitempty"`  // why the intent changed
+    Author    string    `json:"author,omitempty"`     // who made or triggered the amendment
+    Timestamp time.Time `json:"timestamp"`
 }
 ```
+
+**Verification impact:** An amendment may invalidate prior verification events.
+Verifications that predate the latest amendment should be treated as potentially
+stale. This is derivable from timestamps — no explicit field needed, but
+consumers should compare `amendment.Timestamp` against `verification.Timestamp`
+when evaluating verification currency.
 
 ### BranchEntry
 
