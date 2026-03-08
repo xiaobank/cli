@@ -1,6 +1,12 @@
 {
   "checkpoints": [
     {
+      "checkpoint_id": "59eea9555ed7",
+      "commit_sha": "125cdb9ad544f1a9b93dc2aa8fe9f9401191d514",
+      "created_at": "2026-03-08T03:52:24.863912Z",
+      "summary": "yes, let's do that - we should also make the small changes to the amendments model in step 3 😅"
+    },
+    {
       "checkpoint_id": "9ebc3d86bc83",
       "commit_sha": "e381209ebcaa58ef30d30db22b458f68320fbf8f",
       "created_at": "2026-03-08T14:51:36+11:00",
