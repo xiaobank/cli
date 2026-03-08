@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -747,6 +748,339 @@ func TestStore_AddCheckpointWithBranchID(t *testing.T) {
 	}
 	if checkpoints.Checkpoints[0].BranchID != "branch-uuid-1" {
 		t.Errorf("expected branch ID branch-uuid-1, got %s", checkpoints.Checkpoints[0].BranchID)
+	}
+}
+
+func TestStore_BranchAdd(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewStore(repo)
+
+	trailID, err := GenerateID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Truncate(time.Second)
+
+	firstEntryID := "entry-add-first"
+	// Create trail with one branch
+	metadata := &Metadata{
+		TrailID:   trailID,
+		Title:     "Multi-branch",
+		Status:    StatusActive,
+		CreatedAt: now,
+		UpdatedAt: now,
+		Branches: []BranchEntry{
+			{ID: firstEntryID, Name: "feature/core", BaseBranch: "main", Status: BranchOpen, AddedAt: now},
+		},
+	}
+	if err := store.Write(metadata, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Add a second branch (same operation as CLI trail branch add)
+	newEntryID, err := GenerateID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	newEntry := BranchEntry{
+		ID:         newEntryID.String(),
+		Name:       "feature/api",
+		BaseBranch: "feature/core",
+		Status:     BranchOpen,
+		AddedAt:    time.Now().UTC(),
+	}
+	if err := store.Update(trailID, func(m *Metadata) {
+		m.Branches = append(m.Branches, newEntry)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify
+	got, _, _, _, err := store.Read(trailID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Branches) != 2 {
+		t.Fatalf("expected 2 branches, got %d", len(got.Branches))
+	}
+	if got.Branches[1].Name != "feature/api" {
+		t.Errorf("expected feature/api, got %s", got.Branches[1].Name)
+	}
+	if got.Branches[1].BaseBranch != "feature/core" {
+		t.Errorf("expected base feature/core, got %s", got.Branches[1].BaseBranch)
+	}
+
+	// FindByBranch should find both
+	_, entry1, findErr := store.FindByBranch("feature/core")
+	if findErr != nil {
+		t.Fatal(findErr)
+	}
+	if entry1 == nil || entry1.ID != firstEntryID {
+		t.Error("expected to find feature/core")
+	}
+	_, entry2, findErr := store.FindByBranch("feature/api")
+	if findErr != nil {
+		t.Fatal(findErr)
+	}
+	if entry2 == nil || entry2.Name != "feature/api" {
+		t.Error("expected to find feature/api")
+	}
+}
+
+func TestStore_SetPR(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewStore(repo)
+
+	trailID, err := GenerateID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Truncate(time.Second)
+
+	branchEntryID := "entry-setpr-1"
+	metadata := &Metadata{
+		TrailID:   trailID,
+		Title:     "PR test",
+		Status:    StatusActive,
+		CreatedAt: now,
+		UpdatedAt: now,
+		Branches: []BranchEntry{
+			{ID: branchEntryID, Name: "feature/pr-target", BaseBranch: "main", Status: BranchOpen, AddedAt: now},
+		},
+	}
+	if err := store.Write(metadata, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Set PR (same as CLI trail branch set-pr)
+	if err := store.Update(trailID, func(m *Metadata) {
+		for i := range m.Branches {
+			if m.Branches[i].ID == branchEntryID {
+				m.Branches[i].PR = &PRRef{Number: 42}
+				break
+			}
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify
+	got, _, _, _, err := store.Read(trailID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Branches[0].PR == nil || got.Branches[0].PR.Number != 42 {
+		t.Error("expected PR #42")
+	}
+
+	// Replace PR (set-pr again)
+	if err := store.Update(trailID, func(m *Metadata) {
+		for i := range m.Branches {
+			if m.Branches[i].ID == branchEntryID {
+				m.Branches[i].PR = &PRRef{Number: 99}
+				break
+			}
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _, _, _, err = store.Read(trailID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Branches[0].PR == nil || got.Branches[0].PR.Number != 99 {
+		t.Error("expected PR #99 after replacement")
+	}
+}
+
+func TestStore_DiscardBranch(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewStore(repo)
+
+	trailID, err := GenerateID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Truncate(time.Second)
+
+	discardEntryID := "entry-discard-2"
+	metadata := &Metadata{
+		TrailID:   trailID,
+		Title:     "Discard test",
+		Status:    StatusActive,
+		CreatedAt: now,
+		UpdatedAt: now,
+		Branches: []BranchEntry{
+			{ID: "entry-discard-1", Name: "feature/keep", BaseBranch: "main", Status: BranchOpen, AddedAt: now},
+			{ID: discardEntryID, Name: "feature/cleanup", BaseBranch: "main", Status: BranchOpen, AddedAt: now},
+		},
+	}
+	if err := store.Write(metadata, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Discard second branch (same as CLI trail branch discard)
+	if err := store.Update(trailID, func(m *Metadata) {
+		for i := range m.Branches {
+			if m.Branches[i].ID == discardEntryID {
+				m.Branches[i].Status = BranchDiscarded
+				break
+			}
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _, _, _, err := store.Read(trailID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Branches[0].Status != BranchOpen {
+		t.Error("first branch should still be open")
+	}
+	if got.Branches[1].Status != BranchDiscarded {
+		t.Error("second branch should be discarded")
+	}
+}
+
+func TestStore_CreateWithIntentAndBranches(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewStore(repo)
+
+	trailID, err := GenerateID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entryID, err := GenerateID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Truncate(time.Second)
+
+	const branchName = "feature/oauth-impl"
+	const intentContent = "Add OAuth2 authentication"
+
+	// Simulate what trail create now does
+	metadata := &Metadata{
+		TrailID:   trailID,
+		Title:     "Auth system",
+		Status:    StatusDraft,
+		Author:    "alice",
+		Assignees: []string{},
+		Labels:    []string{},
+		CreatedAt: now,
+		UpdatedAt: now,
+		Intent: &Intent{
+			Kind:    "inline",
+			Value:   intentContent,
+			Content: intentContent,
+		},
+		Branches: []BranchEntry{
+			{
+				ID:         entryID.String(),
+				Name:       branchName,
+				BaseBranch: "main",
+				Status:     BranchOpen,
+				AddedAt:    now,
+			},
+		},
+		// Legacy fields for backward compat
+		Branch: branchName,
+		Base:   "main",
+	}
+
+	if err := store.Write(metadata, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _, _, _, err := store.Read(trailID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify intent
+	if got.Intent == nil {
+		t.Fatal("expected intent")
+	}
+	if got.Intent.Kind != "inline" {
+		t.Errorf("expected inline intent, got %s", got.Intent.Kind)
+	}
+	if got.Intent.Content != intentContent {
+		t.Errorf("unexpected intent content: %s", got.Intent.Content)
+	}
+
+	// Verify branches
+	if len(got.Branches) != 1 {
+		t.Fatalf("expected 1 branch, got %d", len(got.Branches))
+	}
+	if got.Branches[0].Name != branchName {
+		t.Errorf("expected %s, got %s", branchName, got.Branches[0].Name)
+	}
+
+	// Verify legacy compat
+	if got.Branch != branchName {
+		t.Errorf("expected legacy branch field %s, got %s", branchName, got.Branch)
+	}
+
+	// FindByBranch should work via Branches[]
+	found, entry, err := store.FindByBranch(branchName)
+	if err != nil || found == nil {
+		t.Fatal("expected to find trail by branch")
+	}
+	if entry == nil {
+		t.Fatal("expected branch entry (not legacy)")
+	}
+	if entry.Name != branchName {
+		t.Errorf("expected %s entry, got %s", branchName, entry.Name)
+	}
+}
+
+func TestStore_IntentWithFileKind(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewStore(repo)
+
+	trailID, err := GenerateID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Truncate(time.Second)
+
+	metadata := &Metadata{
+		TrailID:   trailID,
+		Title:     "Spec trail",
+		Status:    StatusDraft,
+		CreatedAt: now,
+		UpdatedAt: now,
+		Intent: &Intent{
+			Kind:    "file",
+			Value:   "docs/spec.md",
+			Content: "# Auth Spec\n\nRequirements go here.",
+		},
+	}
+
+	if err := store.Write(metadata, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _, _, _, err := store.Read(trailID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got.Intent.Kind != "file" {
+		t.Errorf("expected file kind, got %s", got.Intent.Kind)
+	}
+	if got.Intent.Value != "docs/spec.md" {
+		t.Errorf("expected docs/spec.md, got %s", got.Intent.Value)
+	}
+	if !strings.Contains(got.Intent.Content, "Auth Spec") {
+		t.Error("expected spec content to be preserved")
 	}
 }
 
