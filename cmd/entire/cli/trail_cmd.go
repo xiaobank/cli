@@ -74,13 +74,42 @@ func runTrailShow(w io.Writer) error {
 func printTrailDetails(w io.Writer, m *trail.Metadata) {
 	fmt.Fprintf(w, "Trail: %s\n", m.Title)
 	fmt.Fprintf(w, "  ID:      %s\n", m.TrailID)
-	fmt.Fprintf(w, "  Branch:  %s\n", m.Branch)
-	fmt.Fprintf(w, "  Base:    %s\n", m.Base)
 	fmt.Fprintf(w, "  Status:  %s\n", m.Status)
 	fmt.Fprintf(w, "  Author:  %s\n", m.Author)
+
+	if m.Intent != nil {
+		fmt.Fprintf(w, "  Intent:  %s (%s)\n", m.Intent.Value, m.Intent.Kind)
+	}
+
 	if m.Body != "" {
 		fmt.Fprintf(w, "  Body:    %s\n", m.Body)
 	}
+
+	// Show branches (new multi-branch format)
+	if len(m.Branches) > 0 {
+		fmt.Fprintf(w, "  Branches:\n")
+		for _, b := range m.Branches {
+			statusMarker := " "
+			switch b.Status {
+			case trail.BranchOpen:
+				statusMarker = " "
+			case trail.BranchMerged:
+				statusMarker = "+"
+			case trail.BranchDiscarded:
+				statusMarker = "x"
+			}
+			prInfo := ""
+			if b.PR != nil {
+				prInfo = fmt.Sprintf(" PR #%d", b.PR.Number)
+			}
+			fmt.Fprintf(w, "    %s %s -> %s [%s]%s\n", statusMarker, b.Name, b.BaseBranch, b.Status, prInfo)
+		}
+	} else if m.Branch != "" {
+		// Legacy single-branch display
+		fmt.Fprintf(w, "  Branch:  %s\n", m.Branch)
+		fmt.Fprintf(w, "  Base:    %s\n", m.Base)
+	}
+
 	if len(m.Labels) > 0 {
 		fmt.Fprintf(w, "  Labels:  %s\n", strings.Join(m.Labels, ", "))
 	}
@@ -188,7 +217,7 @@ func runTrailListAll(w io.Writer, statusFilter string, jsonOutput, showAll bool)
 	// Table output
 	fmt.Fprintf(w, "%-30s %-40s %-13s %-15s %s\n", "BRANCH", "TITLE", "STATUS", "AUTHOR", "UPDATED")
 	for _, t := range trails {
-		branch := stringutil.TruncateRunes(t.Branch, 30, "...")
+		branch := stringutil.TruncateRunes(t.ActiveBranchName(), 30, "...")
 		title := stringutil.TruncateRunes(t.Title, 40, "...")
 		fmt.Fprintf(w, "%-30s %-40s %-13s %-15s %s\n",
 			branch, title, t.Status, stringutil.TruncateRunes(t.Author, 15, "..."), timeAgo(t.UpdatedAt))
