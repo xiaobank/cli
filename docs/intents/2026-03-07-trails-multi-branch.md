@@ -1,14 +1,24 @@
-# Trails: Multi-Branch & Multi-PR Support
+# Trails: Intent-Driven Work Tracking
 
 **Date:** 2026-03-07
-**Status:** Draft
+**Status:** Active
 
 ## Problem
 
-Trails currently model a 1:1 relationship between a trail and a branch. Real work
-often spans multiple branches and PRs: stacked PRs for large features, iterative
-follow-up PRs, or parallel refactor-then-feature splits. The trail should represent
-the *intent*, with branches/PRs as execution artifacts serving that intent.
+Trails are the unit of work tracking, but the current model is too tightly coupled
+to a single branch. Real work spans multiple branches/PRs, evolves through spec
+changes, and progresses through verification stages (code review, security, canary,
+rollout) before it's truly "done."
+
+The trail needs to become an **intent-driven** model: the trail represents the
+*what and why*, while branches, PRs, checkpoints, and verifications are execution
+artifacts. This means:
+
+- Supporting multiple branches/PRs per trail (stacked, iterative, parallel)
+- Typed intents that can point to files, issues, URLs, or inline descriptions
+- Typed amendments that track how the intent evolves over time
+- A unified verification event log covering the full lifecycle
+- Concurrency-safe storage via CAS ref updates
 
 ## Design Principles
 
