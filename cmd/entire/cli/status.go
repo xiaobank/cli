@@ -219,11 +219,13 @@ const (
 func writeActiveSessions(ctx context.Context, w io.Writer, sty statusStyles) {
 	store, err := session.NewStateStore(ctx)
 	if err != nil {
+		writeNoSessions(w, sty)
 		return
 	}
 
 	states, err := store.List(ctx)
 	if err != nil || len(states) == 0 {
+		writeNoSessions(w, sty)
 		return
 	}
 
@@ -235,6 +237,7 @@ func writeActiveSessions(ctx context.Context, w io.Writer, sty statusStyles) {
 		}
 	}
 	if len(active) == 0 {
+		writeNoSessions(w, sty)
 		return
 	}
 
@@ -296,23 +299,18 @@ func writeActiveSessions(ctx context.Context, w io.Writer, sty statusStyles) {
 				agentLabel = unknownPlaceholder
 			}
 
-			shortID := st.SessionID
-			if len(shortID) > 7 {
-				shortID = shortID[:7]
-			}
-
-			// Line 1: Agent (model) · shortID
+			// Line 1: Agent (model) · full session ID
 			if st.ModelName != "" {
 				fmt.Fprintf(w, "%s %s %s %s\n",
 					sty.render(sty.agent, agentLabel),
 					sty.render(sty.dim, "("+st.ModelName+")"),
 					sty.render(sty.dim, "·"),
-					shortID)
+					st.SessionID)
 			} else {
 				fmt.Fprintf(w, "%s %s %s\n",
 					sty.render(sty.agent, agentLabel),
 					sty.render(sty.dim, "·"),
-					shortID)
+					st.SessionID)
 			}
 
 			// Line 2: > "first prompt" (chevron + quoted, truncated)
@@ -346,6 +344,12 @@ func writeActiveSessions(ctx context.Context, w io.Writer, sty statusStyles) {
 		footer = fmt.Sprintf("%d sessions", totalSessions)
 	}
 	fmt.Fprintln(w, sty.render(sty.dim, footer))
+	fmt.Fprintln(w)
+}
+
+func writeNoSessions(w io.Writer, sty statusStyles) {
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, sty.render(sty.dim, "No active sessions"))
 	fmt.Fprintln(w)
 }
 

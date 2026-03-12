@@ -205,6 +205,9 @@ func TestRunStatus_Enabled(t *testing.T) {
 	if !strings.Contains(stdout.String(), "Enabled") {
 		t.Errorf("Expected output to show 'Enabled', got: %s", stdout.String())
 	}
+	if !strings.Contains(stdout.String(), "No sessions") {
+		t.Errorf("Expected output to show 'No sessions' when there are no active sessions, got: %s", stdout.String())
+	}
 }
 
 func TestRunStatus_Disabled(t *testing.T) {
@@ -442,9 +445,9 @@ func TestWriteActiveSessions(t *testing.T) {
 		t.Errorf("Expected '%s' for missing agent type, got: %s", unknownPlaceholder, output)
 	}
 
-	// Should contain truncated session IDs
-	if !strings.Contains(output, "abc-123") {
-		t.Errorf("Expected truncated session ID 'abc-123', got: %s", output)
+	// Should contain full session IDs
+	if !strings.Contains(output, "abc-1234-session") {
+		t.Errorf("Expected full session ID 'abc-1234-session', got: %s", output)
 	}
 
 	// Should contain first prompts with chevron
@@ -455,7 +458,7 @@ func TestWriteActiveSessions(t *testing.T) {
 	// Session without LastPrompt should NOT show a prompt line
 	lines := strings.Split(output, "\n")
 	for _, line := range lines {
-		if strings.Contains(line, "ghi-901") {
+		if strings.Contains(line, "ghi-9012-session") {
 			if strings.Contains(line, "\"") {
 				t.Errorf("Session without prompt should not show quoted text on first line, got: %s", line)
 			}
@@ -542,9 +545,9 @@ func TestWriteActiveSessions_NoSessions(t *testing.T) {
 	sty := newStatusStyles(&buf)
 	writeActiveSessions(context.Background(), &buf, sty)
 
-	// Should produce no output when there are no sessions
-	if buf.Len() != 0 {
-		t.Errorf("Expected empty output with no sessions, got: %s", buf.String())
+	output := buf.String()
+	if output != "\nNo sessions\n\n" {
+		t.Errorf("Expected no-sessions placeholder with surrounding blank lines, got: %q", output)
 	}
 }
 
@@ -572,9 +575,9 @@ func TestWriteActiveSessions_EndedSessionsExcluded(t *testing.T) {
 	sty := newStatusStyles(&buf)
 	writeActiveSessions(context.Background(), &buf, sty)
 
-	// Should produce no output when all sessions are ended
-	if buf.Len() != 0 {
-		t.Errorf("Expected empty output with only ended sessions, got: %s", buf.String())
+	output := buf.String()
+	if output != "\nNo sessions\n\n" {
+		t.Errorf("Expected no-sessions placeholder when all sessions are ended, got: %q", output)
 	}
 }
 
