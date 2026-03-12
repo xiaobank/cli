@@ -205,8 +205,8 @@ func TestRunStatus_Enabled(t *testing.T) {
 	if !strings.Contains(stdout.String(), "Enabled") {
 		t.Errorf("Expected output to show 'Enabled', got: %s", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "No sessions") {
-		t.Errorf("Expected output to show 'No sessions' when there are no active sessions, got: %s", stdout.String())
+	if !strings.Contains(stdout.String(), "No active sessions") {
+		t.Errorf("Expected output to show 'No active sessions' when there are no active sessions, got: %s", stdout.String())
 	}
 }
 
@@ -546,7 +546,7 @@ func TestWriteActiveSessions_NoSessions(t *testing.T) {
 	writeActiveSessions(context.Background(), &buf, sty)
 
 	output := buf.String()
-	if output != "\nNo sessions\n\n" {
+	if output != "\nNo active sessions\n\n" {
 		t.Errorf("Expected no-sessions placeholder with surrounding blank lines, got: %q", output)
 	}
 }
@@ -576,7 +576,7 @@ func TestWriteActiveSessions_EndedSessionsExcluded(t *testing.T) {
 	writeActiveSessions(context.Background(), &buf, sty)
 
 	output := buf.String()
-	if output != "\nNo sessions\n\n" {
+	if output != "\nNo active sessions\n\n" {
 		t.Errorf("Expected no-sessions placeholder when all sessions are ended, got: %q", output)
 	}
 }
