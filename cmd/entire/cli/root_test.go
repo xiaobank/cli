@@ -10,6 +10,24 @@ import (
 	"github.com/spf13/cobra"
 )
 
+func TestCLIStarts(t *testing.T) {
+	t.Parallel()
+
+	root := NewRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&bytes.Buffer{})
+	root.SetArgs([]string{"--help"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("CLI failed to start with --help: %v", err)
+	}
+
+	output := out.String()
+	if !strings.Contains(output, "Usage:") {
+		t.Errorf("--help output missing usage info:\n%s", output)
+	}
+}
+
 func TestVersionFlag_OutputMatchesVersionCmd(t *testing.T) {
 	t.Parallel()
 
