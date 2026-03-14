@@ -1792,19 +1792,6 @@ func (env *TestEnv) GitPush(remote, refSpec string) {
 	}
 }
 
-// GitFetch fetches from a remote. Fails the test on error.
-func (env *TestEnv) GitFetch(remote string, args ...string) {
-	env.T.Helper()
-
-	cmdArgs := append([]string{"fetch", remote}, args...)
-	cmd := exec.CommandContext(context.Background(), "git", cmdArgs...)
-	cmd.Dir = env.RepoDir
-	cmd.Env = testutil.GitIsolatedEnv()
-	if output, err := cmd.CombinedOutput(); err != nil {
-		env.T.Fatalf("git fetch %s failed: %v\n%s", remote, err, output)
-	}
-}
-
 // RunPrePush runs the pre-push hook via the CLI binary, consistent with how
 // other CLI invocations (GitCommitWithShadowHooks, RunCLI) use env.cliEnv().
 func (env *TestEnv) RunPrePush(remote string) {
