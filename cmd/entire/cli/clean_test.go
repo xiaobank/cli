@@ -143,9 +143,9 @@ func TestRunClean_PreviewMode(t *testing.T) {
 		t.Errorf("Should not list '%s', got: %s", paths.MetadataBranchName, output)
 	}
 
-	// Should prompt to use --force
-	if !strings.Contains(output, "--force") {
-		t.Errorf("Expected '--force' prompt in output, got: %s", output)
+	// Should NOT contain stale --force message (interactive prompt handles confirmation)
+	if strings.Contains(output, "--force") {
+		t.Errorf("Should not contain '--force' message in interactive mode, got: %s", output)
 	}
 
 	// Branches should still exist (preview mode doesn't delete)

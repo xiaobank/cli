@@ -246,7 +246,6 @@ func runCleanWithItems(ctx context.Context, w io.Writer, force bool, items []str
 			fmt.Fprintln(w)
 		}
 
-		fmt.Fprintln(w, "Run with --force to delete these items.")
 		return nil
 	}
 
