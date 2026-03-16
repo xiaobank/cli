@@ -66,6 +66,19 @@ func SetupRepo(t *testing.T, agent agents.Agent) *RepoState {
 	Git(t, dir, "config", "user.email", "e2e@test.local")
 	Git(t, dir, "commit", "--allow-empty", "-m", "initial commit")
 
+	// External agents need external_agents enabled in settings before enable,
+	// so the CLI can discover the agent binary via PATH during DiscoverAndRegister.
+	if ea, ok := agent.(agents.ExternalAgent); ok && ea.IsExternalAgent() {
+		entireDir := filepath.Join(dir, ".entire")
+		if err := os.MkdirAll(entireDir, 0o755); err != nil {
+			t.Fatalf("create .entire for external agent: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(entireDir, "settings.json"),
+			[]byte("{\"external_agents\": true}\n"), 0o644); err != nil {
+			t.Fatalf("write external_agents setting: %v", err)
+		}
+	}
+
 	entire.Enable(t, dir, agent.EntireAgent())
 	if agent.Name() == "factoryai-droid" {
 		if err := configureDroidRepoSettings(dir); err != nil {
@@ -73,6 +86,19 @@ func SetupRepo(t *testing.T, agent agents.Agent) *RepoState {
 		}
 	}
 	PatchSettings(t, dir, map[string]any{"log_level": "debug"})
+
+	// Copilot CLI blocks on a "No copilot instructions found" notice in fresh
+	// repos that lack .github/copilot-instructions.md, preventing the interactive
+	// prompt from appearing.
+	if agent.Name() == "copilot-cli" {
+		ghDir := filepath.Join(dir, ".github")
+		if err := os.MkdirAll(ghDir, 0o755); err != nil {
+			t.Fatalf("create .github dir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(ghDir, "copilot-instructions.md"), []byte("# E2E Test\n"), 0o644); err != nil {
+			t.Fatalf("write copilot-instructions.md: %v", err)
+		}
+	}
 
 	// OpenCode's non-interactive mode auto-rejects external_directory permission
 	// since there's no user to prompt. Write a config to allow it.
@@ -384,6 +410,13 @@ func (s *RepoState) WaitFor(t *testing.T, session agents.Session, pattern string
 	if err != nil {
 		t.Fatalf("WaitFor(%q): %v", pattern, err)
 	}
+}
+
+// IsExternalAgent returns true if the agent implements the ExternalAgent
+// interface and reports itself as external.
+func (s *RepoState) IsExternalAgent() bool {
+	ea, ok := s.Agent.(agents.ExternalAgent)
+	return ok && ea.IsExternalAgent()
 }
 
 // Send sends input to an interactive session and logs it to ConsoleLog.

@@ -13,7 +13,7 @@ This repo contains the CLI for Entire.
 - `entire/`: Main CLI entry point
 - `entire/cli`: CLI utilities and helpers
 - `entire/cli/commands`: actual command implementations
-- `entire/cli/agent`: agent implementations (Claude Code, Gemini CLI, OpenCode, Cursor) - see [Agent Integration Checklist](docs/architecture/agent-integration-checklist.md) and [Agent Implementation Guide](docs/architecture/agent-guide.md)
+- `entire/cli/agent`: agent implementations (Claude Code, Gemini CLI, OpenCode, Cursor, Copilot CLI) - see [Agent Integration Checklist](docs/architecture/agent-integration-checklist.md) and [Agent Implementation Guide](docs/architecture/agent-guide.md)
 - `entire/cli/strategy`: strategy implementation (manual-commit) - see section below
 - `entire/cli/checkpoint`: checkpoint storage abstractions (temporary and committed)
 - `entire/cli/session`: session state management
@@ -62,6 +62,7 @@ mise run test:e2e:canary TestFoo   # Run a specific test
 - **If a canary test fails, the bug is in the CLI or test infrastructure**, not in an agent
 - Located in `e2e/vogon/` (binary) and `cmd/entire/cli/agent/vogon/` (Agent interface)
 - The binary parses prompts via regex, creates/modifies/deletes files, and fires lifecycle hooks
+- **IMPORTANT: When changing E2E test prompt wording**, the Vogon binary (`e2e/vogon/main.go`) parses prompts with hardcoded regexes. New phrasing may not match existing patterns — always run `mise run test:e2e:canary` after changing prompt text and fix Vogon's parsing if tests fail.
 
 ### Running E2E Tests (Only When Explicitly Requested)
 
@@ -72,6 +73,8 @@ mise run test:e2e [filter]                          # All agents, filtered
 mise run test:e2e --agent claude-code [filter]       # Claude Code only
 mise run test:e2e --agent gemini-cli [filter]        # Gemini CLI only
 mise run test:e2e --agent opencode [filter]          # OpenCode only
+mise run test:e2e --agent copilot-cli [filter]       # Copilot CLI only
+mise run test:e2e --agent cursor-cli [filter]        # Cursor only
 ```
 
 E2E tests:
@@ -79,9 +82,9 @@ E2E tests:
 - Use the `//go:build e2e` build tag
 - Located in `e2e/tests/`
 - See [`e2e/README.md`](e2e/README.md) for full documentation (structure, debugging, adding agents)
-- Test real agent interactions (Claude Code, Gemini CLI, OpenCode, Cursor, or Vogon creating files, committing, etc.)
+- Test real agent interactions (Claude Code, Gemini CLI, OpenCode, Cursor, Copilot CLI, or Vogon creating files, committing, etc.)
 - Validate checkpoint scenarios documented in `docs/architecture/checkpoint-scenarios.md`
-- Support multiple agents via `E2E_AGENT` env var (`claude-code`, `gemini`, `opencode`, `cursor`, `vogon`)
+- Support multiple agents via `E2E_AGENT` env var (`claude-code`, `gemini-cli`, `opencode`, `cursor-cli`, `copilot-cli`, `vogon`)
 
 **Environment variables:**
 
@@ -108,6 +111,27 @@ func TestFeature_Bar(t *testing.T) {
 ```
 
 **Exception:** Tests that modify process-global state cannot be parallelized. This includes `os.Chdir()`/`t.Chdir()` and `os.Setenv()`/`t.Setenv()` — Go's test framework will panic if these are used after `t.Parallel()`.
+
+### Git in Tests
+
+**Tests that touch git state must use an isolated temp repo — never the real repo CWD.**
+
+Many handlers (lifecycle, strategy, hooks) resolve the git repo from CWD via `OpenRepository`, `GetGitCommonDir`, `DetectFileChanges`, etc. Without isolation, tests can create session state files, shadow branches, or other artifacts in the real `.git/` directory.
+
+Use the `testutil` helpers:
+
+```go
+tmpDir := t.TempDir()
+testutil.InitRepo(t, tmpDir)                    // git init + user config + disable GPG
+testutil.WriteFile(t, tmpDir, "f.txt", "init")  // create a file
+testutil.GitAdd(t, tmpDir, "f.txt")             // stage it
+testutil.GitCommit(t, tmpDir, "init")           // commit (needs at least one commit for HEAD)
+t.Chdir(tmpDir)                                 // redirect CWD-based git resolution
+```
+
+`testutil.InitRepo` configures `user.name`, `user.email`, and disables GPG signing — safe for CI environments without global git config.
+
+**Do NOT** shell out to `git init`/`git commit` directly without setting user config and `--no-gpg-sign`, and **do NOT** run lifecycle/strategy handlers from the real repo CWD in tests.
 
 ### Linting and Formatting
 

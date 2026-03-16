@@ -16,14 +16,15 @@ import (
 	cpkg "github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
+	"github.com/entireio/cli/cmd/entire/cli/osroot"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 
 	"github.com/charmbracelet/huh"
-	"github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/filemode"
-	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/filemode"
+	"github.com/go-git/go-git/v6/plumbing/object"
 )
 
 // GetRewindPoints returns available rewind points.
@@ -360,6 +361,15 @@ func (s *ManualCommitStrategy) Rewind(ctx context.Context, point RewindPoint) er
 		repoRoot = "." // Fallback to current directory
 	}
 
+	// Open os.Root at repo root for traversal-resistant file operations.
+	// Defense-in-depth: paths come from git tree objects (trusted) but we
+	// still scope operations to prevent any escape from the repo root.
+	repoRootHandle, err := os.OpenRoot(repoRoot)
+	if err != nil {
+		return fmt.Errorf("failed to open repo root: %w", err)
+	}
+	defer repoRootHandle.Close()
+
 	// Find and delete untracked files that aren't in the checkpoint.
 	// Uses git ls-files to only consider non-ignored files, avoiding walks through
 	// large ignored directories like node_modules/.
@@ -384,9 +394,8 @@ func (s *ManualCommitStrategy) Rewind(ctx context.Context, point RewindPoint) er
 			continue
 		}
 
-		// File is untracked and not in checkpoint - delete it
-		absPath := filepath.Join(repoRoot, relPath)
-		if removeErr := os.Remove(absPath); removeErr == nil {
+		// File is untracked and not in checkpoint - delete it via os.Root
+		if removeErr := osroot.Remove(repoRootHandle, relPath); removeErr == nil {
 			fmt.Fprintf(os.Stderr, "  Deleted: %s\n", relPath)
 		}
 	}
@@ -406,8 +415,9 @@ func (s *ManualCommitStrategy) Rewind(ctx context.Context, point RewindPoint) er
 			return fmt.Errorf("failed to read file %s: %w", f.Name, err)
 		}
 
-		// Ensure directory exists
-		dir := filepath.Dir(f.Name)
+		// Ensure directory exists (MkdirAll not available on os.Root)
+		absPath := filepath.Join(repoRoot, f.Name)
+		dir := filepath.Dir(absPath)
 		if dir != "." {
 			//nolint:gosec // G301: Need 0o755 for user directories during rewind
 			if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -415,12 +425,12 @@ func (s *ManualCommitStrategy) Rewind(ctx context.Context, point RewindPoint) er
 			}
 		}
 
-		// Write file with appropriate permissions
+		// Write file with appropriate permissions via os.Root
 		var perm os.FileMode = 0o644
 		if f.Mode == filemode.Executable {
 			perm = 0o755
 		}
-		if err := os.WriteFile(f.Name, []byte(contents), perm); err != nil {
+		if err := osroot.WriteFile(repoRootHandle, f.Name, []byte(contents), perm); err != nil {
 			return fmt.Errorf("failed to write file %s: %w", f.Name, err)
 		}
 

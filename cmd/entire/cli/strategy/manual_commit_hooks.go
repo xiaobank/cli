@@ -27,12 +27,13 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/stringutil"
 	"github.com/entireio/cli/cmd/entire/cli/trail"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
+	"github.com/entireio/cli/perf"
 	"github.com/entireio/cli/redact"
 
-	"github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/go-git/go-git/v5/utils/binary"
+	"github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/object"
+	"github.com/go-git/go-git/v6/utils/binary"
 )
 
 // hasTTY checks if /dev/tty is available for interactive prompts.
@@ -51,6 +52,13 @@ func hasTTY() bool {
 	// actually respond to interactive prompts. Treat them as non-TTY.
 	// See: https://geminicli.com/docs/tools/shell/
 	if os.Getenv("GEMINI_CLI") != "" {
+		return false
+	}
+
+	// Copilot CLI sets COPILOT_CLI=1 when running hook subprocesses (v0.0.421+).
+	// Like Gemini, the subprocess may inherit the user's TTY but can't respond
+	// to interactive prompts.
+	if os.Getenv("COPILOT_CLI") != "" {
 		return false
 	}
 
@@ -338,14 +346,21 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 		return s.handleAmendCommitMsg(ctx, commitMsgFile)
 	}
 
+	_, openRepoSpan := perf.Start(ctx, "open_repository")
 	repo, err := OpenRepository(ctx)
 	if err != nil {
-		return nil //nolint:nilerr // Hook must be silent on failure
+		openRepoSpan.RecordError(err)
+		openRepoSpan.End()
+		return nil
 	}
+	openRepoSpan.End()
 
+	_, findSessionsSpan := perf.Start(ctx, "find_sessions_for_worktree")
 	worktreePath, err := paths.WorktreeRoot(ctx)
 	if err != nil {
-		return nil //nolint:nilerr // Hook must be silent on failure
+		findSessionsSpan.RecordError(err)
+		findSessionsSpan.End()
+		return nil
 	}
 
 	// Find all active sessions for this worktree
@@ -353,13 +368,16 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 	// intermediate commits without entering new prompts, causing HEAD to diverge
 	sessions, err := s.findSessionsForWorktree(ctx, worktreePath)
 	if err != nil || len(sessions) == 0 {
+		findSessionsSpan.RecordError(err)
+		findSessionsSpan.End()
 		// No active sessions or error listing - silently skip (hooks must be resilient)
 		logging.Debug(logCtx, "prepare-commit-msg: no active sessions",
 			slog.String("strategy", "manual-commit"),
 			slog.String("source", source),
 		)
-		return nil //nolint:nilerr // Intentional: hooks must be silent on failure
+		return nil
 	}
+	findSessionsSpan.End()
 
 	// Fast path: when an agent is committing (ACTIVE session + no TTY or known
 	// TTY agent), skip content detection and interactive prompts. The agent can't
@@ -381,7 +399,9 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 	}
 
 	// Check if any session has new content to condense
+	_, filterSessionsSpan := perf.Start(ctx, "filter_sessions_with_content")
 	sessionsWithContent := s.filterSessionsWithNewContent(ctx, repo, sessions)
+	filterSessionsSpan.End()
 
 	if len(sessionsWithContent) == 0 {
 		// No new content — no trailer needed
@@ -394,15 +414,19 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 	}
 
 	// Read current commit message
+	_, readCommitMessageSpan := perf.Start(ctx, "read_commit_message")
 	content, err := os.ReadFile(commitMsgFile) //nolint:gosec // commitMsgFile is provided by git hook
 	if err != nil {
-		return nil //nolint:nilerr // Hook must be silent on failure
+		readCommitMessageSpan.RecordError(err)
+		readCommitMessageSpan.End()
+		return nil
 	}
 
 	message := string(content)
 
 	// Check if trailer already exists (ParseCheckpoint validates format, so found==true means valid)
 	if existingCpID, found := trailers.ParseCheckpoint(message); found {
+		readCommitMessageSpan.End()
 		// Trailer already exists (e.g., amend) - keep it
 		logging.Debug(logCtx, "prepare-commit-msg: trailer already exists",
 			slog.String("strategy", "manual-commit"),
@@ -411,10 +435,14 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 		)
 		return nil
 	}
+	readCommitMessageSpan.End()
 
-	// Generate a fresh checkpoint ID
+	// Generate a fresh checkpoint ID and resolve session metadata
+	_, resolveMetadataSpan := perf.Start(ctx, "resolve_session_metadata")
 	checkpointID, err := id.Generate()
 	if err != nil {
+		resolveMetadataSpan.RecordError(err)
+		resolveMetadataSpan.End()
 		return fmt.Errorf("failed to generate checkpoint ID: %w", err)
 	}
 
@@ -435,9 +463,12 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 	if stngs, loadErr := settings.Load(ctx); loadErr == nil {
 		commitLinking = stngs.GetCommitLinking()
 	}
+	resolveMetadataSpan.End()
 
 	// Check if any session with content is currently ACTIVE (agent is running).
 	// Add trailer differently based on commit source
+	// NOTE: TTY confirmation (askConfirmTTY) is intentionally NOT wrapped in a span
+	// because it blocks on user input and would skew timing.
 	switch source {
 	case "message":
 		// Using -m or -F: behavior depends on TTY availability and commit_linking setting
@@ -486,9 +517,13 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 	)
 
 	// Write updated message back
-	if err := os.WriteFile(commitMsgFile, []byte(message), 0o600); err != nil {
-		return nil //nolint:nilerr // Hook must be silent on failure
+	_, writeCommitMessageSpan := perf.Start(ctx, "write_commit_message")
+	if err := os.WriteFile(commitMsgFile, []byte(message), 0o600); err != nil { //nolint:gosec // path from git hook arg
+		writeCommitMessageSpan.RecordError(err)
+		writeCommitMessageSpan.End()
+		return nil
 	}
+	writeCommitMessageSpan.End()
 
 	return nil
 }
@@ -553,7 +588,7 @@ func (s *ManualCommitStrategy) handleAmendCommitMsg(ctx context.Context, commitM
 
 		// Restore the trailer
 		message = addCheckpointTrailer(message, cpID)
-		if writeErr := os.WriteFile(commitMsgFile, []byte(message), 0o600); writeErr != nil {
+		if writeErr := os.WriteFile(commitMsgFile, []byte(message), 0o600); writeErr != nil { //nolint:gosec // path from git hook arg
 			return nil //nolint:nilerr // Hook must be silent on failure
 		}
 
@@ -743,24 +778,33 @@ func (h *postCommitActionHandler) HandleWarnStaleSession(_ *session.State) error
 func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error { //nolint:unparam // error return is part of the hook contract; callers check it
 	logCtx := logging.WithComponent(ctx, "checkpoint")
 
+	_, openRepoSpan := perf.Start(ctx, "open_repository_and_head")
 	repo, err := OpenRepository(ctx)
 	if err != nil {
-		return nil //nolint:nilerr // Hook must be silent on failure
+		openRepoSpan.RecordError(err)
+		openRepoSpan.End()
+		return nil
 	}
 
 	// Get HEAD commit to check for trailer
 	head, err := repo.Head()
 	if err != nil {
-		return nil //nolint:nilerr // Hook must be silent on failure
+		openRepoSpan.RecordError(err)
+		openRepoSpan.End()
+		return nil
 	}
 
 	commit, err := repo.CommitObject(head.Hash())
 	if err != nil {
-		return nil //nolint:nilerr // Hook must be silent on failure
+		openRepoSpan.RecordError(err)
+		openRepoSpan.End()
+		return nil
 	}
 
 	// Check if commit has checkpoint trailer (ParseCheckpoint validates format)
 	checkpointID, found := trailers.ParseCheckpoint(commit.Message)
+	openRepoSpan.End()
+
 	if !found {
 		// No trailer — user removed it or it was never added (mid-turn commit).
 		// Still update BaseCommit for active sessions so future commits can match.
@@ -768,13 +812,19 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error { //nolint:
 		return nil
 	}
 
+	_, findSessionsSpan := perf.Start(ctx, "find_sessions_for_worktree")
 	worktreePath, err := paths.WorktreeRoot(ctx)
 	if err != nil {
-		return nil //nolint:nilerr // Hook must be silent on failure
+		findSessionsSpan.RecordError(err)
+		findSessionsSpan.End()
+		return nil
 	}
 
 	// Find all active sessions for this worktree
 	sessions, err := s.findSessionsForWorktree(ctx, worktreePath)
+	findSessionsSpan.RecordError(err)
+	findSessionsSpan.End()
+
 	if err != nil || len(sessions) == 0 {
 		logging.Warn(logCtx, "post-commit: no active sessions despite trailer",
 			slog.String("strategy", "manual-commit"),
@@ -806,6 +856,7 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error { //nolint:
 	// These are immutable within this hook invocation and used by multiple
 	// per-session functions (filesOverlapWithContent, filesWithRemainingAgentChanges,
 	// calculateSessionAttributions).
+	_, resolveTreesSpan := perf.Start(ctx, "resolve_commit_trees")
 	var headTree *object.Tree
 	if t, err := commit.Tree(); err == nil {
 		headTree = t
@@ -819,7 +870,8 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error { //nolint:
 		}
 	}
 
-	committedFileSet := filesChangedInCommit(ctx, worktreePath, commit)
+	committedFileSet := filesChangedInCommit(ctx, worktreePath, commit, headTree, parentTree)
+	resolveTreesSpan.End()
 
 	for _, state := range sessions {
 		// Skip fully-condensed ended sessions — no work remains.
@@ -834,6 +886,7 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error { //nolint:
 
 	// Clean up shadow branches — only delete when ALL sessions on the branch are non-active
 	// or were condensed during this PostCommit.
+	_, cleanupBranchesSpan := perf.Start(ctx, "cleanup_shadow_branches")
 	for shadowBranchName := range shadowBranchesToDelete {
 		if uncondensedActiveOnBranch[shadowBranchName] {
 			logging.Debug(logCtx, "post-commit: preserving shadow branch (active session exists)",
@@ -852,6 +905,7 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error { //nolint:
 			)
 		}
 	}
+	cleanupBranchesSpan.End()
 
 	return nil
 }
@@ -880,6 +934,7 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 	// Pre-resolve shadow branch ref and tree for this session.
 	// These are read 4+ times across sessionHasNewContent, filesOverlapWithContent,
 	// CondenseSession, filesWithRemainingAgentChanges, and calculateSessionAttributions.
+	_, resolveShadowBranchSpan := perf.Start(ctx, "resolve_shadow_branch")
 	var shadowRef *plumbing.Reference
 	var shadowTree *object.Tree
 	if ref, refErr := repo.Reference(plumbing.NewBranchReferenceName(shadowBranchName), true); refErr == nil {
@@ -890,6 +945,7 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 			}
 		}
 	}
+	resolveShadowBranchSpan.End()
 
 	// Check for new content (needed for TransitionContext and condensation).
 	// Fail-open: if content check errors, assume new content exists so we
@@ -903,6 +959,7 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 	// In both cases, PrepareCommitMsg already validated this commit. We trust
 	// that decision here. Transcript-based re-validation is unreliable because
 	// subagent transcripts may not be available yet (subagent still running).
+	_, checkContentSpan := perf.Start(ctx, "check_session_content")
 	var hasNew bool
 	if state.Phase.IsActive() {
 		hasNew = true
@@ -930,6 +987,7 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 		filesTouchedBefore = make([]string, len(state.FilesTouched))
 		copy(filesTouchedBefore, state.FilesTouched)
 	}
+	checkContentSpan.End()
 
 	logging.Debug(logCtx, "post-commit: carry-forward prep",
 		slog.String("session_id", state.SessionID),
@@ -940,6 +998,7 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 	)
 
 	// Run the state machine transition with handler for strategy-specific actions.
+	_, transitionAndCondenseSpan := perf.Start(ctx, "transition_and_condense")
 	handler := &postCommitActionHandler{
 		s:                      s,
 		ctx:                    ctx,
@@ -964,6 +1023,7 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 		logging.Warn(logCtx, "post-commit action handler error",
 			slog.String("error", err.Error()))
 	}
+	transitionAndCondenseSpan.End()
 
 	// Record checkpoint ID for ACTIVE sessions so HandleTurnEnd can finalize
 	// with full transcript. IDLE/ENDED sessions already have complete transcripts.
@@ -979,6 +1039,7 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 	// commit across two `git commit` invocations, each gets a 1:1 checkpoint.
 	// Uses content-aware comparison: if user did `git add -p` and committed
 	// partial changes, the file still has remaining agent changes to carry forward.
+	_, carryForwardSpan := perf.Start(ctx, "carry_forward_files")
 	if handler.condensed {
 		remainingFiles := filesWithRemainingAgentChanges(ctx, repo, shadowBranchName, commit, filesTouchedBefore, committedFileSet, overlapOpts{
 			headTree:   headTree,
@@ -1004,6 +1065,7 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 			clearFilesystemPrompt(ctx, state.SessionID)
 		}
 	}
+	carryForwardSpan.End()
 
 	// Mark ENDED sessions as fully condensed when no carry-forward remains.
 	// PostCommit will skip these sessions entirely on future commits.
@@ -1013,11 +1075,13 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 	}
 
 	// Save the updated state
+	_, saveSessionStateSpan := perf.Start(ctx, "save_session_state")
 	if err := s.saveSessionState(ctx, state); err != nil {
 		logging.Warn(logCtx, "failed to update session state",
 			slog.String("session_id", state.SessionID),
 			slog.String("error", err.Error()))
 	}
+	saveSessionStateSpan.End()
 
 	// Only preserve shadow branch for active sessions that were NOT condensed.
 	// Condensed sessions already have their data on entire/checkpoints/v1.
@@ -1604,7 +1668,7 @@ func (s *ManualCommitStrategy) addTrailerForAgentCommit(logCtx context.Context, 
 		slog.String("session_id", state.SessionID),
 	)
 
-	if err := os.WriteFile(commitMsgFile, []byte(message), 0o600); err != nil {
+	if err := os.WriteFile(commitMsgFile, []byte(message), 0o600); err != nil { //nolint:gosec // path from git hook arg
 		return nil //nolint:nilerr // Hook must be silent on failure
 	}
 	return nil
@@ -2215,18 +2279,37 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 
 // filesChangedInCommit returns the set of files changed in a commit using git diff-tree.
 // Uses the git CLI for faster performance vs go-git tree walks (lower constant factors).
-func filesChangedInCommit(ctx context.Context, repoDir string, commit *object.Commit) map[string]struct{} {
+// Falls back to go-git tree walk if git diff-tree fails, since an empty result would
+// break downstream condensation and carry-forward logic.
+func filesChangedInCommit(ctx context.Context, repoDir string, commit *object.Commit, headTree, parentTree *object.Tree) map[string]struct{} {
 	var parentHash string
 	if commit.NumParents() > 0 {
 		parentHash = commit.ParentHashes[0].String()
 	}
 	result, err := gitops.DiffTreeFiles(ctx, repoDir, parentHash, commit.Hash.String())
 	if err != nil {
-		logging.Warn(ctx, "post-commit: git diff-tree failed; condensation and carry-forward may be affected",
+		logging.Warn(ctx, "post-commit: git diff-tree failed, falling back to tree walk",
 			slog.String("commit", commit.Hash.String()),
 			slog.String("error", err.Error()),
 		)
+		return filesChangedInCommitFallback(ctx, headTree, parentTree)
+	}
+	return result
+}
+
+// filesChangedInCommitFallback uses go-git tree walks to compute changed files.
+// Slower than git diff-tree but doesn't depend on an external process.
+func filesChangedInCommitFallback(ctx context.Context, headTree, parentTree *object.Tree) map[string]struct{} {
+	files, err := getAllChangedFilesBetweenTreesSlow(ctx, parentTree, headTree)
+	if err != nil {
+		logging.Warn(ctx, "post-commit: tree walk fallback also failed; condensation and carry-forward may be affected",
+			slog.String("error", err.Error()),
+		)
 		return make(map[string]struct{})
+	}
+	result := make(map[string]struct{}, len(files))
+	for _, f := range files {
+		result[f] = struct{}{}
 	}
 	return result
 }

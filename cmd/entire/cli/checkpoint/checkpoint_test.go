@@ -18,11 +18,12 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
+	"github.com/stretchr/testify/require"
 
-	"github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/config"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/config"
+	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/object"
 )
 
 func TestCheckpointType_Values(t *testing.T) {
@@ -721,7 +722,7 @@ func TestListCommitted_FallsBackToRemote(t *testing.T) {
 
 	// Clone the repo (this clones main, but not entire/checkpoints/v1 by default)
 	localDir := t.TempDir()
-	localRepo, err := git.PlainClone(localDir, false, &git.CloneOptions{
+	localRepo, err := git.PlainClone(localDir, &git.CloneOptions{
 		URL: remoteDir,
 	})
 	if err != nil {
@@ -2321,9 +2322,7 @@ func TestWriteCommitted_DuplicateSessionIDUpdatesInPlace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadCommitted() error = %v", err)
 	}
-	if summary == nil {
-		t.Fatal("ReadCommitted() returned nil summary")
-	}
+	require.NotNil(t, summary, "ReadCommitted() returned nil summary")
 
 	// Should have 2 sessions, not 3
 	if len(summary.Sessions) != 2 {
@@ -2428,9 +2427,7 @@ func TestWriteCommitted_DuplicateSessionIDSingleSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadCommitted() error = %v", err)
 	}
-	if summary == nil {
-		t.Fatal("ReadCommitted() returned nil summary")
-	}
+	require.NotNil(t, summary, "ReadCommitted() returned nil summary")
 
 	// Should have 1 session, not 2
 	if len(summary.Sessions) != 1 {

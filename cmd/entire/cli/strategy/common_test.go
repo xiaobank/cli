@@ -12,9 +12,9 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 
-	"github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/object"
 )
 
 func TestOpenRepository(t *testing.T) {
@@ -1014,6 +1014,7 @@ func initBareWithMetadataBranch(t *testing.T) string {
 	run(workDir, "clone", bareDir, ".")
 	run(workDir, "config", "user.email", "test@test.com")
 	run(workDir, "config", "user.name", "Test User")
+	run(workDir, "config", "commit.gpgsign", "false")
 	if err := os.WriteFile(filepath.Join(workDir, "README.md"), []byte("# Test"), 0o644); err != nil {
 		t.Fatalf("failed to write file: %v", err)
 	}
@@ -1045,7 +1046,7 @@ func TestEnsureMetadataBranch(t *testing.T) {
 			t.Fatalf("clone failed: %v\n%s", err, out)
 		}
 
-		repo, err := git.PlainOpenWithOptions(cloneDir, &git.PlainOpenOptions{EnableDotGitCommonDir: true})
+		repo, err := git.PlainOpen(cloneDir)
 		if err != nil {
 			t.Fatalf("failed to open repo: %v", err)
 		}
@@ -1069,6 +1070,62 @@ func TestEnsureMetadataBranch(t *testing.T) {
 		}
 		if len(tree.Entries) == 0 {
 			t.Error("local branch has empty tree — remote data was not preserved")
+		}
+	})
+
+	t.Run("updates empty orphan from remote", func(t *testing.T) {
+		t.Parallel()
+		bareDir := initBareWithMetadataBranch(t)
+		cloneDir := filepath.Join(t.TempDir(), "clone")
+		cmd := exec.CommandContext(context.Background(), "git", "clone", bareDir, cloneDir)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("clone failed: %v\n%s", err, out)
+		}
+
+		repo, err := git.PlainOpen(cloneDir)
+		if err != nil {
+			t.Fatalf("failed to open repo: %v", err)
+		}
+
+		// Create an empty orphan locally (simulates old enable behavior)
+		emptyTree := &object.Tree{Entries: []object.TreeEntry{}}
+		treeObj := repo.Storer.NewEncodedObject()
+		if err := emptyTree.Encode(treeObj); err != nil {
+			t.Fatalf("failed to encode tree: %v", err)
+		}
+		treeHash, err := repo.Storer.SetEncodedObject(treeObj)
+		if err != nil {
+			t.Fatalf("failed to store tree: %v", err)
+		}
+		orphan := &object.Commit{
+			TreeHash: treeHash,
+			Author:   object.Signature{Name: "Test", Email: "test@test.com"},
+			Message:  "Initialize metadata branch\n",
+		}
+		orphanObj := repo.Storer.NewEncodedObject()
+		if err := orphan.Encode(orphanObj); err != nil {
+			t.Fatalf("failed to encode commit: %v", err)
+		}
+		orphanHash, err := repo.Storer.SetEncodedObject(orphanObj)
+		if err != nil {
+			t.Fatalf("failed to store commit: %v", err)
+		}
+		refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
+		if err := repo.Storer.SetReference(plumbing.NewHashReference(refName, orphanHash)); err != nil {
+			t.Fatalf("failed to set ref: %v", err)
+		}
+
+		if err := EnsureMetadataBranch(repo); err != nil {
+			t.Fatalf("EnsureMetadataBranch() failed: %v", err)
+		}
+
+		// Should have been updated from remote — no longer empty
+		ref, err := repo.Reference(refName, true)
+		if err != nil {
+			t.Fatalf("local branch not found: %v", err)
+		}
+		if ref.Hash() == orphanHash {
+			t.Error("local branch still points to empty orphan — was not updated from remote")
 		}
 	})
 
@@ -1101,6 +1158,145 @@ func TestEnsureMetadataBranch(t *testing.T) {
 			t.Errorf("expected empty tree, got %d entries", len(tree.Entries))
 		}
 	})
+}
+
+// cloneWithConfig clones bareDir into a new temp directory, configures git identity,
+// and returns the clone path and a git runner function.
+func cloneWithConfig(t *testing.T, bareDir string) (string, func(args ...string)) {
+	t.Helper()
+	cloneDir := filepath.Join(t.TempDir(), "clone")
+	cmd := exec.CommandContext(context.Background(), "git", "clone", bareDir, cloneDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clone failed: %v\n%s", err, out)
+	}
+	run := func(args ...string) {
+		cmd := exec.CommandContext(context.Background(), "git", args...)
+		cmd.Dir = cloneDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v failed: %v\n%s", args, err, out)
+		}
+	}
+	run("config", "user.email", "test@test.com")
+	run("config", "user.name", "Test User")
+	run("config", "commit.gpgsign", "false")
+	return cloneDir, run
+}
+
+func TestEnsureMetadataBranch_DisconnectedBranchesNotReconciledInEnable(t *testing.T) {
+	t.Parallel()
+
+	bareDir := initBareWithMetadataBranch(t)
+	cloneDir, run := cloneWithConfig(t, bareDir)
+
+	// Create a disconnected local branch with different checkpoint data
+	run("checkout", "--orphan", "temp-orphan")
+	run("rm", "-rf", ".")
+	localCheckpointDir := filepath.Join(cloneDir, "ab", "cdef012345")
+	if err := os.MkdirAll(localCheckpointDir, 0o755); err != nil {
+		t.Fatalf("failed to create dir: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(localCheckpointDir, "metadata.json"),
+		[]byte(`{"checkpoint_id":"abcdef012345"}`), 0o644,
+	); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+	run("add", ".")
+	run("commit", "-m", "Checkpoint: abcdef012345")
+	run("branch", "-f", paths.MetadataBranchName, "temp-orphan")
+
+	repo, err := git.PlainOpen(cloneDir)
+	if err != nil {
+		t.Fatalf("failed to open repo: %v", err)
+	}
+
+	// Get local ref hash before EnsureMetadataBranch
+	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
+	localRefBefore, err := repo.Reference(refName, true)
+	if err != nil {
+		t.Fatalf("local branch not found: %v", err)
+	}
+
+	if err := EnsureMetadataBranch(repo); err != nil {
+		t.Fatalf("EnsureMetadataBranch() failed: %v", err)
+	}
+
+	// EnsureMetadataBranch should NOT reconcile disconnected branches.
+	// Reconciliation happens at pre-push time or via 'entire doctor'.
+	// The local branch should be unchanged.
+	localRefAfter, err := repo.Reference(refName, true)
+	if err != nil {
+		t.Fatalf("local branch not found: %v", err)
+	}
+	if localRefAfter.Hash() != localRefBefore.Hash() {
+		t.Error("EnsureMetadataBranch should not modify disconnected local branch with real data")
+	}
+}
+
+func TestEnsureMetadataBranch_DoesNotFastForwardWhenBehind(t *testing.T) {
+	t.Parallel()
+
+	bareDir := initBareWithMetadataBranch(t)
+	cloneDir, run := cloneWithConfig(t, bareDir)
+
+	// Create local branch from remote (normal state)
+	repo, err := git.PlainOpen(cloneDir)
+	if err != nil {
+		t.Fatalf("failed to open repo: %v", err)
+	}
+	if err := EnsureMetadataBranch(repo); err != nil {
+		t.Fatalf("first EnsureMetadataBranch() failed: %v", err)
+	}
+
+	// Remember current local hash
+	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
+	localBefore, err := repo.Reference(refName, true)
+	if err != nil {
+		t.Fatalf("local branch not found: %v", err)
+	}
+
+	// Add a second checkpoint to the remote (simulates another machine pushing)
+	run("checkout", paths.MetadataBranchName)
+	secondDir := filepath.Join(cloneDir, "cd", "ef01234567")
+	if err := os.MkdirAll(secondDir, 0o755); err != nil {
+		t.Fatalf("failed to create dir: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(secondDir, "metadata.json"),
+		[]byte(`{"checkpoint_id":"cdef01234567"}`), 0o644,
+	); err != nil {
+		t.Fatalf("failed to write file: %v", err)
+	}
+	run("add", ".")
+	run("commit", "-m", "Checkpoint: cdef01234567")
+	run("push", "origin", paths.MetadataBranchName)
+
+	// Reset local branch back to the old commit (local is now behind remote)
+	if err := repo.Storer.SetReference(
+		plumbing.NewHashReference(refName, localBefore.Hash()),
+	); err != nil {
+		t.Fatalf("failed to reset ref: %v", err)
+	}
+
+	// Re-open to clear caches
+	repo, err = git.PlainOpen(cloneDir)
+	if err != nil {
+		t.Fatalf("failed to reopen repo: %v", err)
+	}
+
+	if err := EnsureMetadataBranch(repo); err != nil {
+		t.Fatalf("second EnsureMetadataBranch() failed: %v", err)
+	}
+
+	// EnsureMetadataBranch no longer fast-forwards diverged branches (handled by push path).
+	// Local should be unchanged since it has real data and shares ancestry with remote.
+	localAfter, err := repo.Reference(refName, true)
+	if err != nil {
+		t.Fatalf("local branch not found: %v", err)
+	}
+	if localAfter.Hash() != localBefore.Hash() {
+		t.Error("EnsureMetadataBranch should not modify local branch with shared ancestry")
+	}
 }
 
 // buildCommittedTree creates a git tree with the sharded committed checkpoint layout
@@ -1230,6 +1426,63 @@ func TestReadLatestSessionPromptFromCommittedTree(t *testing.T) {
 		got := ReadLatestSessionPromptFromCommittedTree(tree, cpID, 0)
 		if got != "Some prompt" {
 			t.Errorf("got %q, want %q", got, "Some prompt")
+		}
+	})
+
+	t.Run("falls back to earlier session when latest has no prompt", func(t *testing.T) {
+		t.Parallel()
+		// Session 1 (latest) has no prompt.txt, session 0 does.
+		// This happens when a test session gets condensed alongside a real one.
+		tree := buildCommittedTree(t, map[string]string{
+			"a3/b2c4d5e6f7/0/prompt.txt":    "Real session prompt",
+			"a3/b2c4d5e6f7/1/metadata.json": `{"session_id":"test"}`,
+		})
+
+		got := ReadLatestSessionPromptFromCommittedTree(tree, cpID, 2)
+		if got != "Real session prompt" {
+			t.Errorf("got %q, want %q", got, "Real session prompt")
+		}
+	})
+
+	t.Run("falls back through multiple empty sessions to find prompt", func(t *testing.T) {
+		t.Parallel()
+		// Sessions 2 and 1 have no prompt, session 0 does.
+		tree := buildCommittedTree(t, map[string]string{
+			"a3/b2c4d5e6f7/0/prompt.txt":    "Original prompt",
+			"a3/b2c4d5e6f7/1/metadata.json": `{"session_id":"s1"}`,
+			"a3/b2c4d5e6f7/2/metadata.json": `{"session_id":"s2"}`,
+		})
+
+		got := ReadLatestSessionPromptFromCommittedTree(tree, cpID, 3)
+		if got != "Original prompt" {
+			t.Errorf("got %q, want %q", got, "Original prompt")
+		}
+	})
+
+	t.Run("returns empty when no session has a prompt", func(t *testing.T) {
+		t.Parallel()
+		tree := buildCommittedTree(t, map[string]string{
+			"a3/b2c4d5e6f7/0/metadata.json": `{"session_id":"s0"}`,
+			"a3/b2c4d5e6f7/1/metadata.json": `{"session_id":"s1"}`,
+		})
+
+		got := ReadLatestSessionPromptFromCommittedTree(tree, cpID, 2)
+		if got != "" {
+			t.Errorf("got %q, want empty string", got)
+		}
+	})
+
+	t.Run("falls back when latest has empty prompt.txt", func(t *testing.T) {
+		t.Parallel()
+		// Latest session has a prompt.txt file but it's empty — should fall back.
+		tree := buildCommittedTree(t, map[string]string{
+			"a3/b2c4d5e6f7/0/prompt.txt": "Real prompt",
+			"a3/b2c4d5e6f7/1/prompt.txt": "",
+		})
+
+		got := ReadLatestSessionPromptFromCommittedTree(tree, cpID, 2)
+		if got != "Real prompt" {
+			t.Errorf("got %q, want %q", got, "Real prompt")
 		}
 	})
 
