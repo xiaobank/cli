@@ -882,7 +882,7 @@ func TestDetectOrSelectAgent_AgentDetected(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	agents, err := detectOrSelectAgent(context.Background(), &buf, nil)
+	agents, _, err := detectOrSelectAgent(context.Background(), &buf, nil, false)
 	if err != nil {
 		t.Fatalf("detectOrSelectAgent() error = %v", err)
 	}
@@ -914,7 +914,7 @@ func TestDetectOrSelectAgent_GeminiDetected(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	agents, err := detectOrSelectAgent(context.Background(), &buf, nil)
+	agents, _, err := detectOrSelectAgent(context.Background(), &buf, nil, false)
 	if err != nil {
 		t.Fatalf("detectOrSelectAgent() error = %v", err)
 	}
@@ -941,7 +941,7 @@ func TestDetectOrSelectAgent_NoDetection_NoTTY_FallsBackToDefault(t *testing.T) 
 	// No .claude or .gemini directory - detection will fail
 
 	var buf bytes.Buffer
-	agents, err := detectOrSelectAgent(context.Background(), &buf, nil)
+	agents, _, err := detectOrSelectAgent(context.Background(), &buf, nil, false)
 	if err != nil {
 		t.Fatalf("detectOrSelectAgent() error = %v", err)
 	}
@@ -980,7 +980,7 @@ func TestDetectOrSelectAgent_NoDetection_WithTTY_ShowsPromptMessages(t *testing.
 	}
 
 	var buf bytes.Buffer
-	agents, err := detectOrSelectAgent(context.Background(), &buf, selectFn)
+	agents, _, err := detectOrSelectAgent(context.Background(), &buf, selectFn, false)
 	if err != nil {
 		t.Fatalf("detectOrSelectAgent() error = %v", err)
 	}
@@ -1009,7 +1009,7 @@ func TestDetectOrSelectAgent_SelectionCancelled(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	_, err := detectOrSelectAgent(context.Background(), &buf, selectFn)
+	_, _, err := detectOrSelectAgent(context.Background(), &buf, selectFn, false)
 	if err == nil {
 		t.Fatal("expected error when selection is cancelled")
 	}
@@ -1028,7 +1028,7 @@ func TestDetectOrSelectAgent_NoneSelected(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	_, err := detectOrSelectAgent(context.Background(), &buf, selectFn)
+	_, _, err := detectOrSelectAgent(context.Background(), &buf, selectFn, false)
 	if err == nil {
 		t.Fatal("expected error when no agents selected")
 	}
@@ -1059,7 +1059,7 @@ func TestDetectOrSelectAgent_BothDirectoriesExist_PromptsUser(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	agents, err := detectOrSelectAgent(context.Background(), &buf, selectFn)
+	agents, _, err := detectOrSelectAgent(context.Background(), &buf, selectFn, false)
 	if err != nil {
 		t.Fatalf("detectOrSelectAgent() error = %v", err)
 	}
@@ -1098,7 +1098,7 @@ func TestDetectOrSelectAgent_BothDirectoriesExist_NoTTY_UsesAll(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	agents, err := detectOrSelectAgent(context.Background(), &buf, nil)
+	agents, _, err := detectOrSelectAgent(context.Background(), &buf, nil, false)
 	if err != nil {
 		t.Fatalf("detectOrSelectAgent() error = %v", err)
 	}
@@ -1167,7 +1167,7 @@ func TestDetectOrSelectAgent_ReRun_AlwaysPromptsWithInstalledPreSelected(t *test
 	}
 
 	var buf bytes.Buffer
-	agents, err := detectOrSelectAgent(context.Background(), &buf, selectFn)
+	agents, _, err := detectOrSelectAgent(context.Background(), &buf, selectFn, false)
 	if err != nil {
 		t.Fatalf("detectOrSelectAgent() error = %v", err)
 	}
@@ -1198,7 +1198,7 @@ func TestDetectOrSelectAgent_ReRun_NoTTY_KeepsInstalled(t *testing.T) {
 	writeClaudeHooksFixture(t)
 
 	var buf bytes.Buffer
-	agents, err := detectOrSelectAgent(context.Background(), &buf, nil)
+	agents, _, err := detectOrSelectAgent(context.Background(), &buf, nil, false)
 	if err != nil {
 		t.Fatalf("detectOrSelectAgent() error = %v", err)
 	}
@@ -1362,7 +1362,7 @@ func TestDetectOrSelectAgent_ReRun_NewlyDetectedAgentAvailableNotPreSelected(t *
 	}
 
 	var buf bytes.Buffer
-	agents, err := detectOrSelectAgent(context.Background(), &buf, selectFn)
+	agents, _, err := detectOrSelectAgent(context.Background(), &buf, selectFn, false)
 	if err != nil {
 		t.Fatalf("detectOrSelectAgent() error = %v", err)
 	}
@@ -1396,7 +1396,7 @@ func TestDetectOrSelectAgent_ReRun_EmptySelection_ReturnsError(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	_, err := detectOrSelectAgent(context.Background(), &buf, selectFn)
+	_, _, err := detectOrSelectAgent(context.Background(), &buf, selectFn, false)
 	if err == nil {
 		t.Fatal("Expected error when no agents selected on re-run")
 	}

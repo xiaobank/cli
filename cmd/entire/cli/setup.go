@@ -31,6 +31,9 @@ const (
 // agentFlagName is the flag name used for agent selection across setup commands.
 const agentFlagName = "agent"
 
+// externalAgentsSentinel is a pseudo-agent value used in the multi-select to toggle external agent discovery.
+const externalAgentsSentinel = "__external_agents__"
+
 // EnableOptions holds the flags for `entire enable`.
 type EnableOptions struct {
 	LocalDev            bool
@@ -97,19 +100,34 @@ func parseCheckpointRemoteFlag(value string) (provider, repo string, err error) 
 // runSetupFlow runs the first-time setup flow (agent selection + hooks + settings).
 // Shared by root command (no args), `entire configure`, and `entire enable` on fresh repos.
 func runSetupFlow(ctx context.Context, w io.Writer, opts EnableOptions) error {
-	if err := promptExternalAgents(ctx, w, &opts); err != nil {
-		return fmt.Errorf("external agents prompt: %w", err)
+	// If external agents already enabled (via flag or prior config), discover first so they appear in the list.
+	externalPreSelected := opts.ExternalAgents != nil && *opts.ExternalAgents
+	if externalPreSelected {
+		external.DiscoverAndRegister(ctx)
 	}
 
-	// Discover external agent plugins so they appear in agent selection.
-	external.DiscoverAndRegister(ctx)
-
-	agents, err := detectOrSelectAgent(ctx, w, nil)
+	agents, externalSelected, err := detectOrSelectAgent(ctx, w, nil, externalPreSelected)
 	if err != nil {
 		return fmt.Errorf("agent selection failed: %w", err)
 	}
 
+	// Set external agents preference based on selection.
+	opts.ExternalAgents = &externalSelected
+
 	return runEnableInteractive(ctx, w, agents, opts)
+}
+
+// splitExternalAgentSelection separates the external agents sentinel from real agent names.
+func splitExternalAgentSelection(names []string) (realNames []string, externalSelected bool) {
+	realNames = make([]string, 0, len(names))
+	for _, name := range names {
+		if name == externalAgentsSentinel {
+			externalSelected = true
+			continue
+		}
+		realNames = append(realNames, name)
+	}
+	return realNames, externalSelected
 }
 
 // runAddAgents shows which agents are currently enabled and lets the user add more.
@@ -144,91 +162,30 @@ func runAddAgents(ctx context.Context, w io.Writer, opts EnableOptions) error {
 		return nil
 	}
 
-	// Build options from registered agents
-	agentNames := agent.List()
-	options := make([]huh.Option[string], 0, len(agentNames))
-	for _, name := range agentNames {
-		ag, err := agent.Get(name)
-		if err != nil {
-			continue
-		}
-		if _, ok := agent.AsHookSupport(ag); !ok {
-			continue
-		}
-		if to, ok := ag.(agent.TestOnly); ok && to.IsTestOnly() {
-			continue
-		}
-		opt := huh.NewOption(string(ag.Type()), string(name))
-		if _, installed := installedSet[name]; installed {
-			opt = opt.Selected(true)
-		}
-		options = append(options, opt)
-	}
-
-	if len(options) == 0 {
-		return errors.New("no agents with hook support available")
-	}
-
-	// Check if all agents are already installed
-	allInstalled := true
-	for _, name := range agentNames {
-		ag, err := agent.Get(name)
-		if err != nil {
-			continue
-		}
-		if _, ok := agent.AsHookSupport(ag); !ok {
-			continue
-		}
-		if to, ok := ag.(agent.TestOnly); ok && to.IsTestOnly() {
-			continue
-		}
-		if _, installed := installedSet[name]; !installed {
-			allInstalled = false
-			break
-		}
-	}
-	if allInstalled {
+	options, allInstalled := buildAgentOptions(installedSet)
+	externalCurrentlyEnabled := settings.IsExternalAgentsEnabled(ctx)
+	if allInstalled && externalCurrentlyEnabled {
 		fmt.Fprintln(w, "All available agents are already enabled.")
 		return nil
 	}
 
-	var selectedAgentNames []string
-	form := NewAccessibleForm(
-		huh.NewGroup(
-			huh.NewMultiSelect[string]().
-				Title("Enable more agents").
-				Description("Use space to select, enter to confirm.").
-				Options(options...).
-				Validate(func(selected []string) error {
-					if len(selected) == 0 {
-						return errors.New("please select at least one agent")
-					}
-					// Ensure previously installed agents are still selected
-					selectedSet := make(map[string]struct{}, len(selected))
-					for _, s := range selected {
-						selectedSet[s] = struct{}{}
-					}
-					for _, name := range installedNames {
-						if _, ok := selectedSet[string(name)]; !ok {
-							ag, err := agent.Get(name)
-							if err != nil {
-								continue
-							}
-							return fmt.Errorf("cannot remove %s — use `entire configure --remove %s` to remove it", ag.Type(), name)
-						}
-					}
-					return nil
-				}).
-				Value(&selectedAgentNames),
-		),
-	)
-	if err := form.Run(); err != nil {
-		return fmt.Errorf("agent selection cancelled: %w", err)
+	selectedAgentNames, err := promptAddAgents(options, installedNames)
+	if err != nil {
+		return err
+	}
+
+	realSelectedNames, externalSelected := splitExternalAgentSelection(selectedAgentNames)
+
+	// Update external agents setting if it changed.
+	if externalSelected != externalCurrentlyEnabled {
+		if err := updateExternalAgentsSetting(ctx, w, externalSelected); err != nil {
+			return err
+		}
 	}
 
 	// Find newly selected agents (not previously installed)
 	var newAgents []agent.Agent
-	for _, name := range selectedAgentNames {
+	for _, name := range realSelectedNames {
 		if _, wasInstalled := installedSet[types.AgentName(name)]; wasInstalled {
 			continue
 		}
@@ -257,6 +214,106 @@ func runAddAgents(ctx context.Context, w io.Writer, opts EnableOptions) error {
 	}
 	fmt.Fprintf(w, "✓ Added agents: %s\n", strings.Join(newTypes, ", "))
 
+	return nil
+}
+
+// buildAgentOptions builds agent multi-select options with the external agents toggle.
+// Returns options and whether all real agents are already installed.
+func buildAgentOptions(installedSet map[types.AgentName]struct{}) ([]huh.Option[string], bool) {
+	agentNames := agent.List()
+	options := make([]huh.Option[string], 0, len(agentNames)+1)
+	allInstalled := true
+	for _, name := range agentNames {
+		ag, err := agent.Get(name)
+		if err != nil {
+			continue
+		}
+		if _, ok := agent.AsHookSupport(ag); !ok {
+			continue
+		}
+		if to, ok := ag.(agent.TestOnly); ok && to.IsTestOnly() {
+			continue
+		}
+		opt := huh.NewOption(string(ag.Type()), string(name))
+		if _, installed := installedSet[name]; installed {
+			opt = opt.Selected(true)
+		} else {
+			allInstalled = false
+		}
+		options = append(options, opt)
+	}
+
+	// Add "External Agents" toggle option at the end.
+	externalOpt := huh.NewOption("External Agents (entire-agent-* on $PATH)", externalAgentsSentinel)
+	if settings.IsExternalAgentsEnabled(context.Background()) {
+		externalOpt = externalOpt.Selected(true)
+	}
+	options = append(options, externalOpt)
+
+	return options, allInstalled
+}
+
+// promptAddAgents shows the multi-select form for adding agents.
+func promptAddAgents(options []huh.Option[string], installedNames []types.AgentName) ([]string, error) {
+	var selectedAgentNames []string
+	form := NewAccessibleForm(
+		huh.NewGroup(
+			huh.NewMultiSelect[string]().
+				Title("Enable more agents").
+				Description("Use space to select, enter to confirm.").
+				Options(options...).
+				Validate(func(selected []string) error {
+					// Check if at least one real agent is selected.
+					hasRealAgent := false
+					for _, s := range selected {
+						if s != externalAgentsSentinel {
+							hasRealAgent = true
+							break
+						}
+					}
+					if !hasRealAgent {
+						return errors.New("please select at least one agent")
+					}
+					// Ensure previously installed agents are still selected
+					selectedSet := make(map[string]struct{}, len(selected))
+					for _, s := range selected {
+						selectedSet[s] = struct{}{}
+					}
+					for _, name := range installedNames {
+						if _, ok := selectedSet[string(name)]; !ok {
+							ag, err := agent.Get(name)
+							if err != nil {
+								continue
+							}
+							return fmt.Errorf("cannot remove %s — use `entire configure --remove %s` to remove it", ag.Type(), name)
+						}
+					}
+					return nil
+				}).
+				Value(&selectedAgentNames),
+		),
+	)
+	if err := form.Run(); err != nil {
+		return nil, fmt.Errorf("agent selection cancelled: %w", err)
+	}
+	return selectedAgentNames, nil
+}
+
+// updateExternalAgentsSetting persists a change to the external_agents setting.
+func updateExternalAgentsSetting(ctx context.Context, w io.Writer, enabled bool) error {
+	s, err := LoadEntireSettings(ctx)
+	if err != nil {
+		s = &EntireSettings{}
+	}
+	s.ExternalAgents = enabled
+	if err := SaveEntireSettings(ctx, s); err != nil {
+		return fmt.Errorf("failed to save external agents setting: %w", err)
+	}
+	if enabled {
+		fmt.Fprintln(w, "✓ External agent discovery enabled")
+	} else {
+		fmt.Fprintln(w, "✓ External agent discovery disabled")
+	}
 	return nil
 }
 
@@ -778,7 +835,9 @@ func setupAgentHooks(ctx context.Context, ag agent.Agent, localDev, forceHooks b
 //
 // selectFn overrides the interactive prompt for testing. When nil, the real form is used.
 // It receives available agent names and returns the selected names.
-func detectOrSelectAgent(ctx context.Context, w io.Writer, selectFn func(available []string) ([]string, error)) ([]agent.Agent, error) {
+// externalAgentsPreSelected controls whether the "External Agents" option is pre-selected.
+// Returns the selected agents, whether external agents was selected, and any error.
+func detectOrSelectAgent(ctx context.Context, w io.Writer, selectFn func(available []string) ([]string, error), externalAgentsPreSelected bool) ([]agent.Agent, bool, error) {
 	// Check for agents with hooks already installed (re-run detection)
 	installedAgentNames := GetAgentsWithHooksInstalled(ctx)
 	hasInstalledHooks := len(installedAgentNames) > 0
@@ -791,7 +850,7 @@ func detectOrSelectAgent(ctx context.Context, w io.Writer, selectFn func(availab
 		switch {
 		case len(detected) == 1:
 			fmt.Fprintf(w, "Detected agent: %s\n\n", detected[0].Type())
-			return detected, nil
+			return detected, externalAgentsPreSelected, nil
 
 		case len(detected) > 1:
 			agentTypes := make([]string, 0, len(detected))
@@ -815,17 +874,17 @@ func detectOrSelectAgent(ctx context.Context, w io.Writer, selectFn func(availab
 				}
 				agents = append(agents, ag)
 			}
-			return agents, nil
+			return agents, externalAgentsPreSelected, nil
 		}
 		if len(detected) > 0 {
-			return detected, nil
+			return detected, externalAgentsPreSelected, nil
 		}
 		defaultAgent := agent.Default()
 		if defaultAgent == nil {
-			return nil, errors.New("no default agent available")
+			return nil, false, errors.New("no default agent available")
 		}
 		fmt.Fprintf(w, "Agent: %s (use --agent to change)\n\n", defaultAgent.Type())
-		return []agent.Agent{defaultAgent}, nil
+		return []agent.Agent{defaultAgent}, externalAgentsPreSelected, nil
 	}
 
 	// Build pre-selection set.
@@ -865,8 +924,15 @@ func detectOrSelectAgent(ctx context.Context, w io.Writer, selectFn func(availab
 		options = append(options, opt)
 	}
 
+	// Add "External Agents" toggle option at the end.
+	externalOpt := huh.NewOption("External Agents (entire-agent-* on $PATH)", externalAgentsSentinel)
+	if externalAgentsPreSelected {
+		externalOpt = externalOpt.Selected(true)
+	}
+	options = append(options, externalOpt)
+
 	if len(options) == 0 {
-		return nil, errors.New("no agents with hook support available")
+		return nil, false, errors.New("no agents with hook support available")
 	}
 
 	// Collect available agent names for the selector
@@ -880,37 +946,51 @@ func detectOrSelectAgent(ctx context.Context, w io.Writer, selectFn func(availab
 		var err error
 		selectedAgentNames, err = selectFn(availableNames)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if len(selectedAgentNames) == 0 {
-			return nil, errors.New("no agents selected")
+			return nil, false, errors.New("no agents selected")
 		}
 	} else {
 		form := NewAccessibleForm(
 			huh.NewGroup(
 				huh.NewMultiSelect[string]().
-					Title("Select the agents you want to use").
+					Title("Which agents are you using?").
 					Description("Use space to select, enter to confirm.").
 					Options(options...).
 					Validate(func(selected []string) error {
-						if len(selected) == 0 {
-							return errors.New("please select at least one agent")
+						// Check if at least one real agent is selected (not just the external agents toggle).
+						for _, s := range selected {
+							if s != externalAgentsSentinel {
+								return nil
+							}
 						}
-						return nil
+						return errors.New("please select at least one agent")
 					}).
 					Value(&selectedAgentNames),
 			),
 		)
 		if err := form.Run(); err != nil {
-			return nil, fmt.Errorf("agent selection cancelled: %w", err)
+			return nil, false, fmt.Errorf("agent selection cancelled: %w", err)
 		}
 	}
 
-	selectedAgents := make([]agent.Agent, 0, len(selectedAgentNames))
+	// Separate the external agents sentinel from real agent selections.
+	externalSelected := false
+	realAgentNames := make([]string, 0, len(selectedAgentNames))
 	for _, name := range selectedAgentNames {
+		if name == externalAgentsSentinel {
+			externalSelected = true
+			continue
+		}
+		realAgentNames = append(realAgentNames, name)
+	}
+
+	selectedAgents := make([]agent.Agent, 0, len(realAgentNames))
+	for _, name := range realAgentNames {
 		selectedAgent, err := agent.Get(types.AgentName(name))
 		if err != nil {
-			return nil, fmt.Errorf("failed to get selected agent %s: %w", name, err)
+			return nil, false, fmt.Errorf("failed to get selected agent %s: %w", name, err)
 		}
 		selectedAgents = append(selectedAgents, selectedAgent)
 	}
@@ -920,7 +1000,7 @@ func detectOrSelectAgent(ctx context.Context, w io.Writer, selectFn func(availab
 		agentTypes = append(agentTypes, string(ag.Type()))
 	}
 	fmt.Fprintf(w, "\nSelected agents: %s\n\n", strings.Join(agentTypes, ", "))
-	return selectedAgents, nil
+	return selectedAgents, externalSelected, nil
 }
 
 // canPromptInteractively checks if we can show interactive prompts.
@@ -1276,40 +1356,6 @@ func appendShellCompletion(rcFile, completionLine string) error {
 	if err != nil {
 		return fmt.Errorf("writing completion: %w", err)
 	}
-	return nil
-}
-
-// promptExternalAgents asks the user if they want to enable external agent plugin discovery.
-// If opts.ExternalAgents is already set (via --external-agents flag), the prompt is skipped.
-// In non-interactive mode, defaults to false.
-func promptExternalAgents(_ context.Context, _ io.Writer, opts *EnableOptions) error {
-	if opts.ExternalAgents != nil {
-		return nil
-	}
-
-	if !canPromptInteractively() {
-		f := false
-		opts.ExternalAgents = &f
-		return nil
-	}
-
-	enable := false
-	form := NewAccessibleForm(
-		huh.NewGroup(
-			huh.NewConfirm().
-				Title("Enable external agent plugins?").
-				Description("Discovers entire-agent-* binaries on $PATH.").
-				Affirmative("Yes").
-				Negative("No").
-				Value(&enable),
-		),
-	)
-
-	if err := form.Run(); err != nil {
-		return fmt.Errorf("external agents prompt: %w", err)
-	}
-
-	opts.ExternalAgents = &enable
 	return nil
 }
 
