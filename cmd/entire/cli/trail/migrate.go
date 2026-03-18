@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	migrationMarkerFile = "DEPRECATED_MOVED_TO_DATABASE_STORAGE"
+	migrationMarkerFile = "DEPRECATED_MOVED_TO_ENTIRE_STORAGE"
 )
 
 // migrationMarker is the content of the marker file placed on the git branch after migration.
