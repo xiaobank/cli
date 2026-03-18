@@ -1404,3 +1404,136 @@ func TestDetectOrSelectAgent_ReRun_EmptySelection_ReturnsError(t *testing.T) {
 		t.Errorf("Expected 'no agents selected' error, got: %v", err)
 	}
 }
+
+func TestSplitExternalAgentSelection(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		input           []string
+		wantNames       []string
+		wantExtSelected bool
+	}{
+		{
+			name:            "empty input",
+			input:           []string{},
+			wantNames:       []string{},
+			wantExtSelected: false,
+		},
+		{
+			name:            "agents only",
+			input:           []string{"claude-code", "gemini"},
+			wantNames:       []string{"claude-code", "gemini"},
+			wantExtSelected: false,
+		},
+		{
+			name:            "sentinel only",
+			input:           []string{externalAgentsSentinel},
+			wantNames:       []string{},
+			wantExtSelected: true,
+		},
+		{
+			name:            "mixed agents and sentinel",
+			input:           []string{"claude-code", externalAgentsSentinel, "gemini"},
+			wantNames:       []string{"claude-code", "gemini"},
+			wantExtSelected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			gotNames, gotExt := splitExternalAgentSelection(tt.input)
+			if len(gotNames) != len(tt.wantNames) {
+				t.Fatalf("got %d names, want %d", len(gotNames), len(tt.wantNames))
+			}
+			for i, name := range gotNames {
+				if name != tt.wantNames[i] {
+					t.Errorf("name[%d] = %q, want %q", i, name, tt.wantNames[i])
+				}
+			}
+			if gotExt != tt.wantExtSelected {
+				t.Errorf("externalSelected = %v, want %v", gotExt, tt.wantExtSelected)
+			}
+		})
+	}
+}
+
+func TestDetectOrSelectAgent_ExternalAgentsSelected(t *testing.T) {
+	// Cannot use t.Parallel() because we use t.Chdir and t.Setenv
+	setupTestRepo(t)
+	t.Setenv("ENTIRE_TEST_TTY", "1")
+
+	// selectFn returns a real agent + the external agents sentinel
+	selectFn := func(available []string) ([]string, error) {
+		// Verify sentinel is in available options
+		hasSentinel := false
+		for _, name := range available {
+			if name == externalAgentsSentinel {
+				hasSentinel = true
+				break
+			}
+		}
+		if !hasSentinel {
+			t.Error("external agents sentinel not in available options")
+		}
+		return []string{string(agent.AgentNameClaudeCode), externalAgentsSentinel}, nil
+	}
+
+	var buf bytes.Buffer
+	agents, externalSelected, err := detectOrSelectAgent(context.Background(), &buf, selectFn, false)
+	if err != nil {
+		t.Fatalf("detectOrSelectAgent() error = %v", err)
+	}
+
+	// Should return only the real agent (sentinel filtered out)
+	if len(agents) != 1 {
+		t.Fatalf("got %d agents, want 1", len(agents))
+	}
+	if agents[0].Name() != agent.AgentNameClaudeCode {
+		t.Errorf("agent = %v, want %v", agents[0].Name(), agent.AgentNameClaudeCode)
+	}
+
+	// externalSelected should be true since sentinel was in selection
+	if !externalSelected {
+		t.Error("externalSelected = false, want true")
+	}
+}
+
+func TestDetectOrSelectAgent_ExternalAgentsPreSelected(t *testing.T) {
+	// Cannot use t.Parallel() because we use t.Chdir and t.Setenv
+	setupTestRepo(t)
+	t.Setenv("ENTIRE_TEST_TTY", "1")
+
+	// selectFn returns only a real agent (deselects external agents)
+	selectFn := func(available []string) ([]string, error) {
+		// Verify sentinel is in available options even when pre-selected
+		hasSentinel := false
+		for _, name := range available {
+			if name == externalAgentsSentinel {
+				hasSentinel = true
+				break
+			}
+		}
+		if !hasSentinel {
+			t.Error("external agents sentinel not in available options")
+		}
+		// User deselects external agents, keeps only real agent
+		return []string{string(agent.AgentNameClaudeCode)}, nil
+	}
+
+	var buf bytes.Buffer
+	agents, externalSelected, err := detectOrSelectAgent(context.Background(), &buf, selectFn, true)
+	if err != nil {
+		t.Fatalf("detectOrSelectAgent() error = %v", err)
+	}
+
+	if len(agents) != 1 {
+		t.Fatalf("got %d agents, want 1", len(agents))
+	}
+
+	// externalSelected should be false since user deselected it
+	if externalSelected {
+		t.Error("externalSelected = true, want false")
+	}
+}

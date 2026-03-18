@@ -162,7 +162,7 @@ func runAddAgents(ctx context.Context, w io.Writer, opts EnableOptions) error {
 		return nil
 	}
 
-	options, allInstalled := buildAgentOptions(installedSet)
+	options, allInstalled := buildAgentOptions(ctx, installedSet)
 	externalCurrentlyEnabled := settings.IsExternalAgentsEnabled(ctx)
 	if allInstalled && externalCurrentlyEnabled {
 		fmt.Fprintln(w, "All available agents are already enabled.")
@@ -219,7 +219,7 @@ func runAddAgents(ctx context.Context, w io.Writer, opts EnableOptions) error {
 
 // buildAgentOptions builds agent multi-select options with the external agents toggle.
 // Returns options and whether all real agents are already installed.
-func buildAgentOptions(installedSet map[types.AgentName]struct{}) ([]huh.Option[string], bool) {
+func buildAgentOptions(ctx context.Context, installedSet map[types.AgentName]struct{}) ([]huh.Option[string], bool) {
 	agentNames := agent.List()
 	options := make([]huh.Option[string], 0, len(agentNames)+1)
 	allInstalled := true
@@ -245,7 +245,7 @@ func buildAgentOptions(installedSet map[types.AgentName]struct{}) ([]huh.Option[
 
 	// Add "External Agents" toggle option at the end.
 	externalOpt := huh.NewOption("External Agents", externalAgentsSentinel)
-	if settings.IsExternalAgentsEnabled(context.Background()) {
+	if settings.IsExternalAgentsEnabled(ctx) {
 		externalOpt = externalOpt.Selected(true)
 	}
 	options = append(options, externalOpt)
@@ -965,15 +965,7 @@ func detectOrSelectAgent(ctx context.Context, w io.Writer, selectFn func(availab
 	}
 
 	// Separate the external agents sentinel from real agent selections.
-	externalSelected := false
-	realAgentNames := make([]string, 0, len(selectedAgentNames))
-	for _, name := range selectedAgentNames {
-		if name == externalAgentsSentinel {
-			externalSelected = true
-			continue
-		}
-		realAgentNames = append(realAgentNames, name)
-	}
+	realAgentNames, externalSelected := splitExternalAgentSelection(selectedAgentNames)
 
 	selectedAgents := make([]agent.Agent, 0, len(realAgentNames))
 	for _, name := range realAgentNames {
