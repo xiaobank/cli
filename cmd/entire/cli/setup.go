@@ -41,6 +41,7 @@ type EnableOptions struct {
 	CheckpointRemote    string
 	Telemetry           bool
 	AbsoluteGitHookPath bool
+	ExternalAgents      *bool // nil = prompt user, non-nil = use value (from --external-agents flag)
 }
 
 // applyStrategyOptions sets strategy_options on settings from CLI flags.
@@ -96,6 +97,10 @@ func parseCheckpointRemoteFlag(value string) (provider, repo string, err error) 
 // runSetupFlow runs the first-time setup flow (agent selection + hooks + settings).
 // Shared by root command (no args), `entire configure`, and `entire enable` on fresh repos.
 func runSetupFlow(ctx context.Context, w io.Writer, opts EnableOptions) error {
+	if err := promptExternalAgents(ctx, w, &opts); err != nil {
+		return fmt.Errorf("external agents prompt: %w", err)
+	}
+
 	// Discover external agent plugins so they appear in agent selection.
 	external.DiscoverAndRegister(ctx)
 
@@ -259,6 +264,7 @@ func newSetupCmd() *cobra.Command {
 	var opts EnableOptions
 	var agentName string
 	var removeAgentName string
+	var externalAgents bool
 
 	cmd := &cobra.Command{
 		Use:   "configure",
@@ -275,6 +281,10 @@ Use --remove to remove a specific agent's hooks:
 			if _, err := paths.WorktreeRoot(ctx); err != nil {
 				fmt.Fprintln(cmd.ErrOrStderr(), "Not a git repository. Please run 'entire configure' from within a git repository.")
 				return NewSilentError(errors.New("not a git repository"))
+			}
+
+			if cmd.Flags().Changed("external-agents") {
+				opts.ExternalAgents = &externalAgents
 			}
 
 			// Discover external agent plugins early so they're available
@@ -320,6 +330,7 @@ Use --remove to remove a specific agent's hooks:
 	cmd.Flags().BoolVar(&opts.SkipPushSessions, "skip-push-sessions", false, "Disable automatic pushing of session logs on git push")
 	cmd.Flags().BoolVar(&opts.Telemetry, "telemetry", true, "Enable anonymous usage analytics")
 	cmd.Flags().BoolVar(&opts.AbsoluteGitHookPath, "absolute-git-hook-path", false, "Embed full binary path in git hooks (for GUI git clients that don't source shell profiles)")
+	cmd.Flags().BoolVar(&externalAgents, "external-agents", false, "Enable external agent plugin discovery (entire-agent-* binaries on $PATH)")
 
 	// Provide a helpful error when --agent is used without a value
 	defaultFlagErr := cmd.FlagErrorFunc()
@@ -339,6 +350,7 @@ func newEnableCmd() *cobra.Command {
 	var opts EnableOptions
 	var ignoreUntracked bool
 	var agentName string
+	var externalAgents bool
 
 	cmd := &cobra.Command{
 		Use:   "enable",
@@ -359,6 +371,10 @@ If Entire is already configured but disabled, this re-enables it.`,
 
 			if err := validateSetupFlags(opts.UseLocalSettings, opts.UseProjectSettings); err != nil {
 				return err
+			}
+
+			if cmd.Flags().Changed("external-agents") {
+				opts.ExternalAgents = &externalAgents
 			}
 
 			// Discover external agent plugins early so --agent can find them.
@@ -411,6 +427,7 @@ If Entire is already configured but disabled, this re-enables it.`,
 	cmd.Flags().StringVar(&opts.CheckpointRemote, "checkpoint-remote", "", "Checkpoint remote in provider:owner/repo format (e.g., github:org/checkpoints-repo)")
 	cmd.Flags().BoolVar(&opts.Telemetry, "telemetry", true, "Enable anonymous usage analytics")
 	cmd.Flags().BoolVar(&opts.AbsoluteGitHookPath, "absolute-git-hook-path", false, "Embed full binary path in git hooks (for GUI git clients that don't source shell profiles)")
+	cmd.Flags().BoolVar(&externalAgents, "external-agents", false, "Enable external agent plugin discovery (entire-agent-* binaries on $PATH)")
 
 	// Provide a helpful error when --agent is used without a value
 	defaultFlagErr := cmd.FlagErrorFunc()
@@ -497,6 +514,9 @@ func runEnableInteractive(ctx context.Context, w io.Writer, agents []agent.Agent
 	}
 	if opts.AbsoluteGitHookPath {
 		settings.AbsoluteGitHookPath = true
+	}
+	if opts.ExternalAgents != nil {
+		settings.ExternalAgents = *opts.ExternalAgents
 	}
 
 	opts.applyStrategyOptions(settings)
@@ -982,6 +1002,9 @@ func setupAgentHooksNonInteractive(ctx context.Context, w io.Writer, ag agent.Ag
 	if opts.AbsoluteGitHookPath {
 		settings.AbsoluteGitHookPath = true
 	}
+	if opts.ExternalAgents != nil {
+		settings.ExternalAgents = *opts.ExternalAgents
+	}
 
 	opts.applyStrategyOptions(settings)
 
@@ -1253,6 +1276,40 @@ func appendShellCompletion(rcFile, completionLine string) error {
 	if err != nil {
 		return fmt.Errorf("writing completion: %w", err)
 	}
+	return nil
+}
+
+// promptExternalAgents asks the user if they want to enable external agent plugin discovery.
+// If opts.ExternalAgents is already set (via --external-agents flag), the prompt is skipped.
+// In non-interactive mode, defaults to false.
+func promptExternalAgents(_ context.Context, _ io.Writer, opts *EnableOptions) error {
+	if opts.ExternalAgents != nil {
+		return nil
+	}
+
+	if !canPromptInteractively() {
+		f := false
+		opts.ExternalAgents = &f
+		return nil
+	}
+
+	enable := false
+	form := NewAccessibleForm(
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("Enable external agent plugins?").
+				Description("Discovers entire-agent-* binaries on $PATH.").
+				Affirmative("Yes").
+				Negative("No").
+				Value(&enable),
+		),
+	)
+
+	if err := form.Run(); err != nil {
+		return fmt.Errorf("external agents prompt: %w", err)
+	}
+
+	opts.ExternalAgents = &enable
 	return nil
 }
 
