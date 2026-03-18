@@ -304,14 +304,17 @@ func TestHandleLifecycleTurnEnd_EmptyRepository(t *testing.T) {
 
 	err := handleLifecycleTurnEnd(context.Background(), ag, event)
 
-	// Empty repo returns SilentError wrapping ErrEmptyRepository — the hook
-	// registry converts this to exit 0, but lifecycle itself signals the error.
+	// Should return a SilentError wrapping ErrEmptyRepository
+	if err == nil {
+		t.Error("expected error for empty repository, got nil")
+	}
+
 	var silentErr *SilentError
 	if !errors.As(err, &silentErr) {
-		t.Errorf("expected SilentError, got: %v", err)
+		t.Errorf("expected SilentError, got: %T", err)
 	}
-	if !errors.Is(err, strategy.ErrEmptyRepository) {
-		t.Errorf("expected ErrEmptyRepository, got: %v", err)
+	if !errors.Is(silentErr.Unwrap(), strategy.ErrEmptyRepository) {
+		t.Errorf("expected ErrEmptyRepository, got: %v", silentErr.Unwrap())
 	}
 }
 
