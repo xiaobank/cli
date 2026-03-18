@@ -154,7 +154,16 @@ func executeAgentHook(cmd *cobra.Command, agentName types.AgentName, hookName st
 	if event != nil {
 		// Lifecycle event — use the generic dispatcher
 		hookErr = DispatchLifecycleEvent(ctx, ag, event)
-	} else if agentName == agent.AgentNameClaudeCode && hookName == claudecode.HookNamePostTodo {
+	}
+
+	// ErrEmptyRepository is a graceful no-op: print the message but exit 0
+	// so agents don't treat it as a hook failure.
+	if hookErr != nil && errors.Is(hookErr, strategy.ErrEmptyRepository) {
+		fmt.Fprintln(cmd.ErrOrStderr(), hookErr.Error())
+		hookErr = nil
+	}
+
+	if event == nil && agentName == agent.AgentNameClaudeCode && hookName == claudecode.HookNamePostTodo {
 		// PostTodo is Claude-specific: creates incremental checkpoints during subagent execution
 		hookErr = handleClaudeCodePostTodo(ctx)
 	}

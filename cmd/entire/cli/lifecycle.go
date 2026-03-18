@@ -304,7 +304,7 @@ func handleLifecycleTurnEnd(ctx context.Context, ag agent.Agent, event *agent.Ev
 	if repo, err := strategy.OpenRepository(ctx); err == nil && strategy.IsEmptyRepository(repo) {
 		prepareSpan.End()
 		logging.Info(logCtx, "skipping checkpoint - will activate after first commit")
-		return nil
+		return NewSilentError(strategy.ErrEmptyRepository)
 	}
 	prepareSpan.End()
 
