@@ -626,10 +626,11 @@ type postCommitActionHandler struct {
 	// Cached git objects — resolved once per PostCommit invocation to avoid
 	// redundant reads across filesOverlapWithContent, filesWithRemainingAgentChanges,
 	// CondenseSession, and calculateSessionAttributions.
-	headTree   *object.Tree        // HEAD commit tree (shared across all sessions)
-	parentTree *object.Tree        // HEAD's first parent tree (shared, nil for initial commits)
-	shadowRef  *plumbing.Reference // Per-session shadow branch ref (nil if branch doesn't exist)
-	shadowTree *object.Tree        // Per-session shadow commit tree (nil if branch doesn't exist)
+	headTree         *object.Tree        // HEAD commit tree (shared across all sessions)
+	parentTree       *object.Tree        // HEAD's first parent tree (nil for initial commits or resolution failure)
+	parentCommitHash string              // HEAD's first parent hash (empty iff parentTree is nil)
+	shadowRef        *plumbing.Reference // Per-session shadow branch ref (nil if branch doesn't exist)
+	shadowTree       *object.Tree        // Per-session shadow commit tree (nil if branch doesn't exist)
 
 	// Output: set by handler methods, read by caller after TransitionAndLog.
 	condensed bool
@@ -638,10 +639,6 @@ type postCommitActionHandler struct {
 func (h *postCommitActionHandler) HandleCondense(state *session.State) error {
 	logCtx := logging.WithComponent(h.ctx, "checkpoint")
 	shouldCondense := h.shouldCondenseWithOverlapCheck(state.Phase.IsActive(), state.LastInteractionTime)
-	var parentCommitHash string
-	if h.commit.NumParents() > 0 {
-		parentCommitHash = h.commit.ParentHashes[0].String()
-	}
 
 	logging.Debug(logCtx, "post-commit: HandleCondense decision",
 		slog.String("session_id", state.SessionID),
@@ -658,7 +655,7 @@ func (h *postCommitActionHandler) HandleCondense(state *session.State) error {
 			repoDir:          h.repoDir,
 			headCommitHash:   h.newHead,
 			parentTree:       h.parentTree,
-			parentCommitHash: parentCommitHash,
+			parentCommitHash: h.parentCommitHash,
 		})
 	} else {
 		h.s.updateBaseCommitIfChanged(h.ctx, state, h.newHead)
@@ -669,10 +666,6 @@ func (h *postCommitActionHandler) HandleCondense(state *session.State) error {
 func (h *postCommitActionHandler) HandleCondenseIfFilesTouched(state *session.State) error {
 	logCtx := logging.WithComponent(h.ctx, "checkpoint")
 	shouldCondense := len(state.FilesTouched) > 0 && h.shouldCondenseWithOverlapCheck(state.Phase.IsActive(), state.LastInteractionTime)
-	var parentCommitHash string
-	if h.commit.NumParents() > 0 {
-		parentCommitHash = h.commit.ParentHashes[0].String()
-	}
 
 	logging.Debug(logCtx, "post-commit: HandleCondenseIfFilesTouched decision",
 		slog.String("session_id", state.SessionID),
@@ -690,7 +683,7 @@ func (h *postCommitActionHandler) HandleCondenseIfFilesTouched(state *session.St
 			repoDir:          h.repoDir,
 			headCommitHash:   h.newHead,
 			parentTree:       h.parentTree,
-			parentCommitHash: parentCommitHash,
+			parentCommitHash: h.parentCommitHash,
 		})
 	} else {
 		h.s.updateBaseCommitIfChanged(h.ctx, state, h.newHead)
@@ -854,15 +847,28 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error { //nolint:
 	// calculateSessionAttributions).
 	_, resolveTreesSpan := perf.Start(ctx, "resolve_commit_trees")
 	var headTree *object.Tree
-	if t, err := commit.Tree(); err == nil {
+	if t, err := commit.Tree(); err != nil {
+		logging.Warn(logCtx, "post-commit: failed to resolve HEAD tree; attribution will be skipped",
+			slog.String("commit", commit.Hash.String()),
+			slog.String("error", err.Error()))
+	} else {
 		headTree = t
 	}
 	var parentTree *object.Tree
+	var parentCommitHash string
 	if commit.NumParents() > 0 {
-		if parent, err := commit.Parent(0); err == nil {
-			if t, err := parent.Tree(); err == nil {
-				parentTree = t
-			}
+		rawHash := commit.ParentHashes[0]
+		if parent, err := commit.Parent(0); err != nil {
+			logging.Warn(logCtx, "post-commit: failed to load parent commit; parent-scoped attribution unavailable",
+				slog.String("parent_hash", rawHash.String()),
+				slog.String("error", err.Error()))
+		} else if t, err := parent.Tree(); err != nil {
+			logging.Warn(logCtx, "post-commit: failed to load parent tree; parent-scoped attribution unavailable",
+				slog.String("parent_hash", rawHash.String()),
+				slog.String("error", err.Error()))
+		} else {
+			parentTree = t
+			parentCommitHash = rawHash.String()
 		}
 	}
 
@@ -878,7 +884,7 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error { //nolint:
 		}
 		iterCtx, iterSpan := processSessionsLoop.Iteration(loopCtx)
 		s.postCommitProcessSession(iterCtx, repo, state, &transitionCtx, checkpointID,
-			head, commit, newHead, worktreePath, headTree, parentTree, committedFileSet,
+			head, commit, newHead, worktreePath, headTree, parentTree, parentCommitHash, committedFileSet,
 			shadowBranchesToDelete, uncondensedActiveOnBranch)
 		iterSpan.End()
 	}
@@ -924,6 +930,7 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 	newHead string,
 	repoDir string,
 	headTree, parentTree *object.Tree,
+	parentCommitHash string,
 	committedFileSet map[string]struct{},
 	shadowBranchesToDelete map[string]struct{},
 	uncondensedActiveOnBranch map[string]bool,
@@ -1015,6 +1022,7 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 		filesTouchedBefore:     filesTouchedBefore,
 		headTree:               headTree,
 		parentTree:             parentTree,
+		parentCommitHash:       parentCommitHash,
 		shadowRef:              shadowRef,
 		shadowTree:             shadowTree,
 	}

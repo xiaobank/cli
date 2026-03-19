@@ -3941,8 +3941,8 @@ func TestBugB_Candidate1_NoShadowSingleCheckpoint(t *testing.T) {
 //
 // See docs/architecture/attribution.md for investigation notes.
 func TestBugB_Candidate2_InflatedPromptAttribution(t *testing.T) {
-	t.Skip("Bug B open investigation: inflated PromptAttribution zeroes agent credit when user pre-writes lines in agent-touched file before session start. Repro confirmed — fix requires gross-addition tracking. See docs/architecture/attribution.md.")
 	t.Parallel()
+	t.Skip("Bug B open investigation: inflated PromptAttribution zeroes agent credit when user pre-writes lines in agent-touched file before session start. Repro confirmed — fix requires gross-addition tracking. See docs/architecture/attribution.md.")
 
 	baseLines := strings.Repeat("base line\n", 10)
 	shadowLines := baseLines + strings.Repeat("agent line\n", 10)

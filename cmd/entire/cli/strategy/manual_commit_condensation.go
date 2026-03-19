@@ -91,8 +91,8 @@ type condenseOpts struct {
 	headTree         *object.Tree        // Pre-resolved HEAD tree (passed through to calculateSessionAttributions)
 	repoDir          string              // Repository worktree path for git CLI commands
 	headCommitHash   string              // HEAD commit hash (passed through for attribution)
-	parentTree       *object.Tree        // HEAD's first parent tree (nil for initial commits)
-	parentCommitHash string              // HEAD's first parent hash (empty for initial commits)
+	parentTree       *object.Tree        // HEAD's first parent tree (nil iff parentCommitHash is empty)
+	parentCommitHash string              // HEAD's first parent hash (empty iff parentTree is nil — initial commit or resolution failure)
 }
 
 // CondenseSession condenses a session's shadow branch to permanent storage.
@@ -847,8 +847,42 @@ func (s *ManualCommitStrategy) CondenseSessionByID(ctx context.Context, sessionI
 		return nil
 	}
 
+	// Resolve HEAD commit context for attribution scoping. Best-effort: falls back
+	// gracefully if HEAD resolution fails (e.g. bare repo, detached HEAD edge cases).
+	var headCommitOpts condenseOpts
+	if repoDir, rdErr := paths.WorktreeRoot(ctx); rdErr == nil {
+		headCommitOpts.repoDir = repoDir
+	}
+	if headRef, hrErr := repo.Head(); hrErr == nil {
+		headCommitOpts.headCommitHash = headRef.Hash().String()
+		if headCommit, hcErr := repo.CommitObject(headRef.Hash()); hcErr == nil {
+			if t, tErr := headCommit.Tree(); tErr != nil {
+				logging.Warn(logCtx, "condense-by-id: failed to resolve HEAD tree; attribution will be skipped",
+					slog.String("commit", headRef.Hash().String()),
+					slog.String("error", tErr.Error()))
+			} else {
+				headCommitOpts.headTree = t
+			}
+			if headCommit.NumParents() > 0 {
+				rawHash := headCommit.ParentHashes[0]
+				if parent, pErr := headCommit.Parent(0); pErr != nil {
+					logging.Warn(logCtx, "condense-by-id: failed to load parent commit; parent-scoped attribution unavailable",
+						slog.String("parent_hash", rawHash.String()),
+						slog.String("error", pErr.Error()))
+				} else if t, tErr := parent.Tree(); tErr != nil {
+					logging.Warn(logCtx, "condense-by-id: failed to load parent tree; parent-scoped attribution unavailable",
+						slog.String("parent_hash", rawHash.String()),
+						slog.String("error", tErr.Error()))
+				} else {
+					headCommitOpts.parentTree = t
+					headCommitOpts.parentCommitHash = rawHash.String()
+				}
+			}
+		}
+	}
+
 	// Condense the session
-	result, err := s.CondenseSession(ctx, repo, checkpointID, state, nil)
+	result, err := s.CondenseSession(ctx, repo, checkpointID, state, nil, headCommitOpts)
 	if err != nil {
 		return fmt.Errorf("failed to condense session: %w", err)
 	}

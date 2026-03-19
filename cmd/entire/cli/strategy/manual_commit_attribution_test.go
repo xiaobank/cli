@@ -258,6 +258,7 @@ func buildTestTree(t *testing.T, files map[string]string) *object.Tree {
 }
 
 func TestCalculateAttributionWithAccumulated_UsesParentBaselineForNonAgentFiles(t *testing.T) {
+	t.Parallel()
 	baseTree := buildTestTree(t, map[string]string{
 		"agent-file.go": strings.Repeat("agent line\n", 10),
 		"unrelated.go":  strings.Repeat("old unrelated\n", 5),
@@ -309,6 +310,7 @@ func TestCalculateAttributionWithAccumulated_UsesParentBaselineForNonAgentFiles(
 }
 
 func TestCalculateAttributionWithAccumulated_NilParentTreeFallsBackToBase(t *testing.T) {
+	t.Parallel()
 	baseTree := buildTestTree(t, map[string]string{
 		"agent-file.go": strings.Repeat("agent line\n", 5),
 	})

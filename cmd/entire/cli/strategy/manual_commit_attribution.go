@@ -251,6 +251,14 @@ func CalculateAttributionWithAccumulated(
 	nonAgentBaseTree := baseTree
 	if parentTree != nil {
 		nonAgentBaseTree = parentTree
+	} else if parentCommitHash != "" {
+		// parentCommitHash is set but parentTree is nil — parent object resolution
+		// failed (e.g. shallow clone, pack corruption). Fall back to session base,
+		// but warn because non-agent file counts may be inflated.
+		logging.Warn(logging.WithComponent(ctx, "attribution"),
+			"attribution: parent tree unavailable despite parent hash being set; non-agent file counts may be inflated",
+			slog.String("parent_commit_hash", parentCommitHash),
+		)
 	}
 
 	nonAgentBaseCommit := attributionBaseCommit

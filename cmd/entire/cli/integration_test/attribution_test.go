@@ -571,14 +571,20 @@ func TestManualCommit_Attribution_IntermediateCommit(t *testing.T) {
 
 	attr := getAttributionFromMetadata(t, repo, checkpointID)
 
-	if attr.AgentLines <= 0 {
-		t.Errorf("AgentLines = %d, want > 0", attr.AgentLines)
+	// agent.go: 2-line header + 18 agent lines = 20 lines.
+	// unrelated.go must not appear in this commit's attribution — the fix scopes
+	// non-agent file enumeration to parent→HEAD only.
+	if attr.AgentLines != 20 {
+		t.Errorf("AgentLines = %d, want 20", attr.AgentLines)
 	}
-	if attr.AgentPercentage <= 80.0 {
-		t.Errorf("AgentPercentage = %.1f%%, want > 80.0%%", attr.AgentPercentage)
+	if attr.HumanAdded != 0 {
+		t.Errorf("HumanAdded = %d, want 0 (unrelated.go committed separately)", attr.HumanAdded)
 	}
-	if attr.TotalCommitted >= 30 {
-		t.Errorf("TotalCommitted = %d, want < 30", attr.TotalCommitted)
+	if attr.TotalCommitted != 20 {
+		t.Errorf("TotalCommitted = %d, want 20 (only agent.go in this commit)", attr.TotalCommitted)
+	}
+	if attr.AgentPercentage < 99.9 || attr.AgentPercentage > 100.1 {
+		t.Errorf("AgentPercentage = %.1f%%, want 100.0%%", attr.AgentPercentage)
 	}
 }
 
