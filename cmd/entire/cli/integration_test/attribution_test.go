@@ -4,6 +4,7 @@ package integration
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
@@ -513,6 +514,71 @@ func TestManualCommit_AttributionNoDoubleCount(t *testing.T) {
 	// Agent percentage should be 3/4 = 75%
 	if attr2.AgentPercentage < 74.9 || attr2.AgentPercentage > 75.1 {
 		t.Errorf("Second commit AgentPercentage = %.1f%%, want 75.0%%", attr2.AgentPercentage)
+	}
+}
+
+func TestManualCommit_Attribution_IntermediateCommit(t *testing.T) {
+	t.Parallel()
+	env := NewTestEnv(t)
+	defer env.Cleanup()
+
+	env.InitRepo()
+
+	env.WriteFile("existing.go", "package main\n")
+	env.GitAdd("existing.go")
+	env.GitCommit("Initial commit")
+
+	env.InitEntire()
+
+	session := env.NewSession()
+	if err := env.SimulateUserPromptSubmit(session.ID); err != nil {
+		t.Fatalf("SimulateUserPromptSubmit failed: %v", err)
+	}
+
+	agentContent := "package main\n\n" + strings.Repeat("// agent line\n", 18)
+	env.WriteFile("agent.go", agentContent)
+
+	session.CreateTranscript(
+		"Create agent.go with agent-authored lines",
+		[]FileChange{{Path: "agent.go", Content: agentContent}},
+	)
+	if err := env.SimulateStop(session.ID, session.TranscriptPath); err != nil {
+		t.Fatalf("SimulateStop failed: %v", err)
+	}
+
+	unrelatedContent := "package main\n\n" + strings.Repeat("// unrelated line\n", 48)
+	env.WriteFile("unrelated.go", unrelatedContent)
+	env.GitAdd("unrelated.go")
+	env.GitCommit("Add unrelated.go without hooks")
+
+	env.GitCommitWithShadowHooks("Add agent work", "agent.go")
+
+	repo, err := git.PlainOpen(env.RepoDir)
+	if err != nil {
+		t.Fatalf("failed to open repo: %v", err)
+	}
+
+	headHash := env.GetHeadHash()
+	commitObj, err := repo.CommitObject(plumbing.NewHash(headHash))
+	if err != nil {
+		t.Fatalf("failed to get commit object: %v", err)
+	}
+
+	checkpointID, found := trailers.ParseCheckpoint(commitObj.Message)
+	if !found {
+		t.Fatal("Commit should have Entire-Checkpoint trailer")
+	}
+
+	attr := getAttributionFromMetadata(t, repo, checkpointID)
+
+	if attr.AgentLines <= 0 {
+		t.Errorf("AgentLines = %d, want > 0", attr.AgentLines)
+	}
+	if attr.AgentPercentage <= 80.0 {
+		t.Errorf("AgentPercentage = %.1f%%, want > 80.0%%", attr.AgentPercentage)
+	}
+	if attr.TotalCommitted >= 30 {
+		t.Errorf("TotalCommitted = %d, want < 30", attr.TotalCommitted)
 	}
 }
 

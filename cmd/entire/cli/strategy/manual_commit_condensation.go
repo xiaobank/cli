@@ -87,10 +87,12 @@ func (s *ManualCommitStrategy) getCheckpointLog(ctx context.Context, checkpointI
 
 // condenseOpts provides pre-resolved git objects to avoid redundant reads.
 type condenseOpts struct {
-	shadowRef      *plumbing.Reference // Pre-resolved shadow branch ref (nil = resolve from repo)
-	headTree       *object.Tree        // Pre-resolved HEAD tree (passed through to calculateSessionAttributions)
-	repoDir        string              // Repository worktree path for git CLI commands
-	headCommitHash string              // HEAD commit hash (passed through for attribution)
+	shadowRef        *plumbing.Reference // Pre-resolved shadow branch ref (nil = resolve from repo)
+	headTree         *object.Tree        // Pre-resolved HEAD tree (passed through to calculateSessionAttributions)
+	repoDir          string              // Repository worktree path for git CLI commands
+	headCommitHash   string              // HEAD commit hash (passed through for attribution)
+	parentTree       *object.Tree        // HEAD's first parent tree (nil for initial commits)
+	parentCommitHash string              // HEAD's first parent hash (empty for initial commits)
 }
 
 // CondenseSession condenses a session's shadow branch to permanent storage.
@@ -198,6 +200,8 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 		repoDir:               o.repoDir,
 		attributionBaseCommit: attrBase,
 		headCommitHash:        o.headCommitHash,
+		parentTree:            o.parentTree,
+		parentCommitHash:      o.parentCommitHash,
 	})
 
 	// Get current branch name
@@ -335,6 +339,8 @@ type attributionOpts struct {
 	repoDir               string       // Repository worktree path for git CLI commands
 	attributionBaseCommit string       // Base commit hash for non-agent file detection (empty = fall back to go-git tree walk)
 	headCommitHash        string       // HEAD commit hash for non-agent file detection (empty = fall back to go-git tree walk)
+	parentTree            *object.Tree // HEAD's first parent tree for non-agent file detection
+	parentCommitHash      string       // HEAD's first parent hash for non-agent file detection
 }
 
 func calculateSessionAttributions(ctx context.Context, repo *git.Repository, shadowRef *plumbing.Reference, sessionData *ExtractedSessionData, state *SessionState, opts ...attributionOpts) *cpkg.InitialAttribution {
@@ -441,11 +447,13 @@ func calculateSessionAttributions(ctx context.Context, repo *git.Repository, sha
 		baseTree,
 		shadowTree,
 		headTree,
+		o.parentTree,
 		sessionData.FilesTouched,
 		state.PromptAttributions,
 		o.repoDir,
 		o.attributionBaseCommit,
 		o.headCommitHash,
+		o.parentCommitHash,
 	)
 
 	if attribution != nil {

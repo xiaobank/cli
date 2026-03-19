@@ -179,8 +179,9 @@ func countLinesStr(content string) int {
 // 4. Estimate user self-modifications vs agent modifications using per-file tracking
 // 5. Compute percentages
 //
-// attributionBaseCommit and headCommitHash are optional commit hashes for fast non-agent
-// file detection via git diff-tree. When empty, falls back to go-git tree walk.
+// attributionBaseCommit, headCommitHash, and parentCommitHash are optional commit hashes
+// for fast non-agent file detection via git diff-tree. When empty, falls back to go-git
+// tree walk using the provided trees.
 //
 // Note: Binary files (detected by null bytes) are silently excluded from attribution
 // calculations since line-based diffing only applies to text files.
@@ -191,11 +192,13 @@ func CalculateAttributionWithAccumulated(
 	baseTree *object.Tree,
 	shadowTree *object.Tree,
 	headTree *object.Tree,
+	parentTree *object.Tree,
 	filesTouched []string,
 	promptAttributions []PromptAttribution,
 	repoDir string,
 	attributionBaseCommit string,
 	headCommitHash string,
+	parentCommitHash string,
 ) *checkpoint.InitialAttribution {
 	if len(filesTouched) == 0 {
 		return nil
@@ -242,9 +245,20 @@ func CalculateAttributionWithAccumulated(
 		}
 	}
 
-	// Calculate total user edits to non-agent files (files not in filesTouched)
-	// These files are not in the shadow tree, so base→head captures ALL their user edits
-	allChangedFiles, err := getAllChangedFiles(ctx, baseTree, headTree, repoDir, attributionBaseCommit, headCommitHash)
+	// Calculate total user edits to non-agent files (files not in filesTouched).
+	// Scope this to the attributed commit only by diffing parent→head. If parent
+	// context is unavailable, fall back to the session base behavior.
+	nonAgentBaseTree := baseTree
+	if parentTree != nil {
+		nonAgentBaseTree = parentTree
+	}
+
+	nonAgentBaseCommit := attributionBaseCommit
+	if parentCommitHash != "" {
+		nonAgentBaseCommit = parentCommitHash
+	}
+
+	allChangedFiles, err := getAllChangedFiles(ctx, nonAgentBaseTree, headTree, repoDir, nonAgentBaseCommit, headCommitHash)
 	if err != nil {
 		logging.Warn(logging.WithComponent(ctx, "attribution"),
 			"attribution: failed to enumerate changed files",
@@ -258,7 +272,7 @@ func CalculateAttributionWithAccumulated(
 			continue // Skip agent-touched files
 		}
 
-		baseContent := getFileContent(baseTree, filePath)
+		baseContent := getFileContent(nonAgentBaseTree, filePath)
 		headContent := getFileContent(headTree, filePath)
 		_, userAdded, _ := diffLines(baseContent, headContent)
 		allUserEditsToNonAgentFiles += userAdded

@@ -3,6 +3,7 @@ package strategy
 import (
 	"context"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/go-git/go-git/v6/plumbing"
@@ -256,6 +257,100 @@ func buildTestTree(t *testing.T, files map[string]string) *object.Tree {
 	return treeObj
 }
 
+func TestCalculateAttributionWithAccumulated_UsesParentBaselineForNonAgentFiles(t *testing.T) {
+	baseTree := buildTestTree(t, map[string]string{
+		"agent-file.go": strings.Repeat("agent line\n", 10),
+		"unrelated.go":  strings.Repeat("old unrelated\n", 5),
+	})
+
+	shadowTree := buildTestTree(t, map[string]string{
+		"agent-file.go": strings.Repeat("agent line\n", 20),
+		"unrelated.go":  strings.Repeat("old unrelated\n", 5),
+	})
+
+	headTree := buildTestTree(t, map[string]string{
+		"agent-file.go": strings.Repeat("agent line\n", 20),
+		"unrelated.go":  strings.Repeat("new unrelated\n", 20),
+	})
+
+	parentTree := buildTestTree(t, map[string]string{
+		"agent-file.go": strings.Repeat("agent line\n", 10),
+		"unrelated.go":  strings.Repeat("new unrelated\n", 20),
+	})
+
+	result := CalculateAttributionWithAccumulated(
+		context.Background(),
+		baseTree,
+		shadowTree,
+		headTree,
+		parentTree,
+		[]string{"agent-file.go"},
+		nil,
+		"",
+		"",
+		"",
+		"",
+	)
+
+	require.NotNil(t, result, "expected non-nil result")
+
+	if result.AgentLines != 10 {
+		t.Errorf("AgentLines = %d, want 10", result.AgentLines)
+	}
+	if result.HumanAdded != 0 {
+		t.Errorf("HumanAdded = %d, want 0", result.HumanAdded)
+	}
+	if result.TotalCommitted != 10 {
+		t.Errorf("TotalCommitted = %d, want 10", result.TotalCommitted)
+	}
+	if result.AgentPercentage < 99.9 || result.AgentPercentage > 100.1 {
+		t.Errorf("AgentPercentage = %.1f%%, want 100.0%%", result.AgentPercentage)
+	}
+}
+
+func TestCalculateAttributionWithAccumulated_NilParentTreeFallsBackToBase(t *testing.T) {
+	baseTree := buildTestTree(t, map[string]string{
+		"agent-file.go": strings.Repeat("agent line\n", 5),
+	})
+
+	shadowTree := buildTestTree(t, map[string]string{
+		"agent-file.go": strings.Repeat("agent line\n", 10),
+	})
+
+	headTree := buildTestTree(t, map[string]string{
+		"agent-file.go": strings.Repeat("agent line\n", 10),
+	})
+
+	result := CalculateAttributionWithAccumulated(
+		context.Background(),
+		baseTree,
+		shadowTree,
+		headTree,
+		nil,
+		[]string{"agent-file.go"},
+		nil,
+		"",
+		"",
+		"",
+		"",
+	)
+
+	require.NotNil(t, result, "expected non-nil result")
+
+	if result.AgentLines != 5 {
+		t.Errorf("AgentLines = %d, want 5", result.AgentLines)
+	}
+	if result.HumanAdded != 0 {
+		t.Errorf("HumanAdded = %d, want 0", result.HumanAdded)
+	}
+	if result.TotalCommitted != 5 {
+		t.Errorf("TotalCommitted = %d, want 5", result.TotalCommitted)
+	}
+	if result.AgentPercentage != 100.0 {
+		t.Errorf("AgentPercentage = %.1f%%, want 100.0%%", result.AgentPercentage)
+	}
+}
+
 // TestCalculateAttributionWithAccumulated_BasicCase tests the basic scenario
 // where the agent adds lines and the user makes some edits.
 //
@@ -281,7 +376,7 @@ func TestCalculateAttributionWithAccumulated_BasicCase(t *testing.T) {
 
 	result := CalculateAttributionWithAccumulated(
 		context.Background(),
-		baseTree, shadowTree, headTree, filesTouched, promptAttributions, "", "", "",
+		baseTree, shadowTree, headTree, nil, filesTouched, promptAttributions, "", "", "", "",
 	)
 
 	require.NotNil(t, result, "expected non-nil result")
@@ -338,7 +433,7 @@ func TestCalculateAttributionWithAccumulated_BugScenario(t *testing.T) {
 
 	result := CalculateAttributionWithAccumulated(
 		context.Background(),
-		baseTree, shadowTree, headTree, filesTouched, promptAttributions, "", "", "",
+		baseTree, shadowTree, headTree, nil, filesTouched, promptAttributions, "", "", "", "",
 	)
 
 	require.NotNil(t, result, "expected non-nil result")
@@ -395,7 +490,7 @@ func TestCalculateAttributionWithAccumulated_DeletionOnly(t *testing.T) {
 
 	result := CalculateAttributionWithAccumulated(
 		context.Background(),
-		baseTree, shadowTree, headTree, filesTouched, promptAttributions, "", "", "",
+		baseTree, shadowTree, headTree, nil, filesTouched, promptAttributions, "", "", "", "",
 	)
 
 	require.NotNil(t, result, "expected non-nil result")
@@ -444,7 +539,7 @@ func TestCalculateAttributionWithAccumulated_NoUserEdits(t *testing.T) {
 
 	result := CalculateAttributionWithAccumulated(
 		context.Background(),
-		baseTree, shadowTree, headTree, filesTouched, promptAttributions, "", "", "",
+		baseTree, shadowTree, headTree, nil, filesTouched, promptAttributions, "", "", "", "",
 	)
 
 	require.NotNil(t, result, "expected non-nil result")
@@ -496,7 +591,7 @@ func TestCalculateAttributionWithAccumulated_NoAgentWork(t *testing.T) {
 
 	result := CalculateAttributionWithAccumulated(
 		context.Background(),
-		baseTree, shadowTree, headTree, filesTouched, promptAttributions, "", "", "",
+		baseTree, shadowTree, headTree, nil, filesTouched, promptAttributions, "", "", "", "",
 	)
 
 	require.NotNil(t, result, "expected non-nil result")
@@ -550,7 +645,7 @@ func TestCalculateAttributionWithAccumulated_UserRemovesAllAgentLines(t *testing
 
 	result := CalculateAttributionWithAccumulated(
 		context.Background(),
-		baseTree, shadowTree, headTree, filesTouched, promptAttributions, "", "", "",
+		baseTree, shadowTree, headTree, nil, filesTouched, promptAttributions, "", "", "", "",
 	)
 
 	require.NotNil(t, result, "expected non-nil result")
@@ -619,7 +714,7 @@ func TestCalculateAttributionWithAccumulated_WithPromptAttributions(t *testing.T
 
 	result := CalculateAttributionWithAccumulated(
 		context.Background(),
-		baseTree, shadowTree, headTree, filesTouched, promptAttributions, "", "", "",
+		baseTree, shadowTree, headTree, nil, filesTouched, promptAttributions, "", "", "", "",
 	)
 
 	require.NotNil(t, result, "expected non-nil result")
@@ -662,7 +757,7 @@ func TestCalculateAttributionWithAccumulated_EmptyFilesTouched(t *testing.T) {
 
 	result := CalculateAttributionWithAccumulated(
 		context.Background(),
-		baseTree, shadowTree, headTree, []string{}, []PromptAttribution{}, "", "", "",
+		baseTree, shadowTree, headTree, nil, []string{}, []PromptAttribution{}, "", "", "", "",
 	)
 
 	if result != nil {
@@ -716,7 +811,7 @@ func TestCalculateAttributionWithAccumulated_UserEditsNonAgentFile(t *testing.T)
 
 	result := CalculateAttributionWithAccumulated(
 		context.Background(),
-		baseTree, shadowTree, headTree, filesTouched, promptAttributions, "", "", "",
+		baseTree, shadowTree, headTree, nil, filesTouched, promptAttributions, "", "", "", "",
 	)
 
 	require.NotNil(t, result, "expected non-nil result")
@@ -1021,7 +1116,7 @@ func TestCalculateAttributionWithAccumulated_UserSelfModification(t *testing.T) 
 
 	result := CalculateAttributionWithAccumulated(
 		context.Background(),
-		baseTree, shadowTree, headTree, filesTouched, promptAttributions, "", "", "",
+		baseTree, shadowTree, headTree, nil, filesTouched, promptAttributions, "", "", "", "",
 	)
 
 	require.NotNil(t, result, "expected non-nil result")
@@ -1092,7 +1187,7 @@ func TestCalculateAttributionWithAccumulated_MixedModifications(t *testing.T) {
 
 	result := CalculateAttributionWithAccumulated(
 		context.Background(),
-		baseTree, shadowTree, headTree, filesTouched, promptAttributions, "", "", "",
+		baseTree, shadowTree, headTree, nil, filesTouched, promptAttributions, "", "", "", "",
 	)
 
 	require.NotNil(t, result, "expected non-nil result")
@@ -1173,7 +1268,7 @@ func TestCalculateAttributionWithAccumulated_UncommittedWorktreeFiles(t *testing
 
 	result := CalculateAttributionWithAccumulated(
 		context.Background(),
-		baseTree, shadowTree, headTree, filesTouched, promptAttributions, "", "", "",
+		baseTree, shadowTree, headTree, nil, filesTouched, promptAttributions, "", "", "", "",
 	)
 
 	require.NotNil(t, result, "expected non-nil result")

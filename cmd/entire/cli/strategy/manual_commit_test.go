@@ -3875,3 +3875,121 @@ func TestResolveFilesTouched_PrefersStateFallsBackToTranscript(t *testing.T) {
 		}
 	})
 }
+
+// TestBugB_Candidate1_NoShadowSingleCheckpoint is a focused repro candidate for the
+// single-session 0% AI bug (Bug B). This candidate targets the simplest no-shadow /
+// first-checkpoint path: agent creates a new file from scratch, no user edits, no
+// PromptAttributions. If this fails with AgentLines==0 or AgentPercentage==0, the
+// no-shadow path is implicated.
+//
+// See docs/architecture/attribution.md for investigation notes.
+func TestBugB_Candidate1_NoShadowSingleCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	agentContent := strings.Repeat("agent line\n", 10)
+
+	baseTree := buildTestTree(t, map[string]string{})
+	shadowTree := buildTestTree(t, map[string]string{
+		"agent.go": agentContent,
+	})
+	headTree := buildTestTree(t, map[string]string{
+		"agent.go": agentContent,
+	})
+
+	// No-shadow path: use HEAD as shadow (shadowTree == headTree).
+	// No PromptAttributions (agent started on a clean worktree).
+	result := CalculateAttributionWithAccumulated(
+		context.Background(),
+		baseTree,
+		shadowTree,
+		headTree,
+		nil,
+		[]string{"agent.go"},
+		nil,
+		"", "", "", "",
+	)
+
+	if result == nil {
+		t.Fatal("Bug B candidate 1: InitialAttribution is nil — no shadow path returned nil unexpectedly")
+	}
+	if result.AgentLines == 0 {
+		t.Errorf("Bug B candidate 1: AgentLines = 0, want > 0 (agent created all content)")
+	}
+	if result.AgentPercentage == 0 {
+		t.Errorf("Bug B candidate 1: AgentPercentage = 0, want > 0")
+	}
+
+	t.Logf("Bug B candidate 1 result: agent=%d, human_added=%d, total=%d, pct=%.1f%%",
+		result.AgentLines, result.HumanAdded, result.TotalCommitted, result.AgentPercentage)
+}
+
+// TestBugB_Candidate2_InflatedPromptAttribution is the second focused repro candidate
+// for Bug B. This models the scenario where the user had many lines pre-written in the
+// worktree at session start (captured in PromptAttributions), and the agent then rewrote
+// the file. The inflated accumulatedToAgentFiles can exceed totalAgentAndUserWork,
+// clamping totalAgentAdded to zero and producing 0% AI despite real agent work.
+//
+// Scenario:
+//   - base: file.go has 10 lines
+//   - user pre-wrote 15 extra lines before session: worktree = 25 lines
+//   - PromptAttribution captures 15 user lines for file.go
+//   - agent rewrites the file: shadow = 20 lines (net +10 from base)
+//   - head: same as shadow (no post-checkpoint user edits)
+//   - totalAgentAndUserWork = base→shadow = +10
+//   - accumulatedToAgentFiles = 15
+//   - totalAgentAdded = max(0, 10-15) = 0 → 0% AI (BUG if this fails)
+//
+// See docs/architecture/attribution.md for investigation notes.
+func TestBugB_Candidate2_InflatedPromptAttribution(t *testing.T) {
+	t.Skip("Bug B open investigation: inflated PromptAttribution zeroes agent credit when user pre-writes lines in agent-touched file before session start. Repro confirmed — fix requires gross-addition tracking. See docs/architecture/attribution.md.")
+	t.Parallel()
+
+	baseLines := strings.Repeat("base line\n", 10)
+	shadowLines := baseLines + strings.Repeat("agent line\n", 10)
+	// head == shadow: no post-checkpoint user edits
+	headLines := shadowLines
+
+	baseTree := buildTestTree(t, map[string]string{"file.go": baseLines})
+	shadowTree := buildTestTree(t, map[string]string{"file.go": shadowLines})
+	headTree := buildTestTree(t, map[string]string{"file.go": headLines})
+
+	// User pre-wrote 15 lines into file.go before the session started.
+	// (In a real session, calculatePromptAttributionAtStart would capture these.)
+	promptAttributions := []PromptAttribution{
+		{
+			CheckpointNumber: 1,
+			UserLinesAdded:   15,
+			UserLinesRemoved: 0,
+			UserAddedPerFile: map[string]int{"file.go": 15},
+		},
+	}
+
+	result := CalculateAttributionWithAccumulated(
+		context.Background(),
+		baseTree,
+		shadowTree,
+		headTree,
+		nil,
+		[]string{"file.go"},
+		promptAttributions,
+		"", "", "", "",
+	)
+
+	if result == nil {
+		t.Fatal("Bug B candidate 2: InitialAttribution is nil")
+	}
+
+	t.Logf("Bug B candidate 2 result: agent=%d, human_added=%d, total=%d, pct=%.1f%%",
+		result.AgentLines, result.HumanAdded, result.TotalCommitted, result.AgentPercentage)
+
+	// Expected correct behavior: agent added 10 lines (base→shadow diff = +10),
+	// so AgentLines should be > 0 and AgentPercentage should be > 0.
+	// If this test fails, the PromptAttribution inflation path is a deterministic
+	// repro for Bug B.
+	if result.AgentLines == 0 {
+		t.Errorf("Bug B candidate 2: AgentLines = 0, want > 0 — inflated PromptAttribution is zeroing agent credit")
+	}
+	if result.AgentPercentage == 0 {
+		t.Errorf("Bug B candidate 2: AgentPercentage = 0, want > 0")
+	}
+}
