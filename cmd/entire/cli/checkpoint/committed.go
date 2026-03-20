@@ -1159,7 +1159,7 @@ func (s *GitStore) UpdateCheckpointSummary(ctx context.Context, opts UpdateCheck
 	}
 
 	authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
-	commitMsg := fmt.Sprintf("Update combined attribution for checkpoint %s", opts.CheckpointID)
+	commitMsg := fmt.Sprintf("Checkpoint: %s\n\nEntire-Combined-Attribution: true", opts.CheckpointID)
 	newCommitHash, err := s.createCommit(newTreeHash, parentHash, commitMsg, authorName, authorEmail)
 	if err != nil {
 		return err

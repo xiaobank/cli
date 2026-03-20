@@ -1353,3 +1353,115 @@ func TestComputeCombinedAttribution_SingleSession_ReturnsNil(t *testing.T) {
 		t.Errorf("expected nil for single session (no-op), got %+v", result)
 	}
 }
+
+// TestBugC_DemonstrateFix shows the before/after for multi-session attribution.
+//
+// Scenario:
+//   - Base: shared.go with 5 lines (user-authored baseline)
+//   - User edits shared.go adding 3 lines → session 1 captures this as PromptAttribution
+//   - Session 1 agent: modifies shared.go to 15 lines (+7 agent lines on top of the 3 user lines)
+//   - Session 2 agent: adds new_feature.go with 8 lines (no user edits between sessions)
+//   - Both sessions share the same shadow branch (shadow has both files)
+//   - User commits once (head = shadow)
+//
+// BEFORE fix (latest session wins = session 2's empty PromptAttributions):
+//
+//	The 3 user lines on shared.go are not subtracted → agent gets credit for them
+//	Result: agentLines=18, humanAdded=0 → 78% (OVERCOUNTS agent work)
+//
+// AFTER fix (combined PromptAttributions from both sessions):
+//
+//	session 1's PromptAttribution (shared.go=3) is merged in → subtracted correctly
+//	Result: agentLines=15, humanAdded=3 → 83.3% (correct — user credit preserved)
+func TestBugC_DemonstrateFix(t *testing.T) {
+	t.Parallel()
+
+	// Base: shared.go with 5 lines (before any agent work)
+	baseTree := buildTestTree(t, map[string]string{
+		"shared.go": "line1\nline2\nline3\nline4\nline5\n",
+	})
+
+	// Shadow: both sessions' agent work on the shared branch
+	//   shared.go: base(5) + user(3) + agent-session1(7) = 15 lines
+	//   new_feature.go: agent-session2 added 8 lines
+	shadowTree := buildTestTree(t, map[string]string{
+		"shared.go":      "line1\nline2\nline3\nline4\nline5\nuser1\nuser2\nuser3\nagent1\nagent2\nagent3\nagent4\nagent5\nagent6\nagent7\n",
+		"new_feature.go": "feat1\nfeat2\nfeat3\nfeat4\nfeat5\nfeat6\nfeat7\nfeat8\n",
+	})
+
+	// Head = shadow (agent committed directly, no user edits after last checkpoint)
+	headTree := shadowTree
+
+	filesTouched := []string{"shared.go", "new_feature.go"}
+
+	// Session 1 PromptAttributions: captured user adding 3 lines to shared.go
+	// before session 1 started (user wrote user1, user2, user3)
+	session1PAs := []PromptAttribution{
+		{
+			CheckpointNumber: 1,
+			UserLinesAdded:   3,
+			UserLinesRemoved: 0,
+			UserAddedPerFile: map[string]int{"shared.go": 3},
+		},
+	}
+
+	// Session 2 PromptAttributions: no user edits between sessions
+	session2PAs := []PromptAttribution{}
+
+	ctx := context.Background()
+
+	// ── BEFORE fix: latest session wins (session 2's empty PromptAttributions) ──
+	before := CalculateAttributionWithAccumulated(
+		ctx,
+		baseTree, shadowTree, headTree, nil,
+		filesTouched, session2PAs, // session 2 only — latest wins
+		"", "", "", "",
+	)
+
+	// ── AFTER fix: combined PromptAttributions (session 1 + session 2) ──
+	combinedPAs := make([]PromptAttribution, 0, len(session1PAs)+len(session2PAs))
+	combinedPAs = append(combinedPAs, session1PAs...)
+	combinedPAs = append(combinedPAs, session2PAs...)
+	after := CalculateAttributionWithAccumulated(
+		ctx,
+		baseTree, shadowTree, headTree, nil,
+		filesTouched, combinedPAs, // both sessions merged
+		"", "", "", "",
+	)
+
+	t.Logf("── Scenario ─────────────────────────────────────────────────")
+	t.Logf("  base:    shared.go = 5 lines (original file)")
+	t.Logf("  user wrote 3 lines to shared.go before session 1")
+	t.Logf("  session1 agent: added 7 lines to shared.go  (shared.go now 15 lines total)")
+	t.Logf("  session2 agent: created new_feature.go with 8 lines")
+	t.Logf("  user commits once → head has shared.go(15) + new_feature.go(8) = 23 lines total")
+	t.Logf("")
+	t.Logf("  session1 PromptAttributions: user_added=3 on shared.go")
+	t.Logf("  session2 PromptAttributions: (empty — no user edits between sessions)")
+	t.Logf("")
+	t.Logf("── BEFORE (latest session wins = only session2 PromptAttributions used) ──")
+	t.Logf("  session2 has no record of the 3 user lines → they get credited to agent")
+	t.Logf("  agentLines=%d  humanAdded=%d  totalCommitted=%d  agentPct=%.1f%%",
+		before.AgentLines, before.HumanAdded, before.TotalCommitted, before.AgentPercentage)
+	t.Logf("")
+	t.Logf("── AFTER  (combined = session1 + session2 PromptAttributions merged) ─────")
+	t.Logf("  session1's 3 user lines on shared.go are merged in and subtracted correctly")
+	t.Logf("  agentLines=%d  humanAdded=%d  totalCommitted=%d  agentPct=%.1f%%",
+		after.AgentLines, after.HumanAdded, after.TotalCommitted, after.AgentPercentage)
+
+	// BEFORE: agent gets credit for the 3 user lines on shared.go (overcounts)
+	if before.AgentLines != 18 {
+		t.Errorf("BEFORE: AgentLines = %d, want 18 (10 shared + 8 new_feature, user lines not subtracted)", before.AgentLines)
+	}
+	if before.HumanAdded != 0 {
+		t.Errorf("BEFORE: HumanAdded = %d, want 0 (user contribution lost with latest-wins)", before.HumanAdded)
+	}
+
+	// AFTER: user's 3 lines correctly attributed to human
+	if after.AgentLines != 15 {
+		t.Errorf("AFTER: AgentLines = %d, want 15 (7 shared + 8 new_feature)", after.AgentLines)
+	}
+	if after.HumanAdded != 3 {
+		t.Errorf("AFTER: HumanAdded = %d, want 3 (user wrote 3 lines before session 1)", after.HumanAdded)
+	}
+}

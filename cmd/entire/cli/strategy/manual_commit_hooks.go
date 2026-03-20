@@ -875,6 +875,11 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error { //nolint:
 	committedFileSet := filesChangedInCommit(ctx, worktreePath, commit, headTree, parentTree)
 	resolveTreesSpan.End()
 
+	// attrAccumulator collects per-session data keyed by shadow branch name.
+	// PromptAttributions are captured before condensation clears them (Pass 1),
+	// then used in Pass 2 to compute combined attribution for multi-session checkpoints.
+	attrAccumulator := make(map[string][]sessionAttrData)
+
 	loopCtx, processSessionsLoop := perf.StartLoop(ctx, "process_sessions")
 	for _, state := range sessions {
 		// Skip fully-condensed ended sessions — no work remains.
@@ -885,10 +890,43 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error { //nolint:
 		iterCtx, iterSpan := processSessionsLoop.Iteration(loopCtx)
 		s.postCommitProcessSession(iterCtx, repo, state, &transitionCtx, checkpointID,
 			head, commit, newHead, worktreePath, headTree, parentTree, parentCommitHash, committedFileSet,
-			shadowBranchesToDelete, uncondensedActiveOnBranch)
+			shadowBranchesToDelete, uncondensedActiveOnBranch, attrAccumulator)
 		iterSpan.End()
 	}
 	processSessionsLoop.End()
+
+	// Pass 2: compute combined attribution for multi-session checkpoints.
+	// Runs after all condensation so the already-written CheckpointSummary can be patched.
+	_, combinedAttrSpan := perf.Start(ctx, "combined_attribution")
+	for _, sessionAttrs := range attrAccumulator {
+		if len(sessionAttrs) < 2 {
+			continue // Single session: per-session attribution already correct
+		}
+		combined := computeCombinedAttribution(ctx, repo, sessionAttrs)
+		if combined == nil {
+			continue
+		}
+		store, storeErr := s.getCheckpointStore()
+		if storeErr != nil {
+			logging.Warn(logCtx, "combined attribution: failed to get store",
+				slog.String("error", storeErr.Error()))
+			continue
+		}
+		if updateErr := store.UpdateCheckpointSummary(ctx, checkpoint.UpdateCheckpointSummaryOptions{
+			CheckpointID:        checkpointID,
+			CombinedAttribution: combined,
+		}); updateErr != nil {
+			logging.Warn(logCtx, "combined attribution: failed to update summary",
+				slog.String("checkpoint_id", checkpointID.String()),
+				slog.String("error", updateErr.Error()))
+			// Non-fatal: per-session attributions are still correct.
+		} else {
+			logging.Info(logCtx, "combined attribution written",
+				slog.String("checkpoint_id", checkpointID.String()),
+				slog.Int("sessions_merged", len(sessionAttrs)))
+		}
+	}
+	combinedAttrSpan.End()
 
 	// Clean up shadow branches — only delete when ALL sessions on the branch are non-active
 	// or were condensed during this PostCommit.
@@ -934,6 +972,7 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 	committedFileSet map[string]struct{},
 	shadowBranchesToDelete map[string]struct{},
 	uncondensedActiveOnBranch map[string]bool,
+	attrAccumulator map[string][]sessionAttrData,
 ) {
 	logCtx := logging.WithComponent(ctx, "checkpoint")
 	shadowBranchName := getShadowBranchNameForCommit(state.BaseCommit, state.WorktreeID)
@@ -1003,6 +1042,29 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 		slog.Int("files_touched_before", len(filesTouchedBefore)),
 		slog.Any("files", filesTouchedBefore),
 	)
+
+	// Collect PromptAttributions BEFORE condensation clears them.
+	// condenseAndUpdateState sets state.PromptAttributions = nil, so we must
+	// capture them here for the combined attribution pass after the session loop.
+	attrBase := state.AttributionBaseCommit
+	if attrBase == "" {
+		attrBase = state.BaseCommit
+	}
+	var parentCommit string
+	if commit.NumParents() > 0 {
+		parentCommit = commit.ParentHashes[0].String()
+	}
+	attrAccumulator[shadowBranchName] = append(attrAccumulator[shadowBranchName], sessionAttrData{
+		promptAttributions: append([]PromptAttribution(nil), state.PromptAttributions...),
+		filesTouched:       append([]string(nil), filesTouchedBefore...),
+		shadowRef:          shadowRef,
+		headTree:           headTree,
+		parentTree:         parentTree,
+		repoDir:            repoDir,
+		attrBase:           attrBase,
+		headCommit:         newHead,
+		parentCommit:       parentCommit,
+	})
 
 	// Run the state machine transition with handler for strategy-specific actions.
 	_, transitionAndCondenseSpan := perf.Start(ctx, "transition_and_condense")
