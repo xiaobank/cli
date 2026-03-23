@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"strings"
 )
 
 // droppedTypes are entry types that carry no parser-relevant data.
@@ -61,6 +62,39 @@ func Compact(content []byte, opts CompactOptions) ([]byte, error) {
 	return result, nil
 }
 
+// userAliases maps transcript type/role values to the canonical "user" kind.
+var userAliases = map[string]bool{
+	"user":  true,
+	"human": true,
+}
+
+// assistantAliases maps transcript type/role values to the canonical "assistant" kind.
+var assistantAliases = map[string]bool{
+	"assistant": true,
+}
+
+// normalizeKind returns the canonical entry kind ("user" or "assistant") for a
+// transcript line. It prefers the "type" field, then falls back to "role".
+// Returns "" for unrecognised or dropped entries.
+func normalizeKind(raw map[string]json.RawMessage) string {
+	// Try "type" first, then "role".
+	kind := unquote(raw["type"])
+	if kind == "" {
+		kind = unquote(raw["role"])
+	}
+
+	if droppedTypes[kind] {
+		return ""
+	}
+	if userAliases[kind] {
+		return "user"
+	}
+	if assistantAliases[kind] {
+		return "assistant"
+	}
+	return ""
+}
+
 // convertLine converts a single full.jsonl line into zero or more transcript.jsonl lines.
 // A user entry with tool_result blocks produces multiple output lines.
 func convertLine(lineBytes []byte, opts CompactOptions) [][]byte {
@@ -69,12 +103,7 @@ func convertLine(lineBytes []byte, opts CompactOptions) [][]byte {
 		return nil
 	}
 
-	entryType := unquote(raw["type"])
-	if droppedTypes[entryType] {
-		return nil
-	}
-
-	switch entryType {
+	switch normalizeKind(raw) {
 	case "assistant":
 		return convertAssistant(raw, opts)
 	case "user":
@@ -215,9 +244,11 @@ func extractUserContent(contentRaw json.RawMessage) (string, []toolResultEntry) 
 	text := ""
 	if len(texts) > 0 {
 		text = texts[0]
+		var textSb246 strings.Builder
 		for i := 1; i < len(texts); i++ {
-			text += "\n\n" + texts[i]
+			textSb246.WriteString("\n\n" + texts[i])
 		}
+		text += textSb246.String()
 	}
 
 	return text, toolResults

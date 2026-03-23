@@ -306,6 +306,87 @@ func TestCompact_OnlyDroppedTypes(t *testing.T) {
 	assertJSONLines(t, result, nil)
 }
 
+// --- Cross-agent format tests ---
+
+func TestCompact_CursorRoleOnly(t *testing.T) {
+	t.Parallel()
+
+	cursorOpts := CompactOptions{
+		Agent:      "cursor",
+		CLIVersion: "0.5.1",
+		StartLine:  0,
+	}
+
+	// Cursor transcripts use "role" instead of "type".
+	input := []byte(`{"role":"user","timestamp":"t1","message":{"content":"hello from cursor"}}
+{"role":"assistant","timestamp":"t2","message":{"content":[{"type":"text","text":"Hi from Cursor!"}]}}
+`)
+
+	expected := []string{
+		`{"v":1,"agent":"cursor","cli_version":"0.5.1","type":"user","ts":"t1","content":"hello from cursor"}`,
+		`{"v":1,"agent":"cursor","cli_version":"0.5.1","type":"assistant","ts":"t2","content":[{"type":"text","text":"Hi from Cursor!"}]}`,
+	}
+
+	result, err := Compact(input, cursorOpts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertJSONLines(t, result, expected)
+}
+
+func TestCompact_HumanTypeAlias(t *testing.T) {
+	t.Parallel()
+
+	// Claude/Gemini-style transcripts may use type:"human" for user messages.
+	input := []byte(`{"type":"human","timestamp":"2026-01-01T00:00:00Z","message":{"content":"hello human"}}
+{"type":"assistant","timestamp":"2026-01-01T00:00:01Z","message":{"id":"m1","content":[{"type":"text","text":"Hi!"}]}}
+`)
+
+	expected := []string{
+		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"2026-01-01T00:00:00Z","content":"hello human"}`,
+		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:00:01Z","id":"m1","content":[{"type":"text","text":"Hi!"}]}`,
+	}
+
+	result, err := Compact(input, defaultOpts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertJSONLines(t, result, expected)
+}
+
+func TestCompact_MixedFormats(t *testing.T) {
+	t.Parallel()
+
+	cursorOpts := CompactOptions{
+		Agent:      "cursor",
+		CLIVersion: "0.5.1",
+		StartLine:  0,
+	}
+
+	// Mixed transcript: type-based Claude entries, role-based Cursor entries, and human alias.
+	input := []byte(`{"type":"user","timestamp":"t1","message":{"content":"claude user"}}
+{"type":"assistant","timestamp":"t2","message":{"id":"m1","content":[{"type":"text","text":"claude assistant"}]}}
+{"role":"user","timestamp":"t3","message":{"content":"cursor user"}}
+{"role":"assistant","timestamp":"t4","message":{"content":[{"type":"text","text":"cursor assistant"}]}}
+{"type":"human","timestamp":"t5","message":{"content":"human alias"}}
+{"type":"progress","message":{"content":"should be dropped"}}
+`)
+
+	expected := []string{
+		`{"v":1,"agent":"cursor","cli_version":"0.5.1","type":"user","ts":"t1","content":"claude user"}`,
+		`{"v":1,"agent":"cursor","cli_version":"0.5.1","type":"assistant","ts":"t2","id":"m1","content":[{"type":"text","text":"claude assistant"}]}`,
+		`{"v":1,"agent":"cursor","cli_version":"0.5.1","type":"user","ts":"t3","content":"cursor user"}`,
+		`{"v":1,"agent":"cursor","cli_version":"0.5.1","type":"assistant","ts":"t4","content":[{"type":"text","text":"cursor assistant"}]}`,
+		`{"v":1,"agent":"cursor","cli_version":"0.5.1","type":"user","ts":"t5","content":"human alias"}`,
+	}
+
+	result, err := Compact(input, cursorOpts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertJSONLines(t, result, expected)
+}
+
 // --- Helpers ---
 
 func nonEmptyLines(data []byte) []string {
