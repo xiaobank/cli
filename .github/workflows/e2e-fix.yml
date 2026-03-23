@@ -43,37 +43,10 @@ jobs:
       SLACK_CHANNEL: ${{ inputs.slack_channel }}
       SLACK_THREAD_TS: ${{ inputs.slack_thread_ts }}
     steps:
-      - name: Write Slack helper
-        if: ${{ env.SLACK_BOT_TOKEN != '' && env.SLACK_CHANNEL != '' && env.SLACK_THREAD_TS != '' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          helper="$RUNNER_TEMP/post-slack-message.sh"
-          cat > "$helper" <<'EOF'
-          #!/usr/bin/env bash
-          set -euo pipefail
-
-          text="${1:?message is required}"
-          payload="$(jq -n \
-            --arg channel "$SLACK_CHANNEL" \
-            --arg thread_ts "$SLACK_THREAD_TS" \
-            --arg text "$text" \
-            '{channel: $channel, thread_ts: $thread_ts, text: $text}')"
-
-          if ! response="$(curl -fsS https://slack.com/api/chat.postMessage \
-            -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
-            -H 'Content-type: application/json; charset=utf-8' \
-            --data "$payload")"; then
-            echo "warning: slack notification failed" >&2
-            exit 0
-          fi
-
-          if ! jq -e '.ok == true' >/dev/null <<<"$response"; then
-            echo "warning: slack notification returned non-ok response" >&2
-          fi
-          EOF
-          chmod +x "$helper"
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Post fix started
         if: ${{ env.SLACK_BOT_TOKEN != '' && env.SLACK_CHANNEL != '' && env.SLACK_THREAD_TS != '' }}
@@ -83,12 +56,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          "$RUNNER_TEMP/post-slack-message.sh" "Starting E2E fix for \`${FAILED_AGENTS}\`."
-
-      - name: Checkout repository
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
+          scripts/post-slack-message.sh "Starting E2E fix for \`${FAILED_AGENTS}\`."
 
       - name: Setup mise
         uses: jdx/mise-action@v4
@@ -157,7 +125,7 @@ jobs:
             message="E2E fix complete — changes applied but no PR was created. Check the <${RUN_URL}|workflow run> for details."
           fi
 
-          "$RUNNER_TEMP/post-slack-message.sh" "$message"
+          scripts/post-slack-message.sh "$message"
 
       - name: Post failure to Slack
         if: failure() && env.SLACK_BOT_TOKEN != '' && env.SLACK_CHANNEL != '' && env.SLACK_THREAD_TS != ''
@@ -169,4 +137,4 @@ jobs:
 
           message="E2E fix failed. Check the <${RUN_URL}|workflow run> for details."
 
-          "$RUNNER_TEMP/post-slack-message.sh" "$message"
+          scripts/post-slack-message.sh "$message"
