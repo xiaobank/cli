@@ -75,6 +75,13 @@ jobs:
           slack_channel="${SLACK_CHANNEL_INPUT:-}"
           slack_thread_ts="${SLACK_THREAD_TS_INPUT:-}"
 
+          # Normalize thread_ts — re-insert dot if stripped (always 6 decimal places)
+          # Slack ts format is "seconds.microseconds" e.g. "1482960137.003543"
+          # See: https://api.slack.com/messaging/retrieving
+          if [ -n "$slack_thread_ts" ] && ! echo "$slack_thread_ts" | grep -q '\.'; then
+            slack_thread_ts="$(echo "$slack_thread_ts" | sed 's/\(.*\)\(.\{6\}\)$/\1.\2/')"
+          fi
+
           # Derive missing values from run URL via GitHub API
           if [ -z "$sha" ] || [ -z "$FAILED_AGENTS_INPUT" ]; then
             run_id=$(echo "$run_url" | grep -oE '/runs/[0-9]+' | grep -oE '[0-9]+')
