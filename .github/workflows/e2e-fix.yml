@@ -65,24 +65,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TRIAGE_RUN_ID: ${{ inputs.triage_run_id }}
-          FAILED_AGENTS: ${{ inputs.failed_agents }}
         shell: bash
         run: |
           set -euo pipefail
 
           mkdir -p triage-plans
 
-          IFS=',' read -ra agents <<< "$FAILED_AGENTS"
-          for agent in "${agents[@]}"; do
-            agent="$(echo "$agent" | xargs)"  # trim whitespace
-            echo "Downloading plan for $agent..."
-            gh run download "$TRIAGE_RUN_ID" \
-              --name "e2e-plan-${agent}" \
-              --dir "triage-plans/${agent}" || {
-              echo "warning: no plan artifact found for $agent" >&2
-              continue
-            }
-          done
+          gh run download "$TRIAGE_RUN_ID" \
+            --name "e2e-triage" \
+            --dir "triage-plans" || {
+            echo "error: no triage artifact found for run $TRIAGE_RUN_ID" >&2
+            exit 1
+          }
 
           echo "Downloaded plans:"
           find triage-plans -name '*.md' -type f
@@ -92,7 +86,7 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           prompt: |
-            Read the fix plans in the triage-plans/ directory. Each subdirectory contains a plan.md for one agent.
+            Read the fix plan in triage-plans/plan.md (and triage findings in triage-plans/triage.md for context).
 
             Execute all fixes exactly as specified in the plans. After applying fixes, run:
             1. mise run fmt

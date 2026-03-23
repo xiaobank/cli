@@ -39,16 +39,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  matrix-setup:
+  setup:
     runs-on: ubuntu-latest
     outputs:
-      agents: ${{ steps.set.outputs.agents }}
+      agents_csv: ${{ steps.set.outputs.agents_csv }}
       run_url: ${{ steps.set.outputs.run_url }}
       sha: ${{ steps.set.outputs.sha }}
       slack_channel: ${{ steps.set.outputs.slack_channel }}
       slack_thread_ts: ${{ steps.set.outputs.slack_thread_ts }}
     steps:
-      - name: Validate payload and build matrix
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          sparse-checkout: scripts
+
+      - name: Validate payload
         id: set
         shell: bash
         env:
@@ -61,10 +67,6 @@ jobs:
           SLACK_THREAD_TS_INPUT: ${{ inputs.slack_thread_ts }}
         run: |
           set -euo pipefail
-
-          csv_to_json() {
-            printf '%s' "$1" | jq -R -s -c 'split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))'
-          }
 
           run_url="$RUN_URL_INPUT"
           sha="${SHA_INPUT:-}"
@@ -83,16 +85,17 @@ jobs:
               sha=$(echo "$run_data" | jq -r '.headSha')
             fi
             if [ -z "$FAILED_AGENTS_INPUT" ]; then
-              agents_json=$(echo "$run_data" | jq -c '[.jobs[]
+              # Extract agent names from failed job names like "e2e (gemini-cli)"
+              agents_csv=$(echo "$run_data" | jq -r '[.jobs[]
                 | select(.conclusion == "failure")
                 | (.name | (try capture("\\((?<agent>[^)]+)\\)").agent catch null))
                 | select(. != null)
-              ]')
+              ] | join(", ")')
             fi
           fi
 
           if [ -n "$FAILED_AGENTS_INPUT" ]; then
-            agents_json="$(csv_to_json "$FAILED_AGENTS_INPUT")"
+            agents_csv="$FAILED_AGENTS_INPUT"
           fi
 
           if [ -z "$run_url" ]; then
@@ -103,7 +106,7 @@ jobs:
             echo "sha is required" >&2
             exit 1
           fi
-          if [ -z "$agents_json" ] || [ "$agents_json" = "[]" ] || [ "$agents_json" = "null" ]; then
+          if [ -z "$agents_csv" ]; then
             echo "agents is required (provide failed_agents input or ensure failed job names contain '(agent-name)')" >&2
             exit 1
           fi
@@ -112,35 +115,35 @@ jobs:
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "slack_channel=$slack_channel" >> "$GITHUB_OUTPUT"
           echo "slack_thread_ts=$slack_thread_ts" >> "$GITHUB_OUTPUT"
-          echo "agents=$agents_json" >> "$GITHUB_OUTPUT"
+          echo "agents_csv=$agents_csv" >> "$GITHUB_OUTPUT"
+
+      - name: Post triage starting
+        if: ${{ env.SLACK_BOT_TOKEN != '' && steps.set.outputs.slack_channel != '' && steps.set.outputs.slack_thread_ts != '' }}
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL: ${{ steps.set.outputs.slack_channel }}
+          SLACK_THREAD_TS: ${{ steps.set.outputs.slack_thread_ts }}
+          AGENTS_CSV: ${{ steps.set.outputs.agents_csv }}
+          TRIAGE_RUN_URL: ${{ steps.set.outputs.run_url }}
+        shell: bash
+        run: |
+          scripts/post-slack-message.sh "Starting E2E triage for \`${AGENTS_CSV}\` on <${TRIAGE_RUN_URL}|this run>."
 
   triage:
-    needs: [matrix-setup]
+    needs: [setup]
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.rerun == true && 90 || 45 }}
     env:
-      RUN_URL: ${{ needs.matrix-setup.outputs.run_url }}
-      E2E_AGENT: ${{ matrix.agent }}
+      RUN_URL: ${{ needs.setup.outputs.run_url }}
+      FAILED_AGENTS: ${{ needs.setup.outputs.agents_csv }}
       SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-      SLACK_CHANNEL: ${{ needs.matrix-setup.outputs.slack_channel }}
-      SLACK_THREAD_TS: ${{ needs.matrix-setup.outputs.slack_thread_ts }}
-    strategy:
-      fail-fast: false
-      matrix:
-        agent: ${{ fromJson(needs.matrix-setup.outputs.agents) }}
+      SLACK_CHANNEL: ${{ needs.setup.outputs.slack_channel }}
+      SLACK_THREAD_TS: ${{ needs.setup.outputs.slack_thread_ts }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
-
-      - name: Post triage started
-        if: ${{ env.SLACK_BOT_TOKEN != '' && env.SLACK_CHANNEL != '' && env.SLACK_THREAD_TS != '' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          scripts/post-slack-message.sh "Starting E2E triage for \`$E2E_AGENT\` on <$RUN_URL|this run>."
 
       - name: Setup mise
         uses: jdx/mise-action@v4
@@ -158,22 +161,26 @@ jobs:
         if: inputs.rerun == true
         run: sudo apt-get update && sudo apt-get install -y tmux
 
-      - name: Install agent CLI
+      - name: Install agent CLIs
         if: inputs.rerun == true
         run: |
-          case "${{ matrix.agent }}" in
-            claude-code) curl -fsSL https://claude.ai/install.sh | bash ;;
-            opencode)    curl -fsSL https://opencode.ai/install | bash ;;
-            gemini-cli)  npm install -g @google/gemini-cli ;;
-            cursor-cli)  curl https://cursor.com/install -fsS | bash ;;
-            factoryai-droid) curl -fsSL https://app.factory.ai/cli | sh ;;
-            copilot-cli)  npm install -g @github/copilot  ;;
-            roger-roger) ;; # installed by mise (see mise.toml)
-          esac
+          IFS=',' read -ra agents <<< "$FAILED_AGENTS"
+          for agent in "${agents[@]}"; do
+            agent="$(echo "$agent" | xargs)"
+            case "$agent" in
+              claude-code) curl -fsSL https://claude.ai/install.sh | bash ;;
+              opencode)    curl -fsSL https://opencode.ai/install | bash ;;
+              gemini-cli)  npm install -g @google/gemini-cli ;;
+              cursor-cli)  curl https://cursor.com/install -fsS | bash ;;
+              factoryai-droid) curl -fsSL https://app.factory.ai/cli | sh ;;
+              copilot-cli)  npm install -g @github/copilot  ;;
+              roger-roger) ;; # installed by mise (see mise.toml)
+            esac
+          done
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Bootstrap agent
-        if: inputs.rerun == true && matrix.agent != 'roger-roger'
+      - name: Bootstrap agents
+        if: inputs.rerun == true
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -192,10 +199,11 @@ jobs:
 
             Inputs:
             - Local artifact path: ${{ steps.artifacts.outputs.path }}
-            - Agent: ${{ matrix.agent }}
-            - SHA: ${{ needs.matrix-setup.outputs.sha }}
+            - Failed agents: ${{ env.FAILED_AGENTS }}
+            - SHA: ${{ needs.setup.outputs.sha }}
 
             This is a CI artifact analysis (local path provided) -- skip Steps L2-L5 and go straight to Shared Analysis.
+            Analyze ALL failed agents together -- failures may share a common root cause.
 
             Write ALL output to the plan file -- both the triage findings report and the fix plan. Structure it as:
             1. Triage findings (per-test findings blocks + summary table from the skill)
@@ -223,8 +231,10 @@ jobs:
 
             Inputs:
             - CI run URL: ${{ env.RUN_URL }}
-            - Agent: ${{ matrix.agent }}
-            - SHA: ${{ needs.matrix-setup.outputs.sha }}
+            - Failed agents: ${{ env.FAILED_AGENTS }}
+            - SHA: ${{ needs.setup.outputs.sha }}
+
+            Analyze ALL failed agents together -- failures may share a common root cause.
 
             Write ALL output to the plan file -- both the triage findings report and the fix plan. Structure it as:
             1. Triage findings (per-test findings blocks + summary table from the skill)
@@ -261,8 +271,8 @@ jobs:
         shell: bash
         env:
           EXECUTION_FILE: ${{ steps.triage.outputs.execution_file }}
-          TRIAGE_OUTPUT_FILE: ${{ github.workspace }}/e2e-triage-artifacts/${{ matrix.agent }}/triage.md
-          PLAN_FILE: ${{ github.workspace }}/e2e-triage-artifacts/${{ matrix.agent }}/plan.md
+          TRIAGE_OUTPUT_FILE: ${{ github.workspace }}/e2e-triage-artifacts/triage.md
+          PLAN_FILE: ${{ github.workspace }}/e2e-triage-artifacts/plan.md
         run: |
           set -euo pipefail
           mkdir -p "$(dirname "$TRIAGE_OUTPUT_FILE")"
@@ -293,12 +303,12 @@ jobs:
         if: always() && steps.triage_output.outcome == 'success'
         shell: bash
         env:
-          TRIAGE_FILE: ${{ github.workspace }}/e2e-triage-artifacts/${{ matrix.agent }}/triage.md
-          PLAN_FILE: ${{ github.workspace }}/e2e-triage-artifacts/${{ matrix.agent }}/plan.md
+          TRIAGE_FILE: ${{ github.workspace }}/e2e-triage-artifacts/triage.md
+          PLAN_FILE: ${{ github.workspace }}/e2e-triage-artifacts/plan.md
         run: |
           set -euo pipefail
           {
-            echo "# E2E Triage: ${{ matrix.agent }}"
+            echo "# E2E Triage: ${FAILED_AGENTS}"
             echo ""
             if [ -s "$TRIAGE_FILE" ]; then
               cat "$TRIAGE_FILE"
@@ -324,9 +334,9 @@ jobs:
           set -euo pipefail
 
           if [ "$TRIAGE_OUTCOME" = "success" ]; then
-            message="E2E triage complete for \`$E2E_AGENT\`."
+            message="E2E triage complete for \`$FAILED_AGENTS\`."
           else
-            message="E2E triage failed for \`$E2E_AGENT\`."
+            message="E2E triage failed for \`$FAILED_AGENTS\`."
           fi
 
           scripts/post-slack-message.sh "$message"
@@ -335,7 +345,7 @@ jobs:
         if: steps.triage_output.outcome == 'success' && env.SLACK_BOT_TOKEN != '' && env.SLACK_CHANNEL != '' && env.SLACK_THREAD_TS != ''
         shell: bash
         env:
-          PLAN_FILE: ${{ github.workspace }}/e2e-triage-artifacts/${{ matrix.agent }}/plan.md
+          PLAN_FILE: ${{ github.workspace }}/e2e-triage-artifacts/plan.md
           TRIAGE_RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -345,9 +355,10 @@ jobs:
 
           # Construct Fix It URL
           encoded_run_url="$(python3 -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['RUN_URL'], safe=''))")"
-          fix_url="https://e2e-triage.entireio.workers.dev/fix?triage_run_id=${TRIAGE_RUN_ID}&run_url=${encoded_run_url}&failed_agents=${E2E_AGENT}&slack_channel=${SLACK_CHANNEL}&slack_thread_ts=${SLACK_THREAD_TS}"
+          encoded_agents="$(python3 -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['FAILED_AGENTS'], safe=''))")"
+          fix_url="https://e2e-triage.entireio.workers.dev/fix?triage_run_id=${TRIAGE_RUN_ID}&run_url=${encoded_run_url}&failed_agents=${encoded_agents}&slack_channel=${SLACK_CHANNEL}&slack_thread_ts=${SLACK_THREAD_TS}"
 
-          message="Fix plan ready for \`$E2E_AGENT\`:
+          message="Fix plan ready for \`$FAILED_AGENTS\`:
           ${summary}
 
           <${fix_url}|Fix It> — applies the plan and creates a draft PR"
@@ -358,7 +369,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: e2e-triage-${{ matrix.agent }}
+          name: e2e-triage
           path: e2e-triage-artifacts/
           retention-days: 7
-

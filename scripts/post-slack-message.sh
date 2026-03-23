@@ -20,5 +20,7 @@ if ! response="$(curl -fsS https://slack.com/api/chat.postMessage \
 fi
 
 if ! jq -e '.ok == true' >/dev/null <<<"$response"; then
-  echo "warning: slack notification returned non-ok response" >&2
+  error="$(jq -r '.error // "unknown"' <<<"$response")"
+  echo "warning: slack notification returned non-ok response: $error" >&2
+  echo "warning: full response: $response" >&2
 fi
