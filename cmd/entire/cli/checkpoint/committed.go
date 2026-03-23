@@ -354,7 +354,7 @@ func (s *GitStore) writeSessionToSubdirectory(ctx context.Context, opts WriteCom
 
 	// Write prompts
 	if len(opts.Prompts) > 0 {
-		promptContent := pipeline.CleanString(redact.String(strings.Join(opts.Prompts, "\n\n---\n\n")))
+		promptContent := redact.String(pipeline.CleanString(strings.Join(opts.Prompts, "\n\n---\n\n")))
 		blobHash, err := CreateBlobFromContent(s.repo, []byte(promptContent))
 		if err != nil {
 			return filePaths, err
@@ -563,12 +563,13 @@ func (s *GitStore) writeTranscript(ctx context.Context, opts WriteCommittedOptio
 		return nil
 	}
 
-	// Redact secrets then normalize machine-specific paths
+	// Normalize machine-specific paths first (before redaction can alter them),
+	// then redact secrets.
+	transcript = pipeline.Clean(transcript)
 	transcript, err := redact.JSONLBytes(transcript)
 	if err != nil {
 		return fmt.Errorf("failed to redact transcript secrets: %w", err)
 	}
-	transcript = pipeline.Clean(transcript)
 
 	// Chunk the transcript if it's too large
 	chunks, err := agent.ChunkTranscript(ctx, transcript, opts.Agent)
@@ -1185,11 +1186,11 @@ func (s *GitStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOpti
 	// Replace transcript (full replace, not append)
 	// Apply redaction as safety net (caller should redact, but we ensure it here)
 	if len(opts.Transcript) > 0 {
-		transcript, err := redact.JSONLBytes(opts.Transcript)
+		transcript := pipeline.Clean(opts.Transcript)
+		transcript, err := redact.JSONLBytes(transcript)
 		if err != nil {
 			return fmt.Errorf("failed to redact transcript secrets: %w", err)
 		}
-		transcript = pipeline.Clean(transcript)
 		if err := s.replaceTranscript(ctx, transcript, opts.Agent, sessionPath, entries); err != nil {
 			return fmt.Errorf("failed to replace transcript: %w", err)
 		}
@@ -1197,7 +1198,7 @@ func (s *GitStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOpti
 
 	// Replace prompts (apply redaction as safety net)
 	if len(opts.Prompts) > 0 {
-		promptContent := pipeline.CleanString(redact.String(strings.Join(opts.Prompts, "\n\n---\n\n")))
+		promptContent := redact.String(pipeline.CleanString(strings.Join(opts.Prompts, "\n\n---\n\n")))
 		blobHash, err := CreateBlobFromContent(s.repo, []byte(promptContent))
 		if err != nil {
 			return fmt.Errorf("failed to create prompt blob: %w", err)
@@ -1466,6 +1467,9 @@ func createRedactedBlobFromFile(repo *git.Repository, filePath, treePath string,
 		return hash, mode, nil
 	}
 
+	// Normalize paths before redaction so redaction doesn't alter matchable paths.
+	content = pipeline.Clean(content)
+
 	if strings.HasSuffix(treePath, ".jsonl") {
 		redacted, jsonlErr := redact.JSONLBytes(content)
 		if jsonlErr != nil {
@@ -1475,8 +1479,6 @@ func createRedactedBlobFromFile(repo *git.Repository, filePath, treePath string,
 	} else {
 		content = redact.Bytes(content)
 	}
-
-	content = pipeline.Clean(content)
 
 	hash, err := CreateBlobFromContent(repo, content)
 	if err != nil {

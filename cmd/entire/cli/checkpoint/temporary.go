@@ -313,11 +313,11 @@ func (s *GitStore) addTaskMetadataToTree(ctx context.Context, baseTreeHash plumb
 		var incData []byte
 		var err error
 		if opts.IncrementalData != nil {
-			incData, err = redact.JSONLBytes(opts.IncrementalData)
+			incData = pipeline.Clean(opts.IncrementalData)
+			incData, err = redact.JSONLBytes(incData)
 			if err != nil {
 				return plumbing.ZeroHash, fmt.Errorf("failed to redact incremental checkpoint: %w", err)
 			}
-			incData = pipeline.Clean(incData)
 		}
 		incrementalCheckpoint := struct {
 			Type      string          `json:"type"`
@@ -384,6 +384,7 @@ func (s *GitStore) addTaskMetadataToTree(ctx context.Context, baseTreeHash plumb
 		// Add subagent transcript if available
 		if opts.SubagentTranscriptPath != "" && opts.AgentID != "" {
 			if agentContent, readErr := os.ReadFile(opts.SubagentTranscriptPath); readErr == nil {
+				agentContent = pipeline.Clean(agentContent)
 				redacted, jsonlErr := redact.JSONLBytes(agentContent)
 				if jsonlErr != nil {
 					logging.Warn(ctx, "subagent transcript is not valid JSONL, falling back to plain redaction",
@@ -392,7 +393,7 @@ func (s *GitStore) addTaskMetadataToTree(ctx context.Context, baseTreeHash plumb
 					)
 					redacted = redact.Bytes(agentContent)
 				}
-				agentContent = pipeline.Clean(redacted)
+				agentContent = redacted
 				if blobHash, blobErr := CreateBlobFromContent(s.repo, agentContent); blobErr == nil {
 					agentPath := taskMetadataDir + "/agent-" + opts.AgentID + ".jsonl"
 					changes = append(changes, TreeChange{
