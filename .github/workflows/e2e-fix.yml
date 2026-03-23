@@ -48,15 +48,22 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Normalize Slack thread_ts
+        shell: bash
+        run: |
+          ts="${SLACK_THREAD_TS}"
+          if [ -n "$ts" ] && ! echo "$ts" | grep -q '\.'; then
+            ts="$(echo "$ts" | sed 's/\(.*\)\(.\{6\}\)$/\1.\2/')"
+            echo "SLACK_THREAD_TS=$ts" >> "$GITHUB_ENV"
+          fi
+
       - name: Post fix started
         if: ${{ env.SLACK_BOT_TOKEN != '' && env.SLACK_CHANNEL != '' && env.SLACK_THREAD_TS != '' }}
         shell: bash
         env:
-          FAILED_AGENTS: ${{ inputs.failed_agents }}
+          FIX_RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          set -euo pipefail
-
-          scripts/post-slack-message.sh "Starting E2E fix for \`${FAILED_AGENTS}\`."
+          scripts/post-slack-message.sh ":hourglass_flowing_sand: Applying E2E fix — <${FIX_RUN_URL}|view fix run>"
 
       - name: Setup mise
         uses: jdx/mise-action@v4
@@ -110,16 +117,20 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Find the draft PR URL from the fix step output
           pr_url="$(gh pr list --head "$FIX_BRANCH" --json url -q '.[0].url' 2>/dev/null || true)"
 
           if [ -n "$pr_url" ]; then
-            message="E2E fix complete — draft PR ready: <${pr_url}|Review PR>"
+            payload="$(jq -n \
+              --arg pr_url "$pr_url" \
+              '{
+                text: (":review: E2E fix applied: " + $pr_url),
+                reply_broadcast: true,
+                unfurl_links: true
+              }')"
+            scripts/post-slack-message.sh --payload "$payload"
           else
-            message="E2E fix complete — changes applied but no PR was created. Check the <${RUN_URL}|workflow run> for details."
+            scripts/post-slack-message.sh ":warning: E2E fix complete but no PR was created — <${RUN_URL}|view run>"
           fi
-
-          scripts/post-slack-message.sh "$message"
 
       - name: Post failure to Slack
         if: failure() && env.SLACK_BOT_TOKEN != '' && env.SLACK_CHANNEL != '' && env.SLACK_THREAD_TS != ''
@@ -127,8 +138,4 @@ jobs:
         env:
           RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          set -euo pipefail
-
-          message="E2E fix failed. Check the <${RUN_URL}|workflow run> for details."
-
-          scripts/post-slack-message.sh "$message"
+          scripts/post-slack-message.sh ":x: E2E fix failed — <${RUN_URL}|view run>"
