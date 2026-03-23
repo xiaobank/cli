@@ -199,6 +199,7 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_args: "--allowedTools 'Read,Grep,Glob'"
           display_report: true
+          github_token: ${{ github.token }}
 
       - name: Run triage (with re-runs)
         id: triage_rerun
@@ -221,6 +222,7 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_args: "--allowedTools 'Read,Grep,Glob,Bash(mise:*),Bash(scripts:*)'"
           display_report: true
+          github_token: ${{ github.token }}
 
       - name: Resolve triage outcome
         id: triage
@@ -269,6 +271,7 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_args: "--allowedTools 'Read,Grep,Glob,Write,EnterPlanMode,ExitPlanMode,Bash(mise:*)'"
           display_report: true
+          github_token: ${{ github.token }}
 
       - name: Extract plan output
         id: plan_output
