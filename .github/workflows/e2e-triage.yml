@@ -388,6 +388,21 @@ jobs:
 
           scripts/post-slack-message.sh --payload "$payload"
 
+      - name: Write triage metadata
+        if: always()
+        shell: bash
+        env:
+          META_RUN_URL: ${{ needs.setup.outputs.run_url }}
+          META_AGENTS_CSV: ${{ needs.setup.outputs.agents_csv }}
+          META_SHA: ${{ needs.setup.outputs.sha }}
+        run: |
+          jq -n \
+            --arg run_url "$META_RUN_URL" \
+            --arg failed_agents "$META_AGENTS_CSV" \
+            --arg sha "$META_SHA" \
+            '{run_url: $run_url, failed_agents: $failed_agents, sha: $sha}' \
+            > e2e-triage-artifacts/metadata.json
+
       - name: Upload triage output
         if: always()
         uses: actions/upload-artifact@v7

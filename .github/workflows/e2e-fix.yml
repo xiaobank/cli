@@ -8,12 +8,12 @@ on:
         required: true
         type: string
       run_url:
-        description: Original failed E2E run URL
-        required: true
+        description: Original failed E2E run URL (auto-detected from triage artifacts if omitted)
+        required: false
         type: string
       failed_agents:
-        description: Comma-separated list of agents to fix
-        required: true
+        description: Comma-separated list of agents to fix (auto-detected from triage artifacts if omitted)
+        required: false
         type: string
       slack_channel:
         description: Slack channel ID for thread replies
@@ -86,7 +86,41 @@ jobs:
           }
 
           echo "Downloaded plans:"
-          find triage-plans -name '*.md' -type f
+          find triage-plans -type f
+
+      - name: Resolve inputs from triage metadata
+        shell: bash
+        env:
+          INPUT_RUN_URL: ${{ inputs.run_url }}
+          INPUT_FAILED_AGENTS: ${{ inputs.failed_agents }}
+        run: |
+          set -euo pipefail
+
+          meta="triage-plans/metadata.json"
+          if [ ! -f "$meta" ]; then
+            if [ -z "$INPUT_RUN_URL" ] || [ -z "$INPUT_FAILED_AGENTS" ]; then
+              echo "error: run_url and failed_agents are required when triage artifacts lack metadata.json" >&2
+              exit 1
+            fi
+            echo "RESOLVED_RUN_URL=$INPUT_RUN_URL" >> "$GITHUB_ENV"
+            echo "RESOLVED_FAILED_AGENTS=$INPUT_FAILED_AGENTS" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          run_url="${INPUT_RUN_URL:-$(jq -r '.run_url' "$meta")}"
+          failed_agents="${INPUT_FAILED_AGENTS:-$(jq -r '.failed_agents' "$meta")}"
+
+          if [ -z "$run_url" ] || [ "$run_url" = "null" ]; then
+            echo "error: could not determine run_url" >&2
+            exit 1
+          fi
+          if [ -z "$failed_agents" ] || [ "$failed_agents" = "null" ]; then
+            echo "error: could not determine failed_agents" >&2
+            exit 1
+          fi
+
+          echo "RESOLVED_RUN_URL=$run_url" >> "$GITHUB_ENV"
+          echo "RESOLVED_FAILED_AGENTS=$failed_agents" >> "$GITHUB_ENV"
 
       - name: Apply fixes
         id: fix
@@ -111,7 +145,7 @@ jobs:
 
       - name: Install agent CLIs
         env:
-          FAILED_AGENTS: ${{ inputs.failed_agents }}
+          FAILED_AGENTS: ${{ env.RESOLVED_FAILED_AGENTS }}
         run: |
           for agent in $(echo "$FAILED_AGENTS" | tr ',' ' ' | xargs); do
             case "$agent" in
@@ -128,7 +162,7 @@ jobs:
 
       - name: Bootstrap agents
         env:
-          FAILED_AGENTS: ${{ inputs.failed_agents }}
+          FAILED_AGENTS: ${{ env.RESOLVED_FAILED_AGENTS }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
@@ -145,7 +179,7 @@ jobs:
         id: verify1
         continue-on-error: true
         env:
-          FAILED_AGENTS: ${{ inputs.failed_agents }}
+          FAILED_AGENTS: ${{ env.RESOLVED_FAILED_AGENTS }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
@@ -182,7 +216,7 @@ jobs:
         if: steps.verify1.outcome == 'failure'
         continue-on-error: true
         env:
-          FAILED_AGENTS: ${{ inputs.failed_agents }}
+          FAILED_AGENTS: ${{ env.RESOLVED_FAILED_AGENTS }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
@@ -196,8 +230,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           FIX_BRANCH: fix/e2e-${{ github.run_id }}
-          ORIGINAL_RUN_URL: ${{ inputs.run_url }}
-          FAILED_AGENTS: ${{ inputs.failed_agents }}
+          ORIGINAL_RUN_URL: ${{ env.RESOLVED_RUN_URL }}
+          FAILED_AGENTS: ${{ env.RESOLVED_FAILED_AGENTS }}
           TRIAGE_RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ inputs.triage_run_id }}
           VERIFY1_OUTCOME: ${{ steps.verify1.outcome }}
         run: |
