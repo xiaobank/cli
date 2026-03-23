@@ -41,6 +41,8 @@ concurrency:
 jobs:
   setup:
     runs-on: ubuntu-latest
+    env:
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
     outputs:
       agents_csv: ${{ steps.set.outputs.agents_csv }}
       run_url: ${{ steps.set.outputs.run_url }}
@@ -120,7 +122,6 @@ jobs:
       - name: Post triage starting
         if: ${{ env.SLACK_BOT_TOKEN != '' && steps.set.outputs.slack_channel != '' && steps.set.outputs.slack_thread_ts != '' }}
         env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL: ${{ steps.set.outputs.slack_channel }}
           SLACK_THREAD_TS: ${{ steps.set.outputs.slack_thread_ts }}
           AGENTS_CSV: ${{ steps.set.outputs.agents_csv }}
