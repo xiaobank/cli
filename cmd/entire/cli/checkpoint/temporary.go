@@ -107,7 +107,6 @@ func (s *GitStore) WriteTemporary(ctx context.Context, opts WriteTemporaryOption
 		allDeletedFiles = opts.DeletedFiles
 	}
 
-	// Construct filter pipeline once for the entire write
 	pipeline := filter.FromContext(ctx)
 
 	// Build tree with changes
@@ -306,7 +305,6 @@ func (s *GitStore) addTaskMetadataToTree(ctx context.Context, baseTreeHash plumb
 	sessionMetadataDir := paths.EntireMetadataDir + "/" + opts.SessionID
 	taskMetadataDir := sessionMetadataDir + "/tasks/" + opts.ToolUseID
 
-	// Construct filter pipeline once for all data in this function
 	pipeline := filter.FromContext(ctx)
 
 	var changes []TreeChange

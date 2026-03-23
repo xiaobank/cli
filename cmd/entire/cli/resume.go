@@ -745,7 +745,7 @@ func resumeSingleSession(ctx context.Context, w, errW io.Writer, ag agent.Agent,
 		return nil
 	}
 
-	logContent, _, err := checkpoint.LookupSessionLog(ctx, checkpointID)
+	logContent, _, err := checkpoint.LookupSessionLogForDisplay(ctx, checkpointID)
 	if err != nil {
 		if errors.Is(err, checkpoint.ErrCheckpointNotFound) || errors.Is(err, checkpoint.ErrNoTranscript) {
 			logging.Debug(ctx, "resume session completed (no metadata)",

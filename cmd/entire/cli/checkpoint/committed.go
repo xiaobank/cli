@@ -334,7 +334,6 @@ func (s *GitStore) writeStandardCheckpointEntries(ctx context.Context, opts Writ
 func (s *GitStore) writeSessionToSubdirectory(ctx context.Context, opts WriteCommittedOptions, sessionPath string, entries map[string]object.TreeEntry) (SessionFilePaths, error) {
 	filePaths := SessionFilePaths{}
 
-	// Construct filter pipeline once for both transcript and prompts
 	pipeline := filter.FromContext(ctx)
 
 	// Clear any existing entries at this path so stale files from a previous
@@ -354,7 +353,7 @@ func (s *GitStore) writeSessionToSubdirectory(ctx context.Context, opts WriteCom
 
 	// Write prompts
 	if len(opts.Prompts) > 0 {
-		promptContent := redact.String(pipeline.CleanString(strings.Join(opts.Prompts, "\n\n---\n\n")))
+		promptContent := cleanAndRedactPrompts(pipeline, opts.Prompts)
 		blobHash, err := CreateBlobFromContent(s.repo, []byte(promptContent))
 		if err != nil {
 			return filePaths, err
@@ -544,6 +543,11 @@ func aggregateTokenUsage(a, b *agent.TokenUsage) *agent.TokenUsage {
 		result.APICallCount += b.APICallCount
 	}
 	return result
+}
+
+// cleanAndRedactPrompts joins, filters, and redacts prompts for storage.
+func cleanAndRedactPrompts(pipeline *filter.Pipeline, prompts []string) string {
+	return redact.String(pipeline.CleanString(strings.Join(prompts, "\n\n---\n\n")))
 }
 
 // writeTranscript writes the transcript file from in-memory content or file path.
@@ -1122,7 +1126,6 @@ func (s *GitStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOpti
 		return errors.New("invalid update options: checkpoint ID is required")
 	}
 
-	// Construct filter pipeline once for both transcript and prompt updates
 	pipeline := filter.FromContext(ctx)
 
 	// Ensure sessions branch exists
@@ -1198,7 +1201,7 @@ func (s *GitStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOpti
 
 	// Replace prompts (apply redaction as safety net)
 	if len(opts.Prompts) > 0 {
-		promptContent := redact.String(pipeline.CleanString(strings.Join(opts.Prompts, "\n\n---\n\n")))
+		promptContent := cleanAndRedactPrompts(pipeline, opts.Prompts)
 		blobHash, err := CreateBlobFromContent(s.repo, []byte(promptContent))
 		if err != nil {
 			return fmt.Errorf("failed to create prompt blob: %w", err)

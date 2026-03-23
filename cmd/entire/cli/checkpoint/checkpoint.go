@@ -93,7 +93,7 @@ type Store interface {
 
 	// ReadSessionContent reads the actual content for a specific session within a checkpoint.
 	// sessionIndex is 0-based (0 for first session, 1 for second, etc.).
-	// Returns the session's metadata, transcript, and prompts.
+	// Returns the session's metadata, transcript, and prompts in raw (stored) form.
 	ReadSessionContent(ctx context.Context, checkpointID id.CheckpointID, sessionIndex int) (*SessionContent, error)
 
 	// ReadSessionContentByID reads a session's content by its session ID.

@@ -211,7 +211,7 @@ func (s *ManualCommitStrategy) GetLogsOnlyRewindPoints(ctx context.Context, limi
 		var sessionPrompt string
 		var sessionPrompts []string
 		if metadataTree != nil {
-			checkpointPath := paths.CheckpointPath(cpInfo.CheckpointID)
+			checkpointPath := paths.CheckpointPath(cpInfo.CheckpointID) //nolint:staticcheck // already present in codebase
 			// For multi-session checkpoints, read all prompts
 			if cpInfo.SessionCount > 1 && len(cpInfo.SessionIDs) > 1 {
 				sessionPrompts = ReadAllSessionPromptsFromTree(metadataTree, checkpointPath, cpInfo.SessionCount, cpInfo.SessionIDs)
@@ -671,7 +671,7 @@ func (s *ManualCommitStrategy) RestoreLogsOnly(ctx context.Context, w, errW io.W
 		fmt.Fprintf(w, "Restoring %d sessions from checkpoint:\n", totalSessions)
 	}
 
-	// Construct filter pipeline once for all sessions (avoids re-reading settings per session)
+	// Construct filter pipeline once for all sessions
 	pipeline := filter.FromContext(ctx)
 
 	// Restore all sessions (oldest to newest, using 0-based indexing)
@@ -685,6 +685,7 @@ func (s *ManualCommitStrategy) RestoreLogsOnly(ctx context.Context, w, errW io.W
 		if content == nil || len(content.Transcript) == 0 {
 			continue
 		}
+		cpkg.SmudgeSessionContent(content, pipeline)
 
 		sessionID := content.Metadata.SessionID
 		if sessionID == "" {
@@ -739,7 +740,7 @@ func (s *ManualCommitStrategy) RestoreLogsOnly(ctx context.Context, w, errW io.W
 			AgentName:  sessionAgent.Name(),
 			RepoPath:   repoRoot,
 			SessionRef: sessionFile,
-			NativeData: pipeline.Smudge(content.Transcript),
+			NativeData: content.Transcript,
 		}
 		if writeErr := sessionAgent.WriteSession(ctx, agentSession); writeErr != nil {
 			if totalSessions > 1 {
@@ -824,6 +825,7 @@ type SessionRestoreInfo struct {
 func (s *ManualCommitStrategy) classifySessionsForRestore(ctx context.Context, repoRoot string, store cpkg.Store, checkpointID id.CheckpointID, summary *cpkg.CheckpointSummary) []SessionRestoreInfo {
 	var sessions []SessionRestoreInfo
 
+	pipeline := filter.FromContext(ctx)
 	totalSessions := len(summary.Sessions)
 	// Check all sessions (0-based indexing)
 	for i := range totalSessions {
@@ -831,6 +833,7 @@ func (s *ManualCommitStrategy) classifySessionsForRestore(ctx context.Context, r
 		if err != nil || content == nil || len(content.Transcript) == 0 {
 			continue
 		}
+		cpkg.SmudgeSessionContent(content, pipeline)
 
 		sessionID := content.Metadata.SessionID
 		if sessionID == "" || content.Metadata.Agent == "" {

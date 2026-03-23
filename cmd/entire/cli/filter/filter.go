@@ -105,17 +105,11 @@ func (p *Pipeline) Smudge(data []byte) []byte {
 // CleanString applies Clean to a string value.
 // Safe to call on a nil *Pipeline (returns s unchanged).
 func (p *Pipeline) CleanString(s string) string {
-	if p == nil {
-		return s
-	}
 	return string(p.Clean([]byte(s)))
 }
 
 // SmudgeString applies Smudge to a string value.
 // Safe to call on a nil *Pipeline (returns s unchanged).
 func (p *Pipeline) SmudgeString(s string) string {
-	if p == nil {
-		return s
-	}
 	return string(p.Smudge([]byte(s)))
 }

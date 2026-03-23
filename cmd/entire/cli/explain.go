@@ -258,7 +258,7 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 	}
 
 	// Load latest session content (needed for transcript and metadata)
-	content, err := store.ReadLatestSessionContent(ctx, fullCheckpointID)
+	content, err := store.ReadLatestSessionContentForDisplay(ctx, fullCheckpointID)
 	if err != nil {
 		return fmt.Errorf("failed to read checkpoint content: %w", err)
 	}
@@ -269,7 +269,7 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 			return err
 		}
 		// Reload the content to get the updated summary
-		content, err = store.ReadLatestSessionContent(ctx, fullCheckpointID)
+		content, err = store.ReadLatestSessionContentForDisplay(ctx, fullCheckpointID)
 		if err != nil {
 			return fmt.Errorf("failed to reload checkpoint: %w", err)
 		}
@@ -404,7 +404,7 @@ func explainTemporaryCheckpoint(ctx context.Context, w io.Writer, repo *git.Repo
 
 	// Handle raw transcript output
 	if rawTranscript {
-		transcriptBytes, transcriptErr := store.GetTranscriptFromCommit(ctx, tc.CommitHash, tc.MetadataDir, agentType)
+		transcriptBytes, transcriptErr := store.GetTranscriptFromCommitForDisplay(ctx, tc.CommitHash, tc.MetadataDir, agentType)
 		if transcriptErr != nil || len(transcriptBytes) == 0 {
 			// Return specific error message (consistent with committed checkpoints)
 			return fmt.Sprintf("checkpoint %s has no transcript", tc.CommitHash.String()[:7]), false
@@ -443,7 +443,7 @@ func explainTemporaryCheckpoint(ctx context.Context, w io.Writer, repo *git.Repo
 	var fullTranscript []byte
 	var scopedTranscript []byte
 	if full || verbose {
-		fullTranscript, _ = store.GetTranscriptFromCommit(ctx, tc.CommitHash, tc.MetadataDir, agentType) //nolint:errcheck // Best-effort
+		fullTranscript, _ = store.GetTranscriptFromCommitForDisplay(ctx, tc.CommitHash, tc.MetadataDir, agentType) //nolint:errcheck // Best-effort
 
 		if verbose && len(fullTranscript) > 0 {
 			// Compute scoped transcript by finding where parent's transcript ended
@@ -452,7 +452,7 @@ func explainTemporaryCheckpoint(ctx context.Context, w io.Writer, repo *git.Repo
 			scopedTranscript = fullTranscript // Default to full if no parent
 			if shadowCommit.NumParents() > 0 {
 				if parent, parentErr := shadowCommit.Parent(0); parentErr == nil {
-					parentTranscript, _ := store.GetTranscriptFromCommit(ctx, parent.Hash, tc.MetadataDir, agentType) //nolint:errcheck // Best-effort
+					parentTranscript, _ := store.GetTranscriptFromCommitForDisplay(ctx, parent.Hash, tc.MetadataDir, agentType) //nolint:errcheck // Best-effort
 					if len(parentTranscript) > 0 {
 						parentOffset := transcriptOffset(parentTranscript, agentType)
 						scopedTranscript = scopeTranscriptForCheckpoint(fullTranscript, parentOffset, agentType)
