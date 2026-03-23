@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"io"
 	"strings"
+
+	"github.com/entireio/cli/cmd/entire/cli/textutil"
 )
 
 // droppedTypes are entry types that carry no parser-relevant data.
@@ -74,7 +76,7 @@ var assistantAliases = map[string]bool{
 }
 
 // normalizeKind returns the canonical entry kind ("user" or "assistant") for a
-// transcript line. It prefers the "type" field, then falls back to "role".
+// transcript line. It checks the "type" field, then falls back to "role".
 // Returns "" for unrecognised or dropped entries.
 func normalizeKind(raw map[string]json.RawMessage) string {
 	// Try "type" first, then "role".
@@ -95,6 +97,59 @@ func normalizeKind(raw map[string]json.RawMessage) string {
 	return ""
 }
 
+// unwrapEnvelope handles envelope formats where the actual message is nested.
+// Factory AI Droid uses {"type":"message","message":{"role":"user","content":...}}.
+// If the line is an envelope, it returns the inner message merged with outer fields
+// (timestamp, id). Otherwise it returns raw unchanged.
+func unwrapEnvelope(raw map[string]json.RawMessage) map[string]json.RawMessage {
+	kind := unquote(raw["type"])
+	if kind != "message" {
+		return raw
+	}
+
+	msgRaw, ok := raw["message"]
+	if !ok {
+		return raw
+	}
+
+	var inner map[string]json.RawMessage
+	if json.Unmarshal(msgRaw, &inner) != nil {
+		return raw
+	}
+
+	// The inner message should have a "role" field — check it resolves to a known kind.
+	innerRole := unquote(inner["role"])
+	if !userAliases[innerRole] && !assistantAliases[innerRole] {
+		return raw
+	}
+
+	// Build a merged view: inner fields take precedence, but carry over outer
+	// fields (timestamp, id) that the inner message may lack.
+	merged := make(map[string]json.RawMessage, len(inner)+2)
+	// Copy outer timestamp if present.
+	if v, has := raw["timestamp"]; has {
+		merged["timestamp"] = v
+	}
+	// Copy outer id as fallback.
+	if v, has := raw["id"]; has {
+		merged["id"] = v
+	}
+	// Copy all inner fields (overrides outer if keys collide).
+	for k, v := range inner {
+		merged[k] = v
+	}
+	// Promote "role" to "type" so normalizeKind resolves it.
+	if _, hasType := merged["type"]; !hasType {
+		merged["type"] = inner["role"]
+	}
+
+	// Re-wrap content into a "message" field so converters find it.
+	// The inner message IS the message wrapper for converters.
+	merged["message"] = msgRaw
+
+	return merged
+}
+
 // convertLine converts a single full.jsonl line into zero or more transcript.jsonl lines.
 // A user entry with tool_result blocks produces multiple output lines.
 func convertLine(lineBytes []byte, opts CompactOptions) [][]byte {
@@ -102,6 +157,9 @@ func convertLine(lineBytes []byte, opts CompactOptions) [][]byte {
 	if err := json.Unmarshal(lineBytes, &raw); err != nil {
 		return nil
 	}
+
+	// Unwrap envelope formats (e.g. Factory AI Droid's type:"message" wrapper).
+	raw = unwrapEnvelope(raw)
 
 	switch normalizeKind(raw) {
 	case "assistant":
@@ -210,11 +268,12 @@ type toolResultEntry struct {
 }
 
 // extractUserContent separates user message content into text and tool_result entries.
+// IDE context tags (e.g. <user_query>, <ide_opened_file>) are stripped from user text.
 func extractUserContent(contentRaw json.RawMessage) (string, []toolResultEntry) {
 	// String content
 	var str string
 	if json.Unmarshal(contentRaw, &str) == nil {
-		return str, nil
+		return textutil.StripIDEContextTags(str), nil
 	}
 
 	// Array content
@@ -237,18 +296,21 @@ func extractUserContent(contentRaw json.RawMessage) (string, []toolResultEntry) 
 		}
 
 		if blockType == "text" {
-			texts = append(texts, unquote(block["text"]))
+			stripped := textutil.StripIDEContextTags(unquote(block["text"]))
+			if stripped != "" {
+				texts = append(texts, stripped)
+			}
 		}
 	}
 
 	text := ""
 	if len(texts) > 0 {
 		text = texts[0]
-		var textSb246 strings.Builder
+		var sb strings.Builder
 		for i := 1; i < len(texts); i++ {
-			textSb246.WriteString("\n\n" + texts[i])
+			sb.WriteString("\n\n" + texts[i])
 		}
-		text += textSb246.String()
+		text += sb.String()
 	}
 
 	return text, toolResults
