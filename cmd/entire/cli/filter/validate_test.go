@@ -44,6 +44,26 @@ func TestValidateFilter_User_TooShort(t *testing.T) {
 	}
 }
 
+func TestValidateFilter_BuiltIn_TooShort(t *testing.T) {
+	t.Parallel()
+	f := Filter{Match: "/", Replace: "__ent__/repo"}
+	if err := ValidateFilter(f, true); err == nil {
+		t.Error("expected error for short match on built-in filter")
+	}
+	f2 := Filter{Match: "/ab", Replace: "__ent__/repo"}
+	if err := ValidateFilter(f2, true); err == nil {
+		t.Error("expected error for 3-char match on built-in filter")
+	}
+}
+
+func TestValidateFilter_BuiltIn_MinLength(t *testing.T) {
+	t.Parallel()
+	f := Filter{Match: "/abc", Replace: "__ent__/repo"}
+	if err := ValidateFilter(f, true); err != nil {
+		t.Errorf("unexpected error for 4-char built-in match: %v", err)
+	}
+}
+
 func TestValidateFilter_EmptyMatch(t *testing.T) {
 	t.Parallel()
 	f := Filter{Match: "", Replace: "__ent__/repo"}

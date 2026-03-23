@@ -7,9 +7,10 @@ import (
 )
 
 const (
-	builtInPrefix = "__ent__/"
-	userPrefix    = "__ent_user__/"
-	minMatchLen   = 8
+	builtInPrefix      = "__ent__/"
+	userPrefix         = "__ent_user__/"
+	minBuiltInMatchLen = 4
+	minUserMatchLen    = 8
 )
 
 // ValidateFilter checks that a filter is well-formed.
@@ -41,12 +42,15 @@ func ValidateFilter(f Filter, isBuiltIn bool) error {
 		if !strings.HasPrefix(f.Replace, builtInPrefix) {
 			return fmt.Errorf("built-in filter replace must start with %q, got %q", builtInPrefix, f.Replace)
 		}
+		if len(f.Match) < minBuiltInMatchLen {
+			return fmt.Errorf("built-in filter match must be at least %d characters, got %d", minBuiltInMatchLen, len(f.Match))
+		}
 	} else {
 		if !strings.HasPrefix(f.Replace, userPrefix) {
 			return fmt.Errorf("user filter replace must start with %q, got %q", userPrefix, f.Replace)
 		}
-		if len(f.Match) < minMatchLen {
-			return fmt.Errorf("user filter match must be at least %d characters, got %d", minMatchLen, len(f.Match))
+		if len(f.Match) < minUserMatchLen {
+			return fmt.Errorf("user filter match must be at least %d characters, got %d", minUserMatchLen, len(f.Match))
 		}
 	}
 

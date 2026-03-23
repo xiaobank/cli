@@ -182,6 +182,18 @@ func TestNewPipeline_RejectsInvalidKey(t *testing.T) {
 	}
 }
 
+func TestNewPipeline_RejectsShortBuiltInPaths(t *testing.T) {
+	t.Parallel()
+	_, err := NewPipeline("/", "/home/user", nil)
+	if err == nil {
+		t.Error("expected NewPipeline to reject repo root \"/\"")
+	}
+	_, err = NewPipeline("/ab", "/home/user", nil)
+	if err == nil {
+		t.Error("expected NewPipeline to reject repo root \"/ab\"")
+	}
+}
+
 func TestPipeline_Idempotent(t *testing.T) {
 	t.Parallel()
 	p, err := NewPipeline("/home/user/project", "/home/user", nil)
