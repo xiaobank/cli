@@ -83,3 +83,31 @@ func TestValidateFilter_MatchContainsReplace(t *testing.T) {
 		t.Error("expected error when match contains replace")
 	}
 }
+
+func TestValidateUserFilterKey(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		key     string
+		wantErr bool
+	}{
+		{name: "valid key", key: "hostname", wantErr: false},
+		{name: "empty key", key: "", wantErr: true},
+		{name: "key with slash", key: "foo/bar", wantErr: true},
+		{name: "key with backslash", key: "foo\\bar", wantErr: true},
+		{name: "key with __ent prefix", key: "__ent_something", wantErr: true},
+		{name: "key with __ent__ prefix", key: "__ent__repo", wantErr: true},
+		{name: "key that is just __ent", key: "__ent", wantErr: true},
+		{name: "key starting with underscore", key: "_valid", wantErr: false},
+		{name: "hyphenated key", key: "my-hostname", wantErr: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateUserFilterKey(tt.key)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateUserFilterKey(%q) error = %v, wantErr %v", tt.key, err, tt.wantErr)
+			}
+		})
+	}
+}

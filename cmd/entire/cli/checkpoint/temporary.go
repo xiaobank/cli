@@ -107,8 +107,11 @@ func (s *GitStore) WriteTemporary(ctx context.Context, opts WriteTemporaryOption
 		allDeletedFiles = opts.DeletedFiles
 	}
 
+	// Construct filter pipeline once for the entire write
+	pipeline := filter.FromContext(ctx)
+
 	// Build tree with changes
-	treeHash, err := s.buildTreeWithChanges(ctx, baseTreeHash, allFiles, allDeletedFiles, opts.MetadataDir, opts.MetadataDirAbs)
+	treeHash, err := s.buildTreeWithChanges(ctx, baseTreeHash, allFiles, allDeletedFiles, opts.MetadataDir, opts.MetadataDirAbs, pipeline)
 	if err != nil {
 		return WriteTemporaryResult{}, fmt.Errorf("failed to build tree: %w", err)
 	}
@@ -265,8 +268,8 @@ func (s *GitStore) WriteTemporaryTask(ctx context.Context, opts WriteTemporaryTa
 	allFiles = append(allFiles, opts.ModifiedFiles...)
 	allFiles = append(allFiles, opts.NewFiles...)
 
-	// Build new tree with code changes (no metadata dir yet)
-	newTreeHash, err := s.buildTreeWithChanges(ctx, baseTreeHash, allFiles, opts.DeletedFiles, "", "")
+	// Build new tree with code changes (no metadata dir yet; nil pipeline — task checkpoints have no metadata dir)
+	newTreeHash, err := s.buildTreeWithChanges(ctx, baseTreeHash, allFiles, opts.DeletedFiles, "", "", nil)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("failed to build tree: %w", err)
 	}
@@ -716,6 +719,7 @@ func (s *GitStore) buildTreeWithChanges(
 	baseTreeHash plumbing.Hash,
 	modifiedFiles, deletedFiles []string,
 	metadataDir, metadataDirAbs string,
+	pipeline *filter.Pipeline,
 ) (plumbing.Hash, error) {
 	// Get worktree root for resolving file paths
 	// This is critical because fileExists() and createBlobFromFile() use os.Stat()
@@ -760,7 +764,7 @@ func (s *GitStore) buildTreeWithChanges(
 
 	// Metadata directory files
 	if metadataDir != "" && metadataDirAbs != "" {
-		metaChanges, metaErr := addDirectoryToChanges(s.repo, metadataDirAbs, metadataDir, filter.FromContext(ctx))
+		metaChanges, metaErr := addDirectoryToChanges(s.repo, metadataDirAbs, metadataDir, pipeline)
 		if metaErr != nil {
 			return plumbing.ZeroHash, fmt.Errorf("failed to add metadata directory: %w", metaErr)
 		}

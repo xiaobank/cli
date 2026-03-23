@@ -159,6 +159,29 @@ func TestPipeline_NilSafe(t *testing.T) {
 	}
 }
 
+func TestNewPipeline_RejectsInvalidKey(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		key  string
+	}{
+		{name: "empty key", key: ""},
+		{name: "key with slash", key: "foo/bar"},
+		{name: "key with __ent prefix", key: "__ent_reserved"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := NewPipeline("/home/user/project", "/home/user", []settings.TranscriptFilter{
+				{Match: "long-enough-match", Key: tt.key},
+			})
+			if err == nil {
+				t.Errorf("expected NewPipeline to reject key %q", tt.key)
+			}
+		})
+	}
+}
+
 func TestPipeline_Idempotent(t *testing.T) {
 	t.Parallel()
 	p, err := NewPipeline("/home/user/project", "/home/user", nil)

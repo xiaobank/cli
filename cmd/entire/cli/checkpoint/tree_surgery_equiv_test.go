@@ -57,7 +57,7 @@ func TestBuildTreeWithChanges_EquivalenceWithFlattenRebuild(t *testing.T) { //no
 	t.Chdir(dir)
 
 	// --- New approach: ApplyTreeChanges (what buildTreeWithChanges now does) ---
-	newHash, err := store.buildTreeWithChanges(context.Background(), baseTreeHash, modifiedFiles, deletedFiles, metadataDir, metadataDirAbs)
+	newHash, err := store.buildTreeWithChanges(context.Background(), baseTreeHash, modifiedFiles, deletedFiles, metadataDir, metadataDirAbs, nil)
 	if err != nil {
 		t.Fatalf("buildTreeWithChanges (new): %v", err)
 	}

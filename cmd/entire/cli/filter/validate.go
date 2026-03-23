@@ -52,3 +52,19 @@ func ValidateFilter(f Filter, isBuiltIn bool) error {
 
 	return nil
 }
+
+// validateUserFilterKey checks that a user-supplied filter key is safe to use
+// as a replacement token suffix. Rejects empty keys, keys containing path
+// separators, and keys that could collide with built-in marker prefixes.
+func validateUserFilterKey(key string) error {
+	if key == "" {
+		return errors.New("must be non-empty")
+	}
+	if strings.ContainsAny(key, "/\\") {
+		return errors.New("must not contain path separators")
+	}
+	if strings.HasPrefix(key, "__ent") {
+		return errors.New("must not start with reserved prefix \"__ent\"")
+	}
+	return nil
+}

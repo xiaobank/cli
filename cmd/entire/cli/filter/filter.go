@@ -6,6 +6,7 @@ package filter
 
 import (
 	"bytes"
+	"fmt"
 
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 )
@@ -61,6 +62,9 @@ func NewPipeline(repoRoot, homeDir string, userFilters []settings.TranscriptFilt
 
 	// User filters
 	for _, uf := range userFilters {
+		if err := validateUserFilterKey(uf.Key); err != nil {
+			return nil, fmt.Errorf("invalid transcript filter key %q: %w", uf.Key, err)
+		}
 		f := Filter{
 			Match:   uf.Match,
 			Replace: "__ent_user__/" + uf.Key,
