@@ -188,7 +188,7 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           prompt: |
-            Read and follow the full E2E triage procedure from .claude/skills/e2e/triage-ci.md.
+            Enter plan mode, then read and follow the full E2E triage procedure from .claude/skills/e2e/triage-ci.md.
 
             Inputs:
             - Local artifact path: ${{ steps.artifacts.outputs.path }}
@@ -196,8 +196,14 @@ jobs:
             - SHA: ${{ needs.matrix-setup.outputs.sha }}
 
             This is a CI artifact analysis (local path provided) -- skip Steps L2-L5 and go straight to Shared Analysis.
+
+            Write ALL output to the plan file -- both the triage findings report and the fix plan. Structure it as:
+            1. Triage findings (per-test findings blocks + summary table from the skill)
+            2. A "## Fix Plan" section with specific code changes for each actionable finding
+
+            When done, call ExitPlanMode.
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          claude_args: "--allowedTools 'Read,Grep,Glob'"
+          claude_args: "--allowedTools 'Read,Grep,Glob,Write,EnterPlanMode,ExitPlanMode'"
           display_report: true
           github_token: ${{ github.token }}
 
@@ -213,14 +219,20 @@ jobs:
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
         with:
           prompt: |
-            Read and follow the full E2E triage procedure from .claude/skills/e2e/triage-ci.md.
+            Enter plan mode, then read and follow the full E2E triage procedure from .claude/skills/e2e/triage-ci.md.
 
             Inputs:
             - CI run URL: ${{ env.RUN_URL }}
             - Agent: ${{ matrix.agent }}
             - SHA: ${{ needs.matrix-setup.outputs.sha }}
+
+            Write ALL output to the plan file -- both the triage findings report and the fix plan. Structure it as:
+            1. Triage findings (per-test findings blocks + summary table from the skill)
+            2. A "## Fix Plan" section with specific code changes for each actionable finding
+
+            When done, call ExitPlanMode.
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          claude_args: "--allowedTools 'Read,Grep,Glob,Bash(mise:*),Bash(scripts:*)'"
+          claude_args: "--allowedTools 'Read,Grep,Glob,Write,EnterPlanMode,ExitPlanMode,Bash(mise:*),Bash(scripts:*)'"
           display_report: true
           github_token: ${{ github.token }}
 
@@ -250,43 +262,29 @@ jobs:
         env:
           EXECUTION_FILE: ${{ steps.triage.outputs.execution_file }}
           TRIAGE_OUTPUT_FILE: ${{ github.workspace }}/e2e-triage-artifacts/${{ matrix.agent }}/triage.md
-        run: |
-          set -euo pipefail
-
-          mkdir -p "$(dirname "$TRIAGE_OUTPUT_FILE")"
-          # Extract assistant text content from execution JSON
-          jq -r '[.[] | select(.type == "assistant") | .message.content[]
-            | select(.type == "text") | .text] | join("\n")' \
-            "$EXECUTION_FILE" > "$TRIAGE_OUTPUT_FILE"
-
-      - name: Generate fix plan
-        id: plan
-        if: steps.triage.outputs.outcome == 'success'
-        uses: anthropics/claude-code-action@v1
-        with:
-          prompt: |
-            Read and follow the fix implementation procedure from .claude/skills/e2e/implement.md.
-
-            Read the triage findings at ${{ github.workspace }}/e2e-triage-artifacts/${{ matrix.agent }}/triage.md for agent ${{ matrix.agent }}.
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          claude_args: "--allowedTools 'Read,Grep,Glob,Write,EnterPlanMode,ExitPlanMode,Bash(mise:*)'"
-          display_report: true
-          github_token: ${{ github.token }}
-
-      - name: Extract plan output
-        id: plan_output
-        if: steps.plan.outcome == 'success' && steps.plan.outputs.execution_file != ''
-        shell: bash
-        env:
-          EXECUTION_FILE: ${{ steps.plan.outputs.execution_file }}
           PLAN_FILE: ${{ github.workspace }}/e2e-triage-artifacts/${{ matrix.agent }}/plan.md
         run: |
           set -euo pipefail
+          mkdir -p "$(dirname "$TRIAGE_OUTPUT_FILE")"
 
-          mkdir -p "$(dirname "$PLAN_FILE")"
-          jq -r '[.[] | select(.type == "assistant") | .message.content[]
-            | select(.type == "text") | .text] | join("\n")' \
-            "$EXECUTION_FILE" > "$PLAN_FILE"
+          # Try to extract from plan file on disk (plan mode writes here)
+          plan_src=$(find /home/runner/.claude/plans -name '*.md' -type f 2>/dev/null | head -1)
+          if [ -n "$plan_src" ] && [ -s "$plan_src" ]; then
+            combined="$(cat "$plan_src")"
+          else
+            # Fallback: extract assistant text from execution JSON
+            combined=$(jq -r '[.[] | select(.type == "assistant") | .message.content[]
+              | select(.type == "text") | .text] | join("\n")' "$EXECUTION_FILE")
+          fi
+
+          # Split on "## Fix Plan" header
+          if echo "$combined" | grep -q "^## Fix Plan"; then
+            echo "$combined" | sed '/^## Fix Plan/,$d' > "$TRIAGE_OUTPUT_FILE"
+            echo "$combined" | sed -n '/^## Fix Plan/,$p' > "$PLAN_FILE"
+          else
+            echo "$combined" > "$TRIAGE_OUTPUT_FILE"
+            echo "$combined" > "$PLAN_FILE"
+          fi
 
       - name: Post triage completion
         if: ${{ always() && (steps.triage.outputs.outcome == 'success' || steps.triage.outputs.outcome == 'failure') && env.SLACK_BOT_TOKEN != '' && env.SLACK_CHANNEL != '' && env.SLACK_THREAD_TS != '' }}
@@ -305,7 +303,7 @@ jobs:
           scripts/post-slack-message.sh "$message"
 
       - name: Post fix plan to Slack
-        if: steps.plan_output.outcome == 'success' && env.SLACK_BOT_TOKEN != '' && env.SLACK_CHANNEL != '' && env.SLACK_THREAD_TS != ''
+        if: steps.triage_output.outcome == 'success' && env.SLACK_BOT_TOKEN != '' && env.SLACK_CHANNEL != '' && env.SLACK_THREAD_TS != ''
         shell: bash
         env:
           PLAN_FILE: ${{ github.workspace }}/e2e-triage-artifacts/${{ matrix.agent }}/plan.md
@@ -336,7 +334,7 @@ jobs:
           retention-days: 7
 
       - name: Upload plan artifact
-        if: always() && steps.plan_output.outcome == 'success'
+        if: always() && steps.triage_output.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: e2e-plan-${{ matrix.agent }}
