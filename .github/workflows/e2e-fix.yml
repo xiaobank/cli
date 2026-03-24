@@ -147,6 +147,7 @@ jobs:
 
             Do NOT create a git branch or PR yet — E2E verification will happen in a later step.
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ github.token }}
           claude_args: "--allowedTools 'Edit,Write,Read,Glob,Grep,Bash(git:*),Bash(mise:*),Bash(gh:*)'"
 
       - name: Install system dependencies
@@ -214,6 +215,7 @@ jobs:
 
             Do NOT create a git branch or PR yet.
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ github.token }}
           claude_args: "--allowedTools 'Edit,Write,Read,Glob,Grep,Bash(git:*),Bash(mise:*),Bash(gh:*)'"
 
       - name: Clean artifacts between attempts
