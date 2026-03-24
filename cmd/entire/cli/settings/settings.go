@@ -71,6 +71,10 @@ type EntireSettings struct {
 	// plugins (entire-agent-* binaries on $PATH). Defaults to false.
 	ExternalAgents bool `json:"external_agents,omitempty"`
 
+	// EvolveConfig configures the automatic evolution loop.
+	// When enabled, automatically suggests improvements after N sessions.
+	EvolveConfig *EvolveSettings `json:"evolve,omitempty"`
+
 	// Deprecated: no longer used. Exists to tolerate old settings files
 	// that still contain "strategy": "auto-commit" or similar.
 	Strategy string `json:"strategy,omitempty"`
@@ -89,6 +93,29 @@ type PIISettings struct {
 	Phone          *bool             `json:"phone,omitempty"`
 	Address        *bool             `json:"address,omitempty"`
 	CustomPatterns map[string]string `json:"custom_patterns,omitempty"`
+}
+
+// EvolveSettings configures the automatic evolution loop that suggests
+// context file improvements after a configurable number of sessions.
+type EvolveSettings struct {
+	// Enabled activates the evolution loop. Defaults to false (opt-in).
+	Enabled bool `json:"enabled"`
+
+	// SessionThreshold is the number of sessions before auto-suggesting
+	// improvements. Defaults to 5.
+	SessionThreshold int `json:"session_threshold,omitempty"`
+}
+
+// GetEvolveConfig returns the evolution loop configuration with defaults applied.
+func (s *EntireSettings) GetEvolveConfig() EvolveSettings {
+	if s.EvolveConfig == nil {
+		return EvolveSettings{SessionThreshold: 5}
+	}
+	cfg := *s.EvolveConfig
+	if cfg.SessionThreshold == 0 {
+		cfg.SessionThreshold = 5
+	}
+	return cfg
 }
 
 // GetCommitLinking returns the effective commit linking mode.
@@ -286,6 +313,15 @@ func mergeJSON(settings *EntireSettings, data []byte) error {
 			return fmt.Errorf("parsing external_agents field: %w", err)
 		}
 		settings.ExternalAgents = ea
+	}
+
+	// Override evolve if present
+	if evolveRaw, ok := raw["evolve"]; ok {
+		var ev EvolveSettings
+		if err := json.Unmarshal(evolveRaw, &ev); err != nil {
+			return fmt.Errorf("parsing evolve field: %w", err)
+		}
+		settings.EvolveConfig = &ev
 	}
 
 	return nil
