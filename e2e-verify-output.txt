@@ -1,0 +1,338 @@
+[0m[34m[build][0m [1m$ ~/work/cli/cli/mise-tasks/build[0m
+artifacts: /home/runner/work/cli/cli/e2e/artifacts/2026-03-24T17-22-05
+[e2e/tests][32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[33m↷[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m
+=== [33mSkipped[0m
+=== [33mSKIP[0m: e2e/tests TestExternalAgentMultipleTurnsManualCommit/gemini-cli (0.06s)
+    external_agent_test.go:50: skipping external agent test for non-external agent
+
+DONE 98 tests, 1 skipped in 337.606s
+E2E Test Report
+═══════════════
+
+Total: 49  Passed: 49  Failed: 0  Skipped: 0
+
+[32m✓[0m TestAgentAmendsCommit (61.6s)
+  [32m✓[0m gemini-cli           61.6s
+
+[32m✓[0m TestAgentCommitsMidTurnUserCommitsRemainder (33.8s)
+  [32m✓[0m gemini-cli           33.8s
+
+[32m✓[0m TestAgentContinuesAfterCommit (51.5s)
+  [32m✓[0m gemini-cli           51.5s
+
+[32m✓[0m TestAttributionMixedHumanAndAgent (13.6s)
+  [32m✓[0m gemini-cli           13.6s
+
+[32m✓[0m TestCheckpointMetadataDeepValidation (9.4s)
+  [32m✓[0m gemini-cli           9.4s
+
+[32m✓[0m TestDeletedFilesCommitDeletion (10.0s)
+  [32m✓[0m gemini-cli           10.0s
+
+[32m✓[0m TestDirtyWorkingTree (36.6s)
+  [32m✓[0m gemini-cli           36.6s
+
+[32m✓[0m TestEndedSessionUserCommitsAfterExit (13.8s)
+  [32m✓[0m gemini-cli           13.8s
+
+[32m✓[0m TestEntireDisable (5.1s)
+  [32m✓[0m gemini-cli           5.1s
+
+[32m✓[0m TestExternalAgentDeepCheckpointValidation (14.0s)
+  [32m✓[0m gemini-cli           14.0s
+
+[32m✓[0m TestExternalAgentMultipleTurnsManualCommit (0.1s)
+  [33m−[0m gemini-cli           SKIP: external_agent_test.go:50: skipping external agent test for non-external agent
+
+[32m✓[0m TestExternalAgentSessionMetadata (13.2s)
+  [32m✓[0m gemini-cli           13.2s
+
+[32m✓[0m TestExternalAgentSingleSessionManualCommit (16.6s)
+  [32m✓[0m gemini-cli           16.6s
+
+[32m✓[0m TestHumanOnlyChangesAndCommits (5.1s)
+  [32m✓[0m gemini-cli           5.1s
+
+[32m✓[0m TestInteractiveAttributionMultiCommitSameSession (82.7s)
+  [32m✓[0m gemini-cli           82.7s
+
+[32m✓[0m TestInteractiveAttributionOnAgentCommit (49.4s)
+  [32m✓[0m gemini-cli           49.4s
+
+[32m✓[0m TestInteractiveContentOverlapRevertNewFile (38.0s)
+  [32m✓[0m gemini-cli           38.0s
+
+[32m✓[0m TestInteractiveMultiStep (56.9s)
+  [32m✓[0m gemini-cli           56.9s
+
+[32m✓[0m TestInteractiveShadowBranchCleanedAfterAgentCommit (52.5s)
+  [32m✓[0m gemini-cli           52.5s
+
+[32m✓[0m TestLineAttributionReasonable (20.8s)
+  [32m✓[0m gemini-cli           20.8s
+
+[32m✓[0m TestMidTurnCommit_DifferentFilesThanPreviousTurn (43.7s)
+  [32m✓[0m gemini-cli           43.7s
+
+[32m✓[0m TestMixedNewAndModifiedFiles (18.6s)
+  [32m✓[0m gemini-cli           18.6s
+
+[32m✓[0m TestModifiedFileAlwaysGetsCheckpoint (15.7s)
+  [32m✓[0m gemini-cli           15.7s
+
+[32m✓[0m TestModifyExistingTrackedFile (17.7s)
+  [32m✓[0m gemini-cli           17.7s
+
+[32m✓[0m TestMultiSessionManualCommit (24.8s)
+  [32m✓[0m gemini-cli           24.8s
+
+[32m✓[0m TestMultiSessionSequential (68.8s)
+  [32m✓[0m gemini-cli           68.8s
+
+[32m✓[0m TestPartialCommitStashNewPrompt (25.1s)
+  [32m✓[0m gemini-cli           25.1s
+
+[32m✓[0m TestPartialStaging (30.3s)
+  [32m✓[0m gemini-cli           30.3s
+
+[32m✓[0m TestRapidSequentialCommits (68.4s)
+  [32m✓[0m gemini-cli           68.4s
+
+[32m✓[0m TestResumeFromClonedRepo (17.0s)
+  [32m✓[0m gemini-cli           17.0s
+
+[32m✓[0m TestResumeFromFeatureBranch (12.3s)
+  [32m✓[0m gemini-cli           12.3s
+
+[32m✓[0m TestResumeMetadataBranchAlreadyLocal (18.2s)
+  [32m✓[0m gemini-cli           18.2s
+
+[32m✓[0m TestResumeNoCheckpointOnBranch (0.1s)
+  [32m✓[0m gemini-cli           0.1s
+
+[32m✓[0m TestResumeOlderCheckpointWithNewerCommits (10.9s)
+  [32m✓[0m gemini-cli           10.9s
+
+[32m✓[0m TestResumeSquashMergeMultipleCheckpoints (24.9s)
+  [32m✓[0m gemini-cli           24.9s
+
+[32m✓[0m TestRewindAfterCommit (14.1s)
+  [32m✓[0m gemini-cli           14.1s
+
+[32m✓[0m TestRewindMultipleFiles (28.7s)
+  [32m✓[0m gemini-cli           28.7s
+
+[32m✓[0m TestRewindPreCommit (22.8s)
+  [32m✓[0m gemini-cli           22.8s
+
+[32m✓[0m TestRewindSquashMergeMultipleCheckpoints (26.5s)
+  [32m✓[0m gemini-cli           26.5s
+
+[32m✓[0m TestSessionDepletedManualEditNoCheckpoint (13.7s)
+  [32m✓[0m gemini-cli           13.7s
+
+[32m✓[0m TestSingleSessionAgentCommitInTurn (37.3s)
+  [32m✓[0m gemini-cli           37.3s
+
+[32m✓[0m TestSingleSessionManualCommit (13.1s)
+  [32m✓[0m gemini-cli           13.1s
+
+[32m✓[0m TestSingleSessionSubagentCommitInTurn (35.6s)
+  [32m✓[0m gemini-cli           35.6s
+
+[32m✓[0m TestSplitModificationsToExistingFiles (23.6s)
+  [32m✓[0m gemini-cli           23.6s
+
+[32m✓[0m TestStashModificationsToTrackedFiles (21.8s)
+  [32m✓[0m gemini-cli           21.8s
+
+[32m✓[0m TestStashSecondPromptUnstashCommitAll (28.9s)
+  [32m✓[0m gemini-cli           28.9s
+
+[32m✓[0m TestSubagentCommitFlow (17.2s)
+  [32m✓[0m gemini-cli           17.2s
+
+[32m✓[0m TestTrailerRemovalSkipsCondensation (20.2s)
+  [32m✓[0m gemini-cli           20.2s
+
+[32m✓[0m TestUserSplitsAgentChanges (12.6s)
+  [32m✓[0m gemini-cli           12.6s
+
+[32m🎉 ALL 49 TESTS PASSED 🎉[0m
+
+
+entire binary:  /home/runner/work/cli/cli/entire
+entire version: Entire CLI v0.5.1-dev-70ca9ed5 (70ca9ed5)
+Go version: go1.26.1
+OS/Arch: linux/amd64
+
+artifacts: /home/runner/work/cli/cli/e2e/artifacts/2026-03-24T17-22-05
+[0m[34m[build][0m [1m$ ~/work/cli/cli/mise-tasks/build[0m
+artifacts: /home/runner/work/cli/cli/e2e/artifacts/2026-03-24T17-27-43
+[e2e/tests][32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[33m↷[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m[32m·[0m
+=== [33mSkipped[0m
+=== [33mSKIP[0m: e2e/tests TestExternalAgentMultipleTurnsManualCommit/gemini-cli (0.05s)
+    external_agent_test.go:50: skipping external agent test for non-external agent
+
+DONE 98 tests, 1 skipped in 330.519s
+E2E Test Report
+═══════════════
+
+Total: 49  Passed: 49  Failed: 0  Skipped: 0
+
+[32m✓[0m TestAgentAmendsCommit (58.5s)
+  [32m✓[0m gemini-cli           58.5s
+
+[32m✓[0m TestAgentCommitsMidTurnUserCommitsRemainder (33.9s)
+  [32m✓[0m gemini-cli           33.9s
+
+[32m✓[0m TestAgentContinuesAfterCommit (46.0s)
+  [32m✓[0m gemini-cli           46.0s
+
+[32m✓[0m TestAttributionMixedHumanAndAgent (9.0s)
+  [32m✓[0m gemini-cli           9.0s
+
+[32m✓[0m TestCheckpointMetadataDeepValidation (9.8s)
+  [32m✓[0m gemini-cli           9.8s
+
+[32m✓[0m TestDeletedFilesCommitDeletion (12.4s)
+  [32m✓[0m gemini-cli           12.4s
+
+[32m✓[0m TestDirtyWorkingTree (34.7s)
+  [32m✓[0m gemini-cli           34.7s
+
+[32m✓[0m TestEndedSessionUserCommitsAfterExit (16.0s)
+  [32m✓[0m gemini-cli           16.0s
+
+[32m✓[0m TestEntireDisable (5.1s)
+  [32m✓[0m gemini-cli           5.1s
+
+[32m✓[0m TestExternalAgentDeepCheckpointValidation (13.4s)
+  [32m✓[0m gemini-cli           13.4s
+
+[32m✓[0m TestExternalAgentMultipleTurnsManualCommit (0.1s)
+  [33m−[0m gemini-cli           SKIP: external_agent_test.go:50: skipping external agent test for non-external agent
+
+[32m✓[0m TestExternalAgentSessionMetadata (13.0s)
+  [32m✓[0m gemini-cli           13.0s
+
+[32m✓[0m TestExternalAgentSingleSessionManualCommit (14.5s)
+  [32m✓[0m gemini-cli           14.5s
+
+[32m✓[0m TestHumanOnlyChangesAndCommits (5.1s)
+  [32m✓[0m gemini-cli           5.1s
+
+[32m✓[0m TestInteractiveAttributionMultiCommitSameSession (78.1s)
+  [32m✓[0m gemini-cli           78.1s
+
+[32m✓[0m TestInteractiveAttributionOnAgentCommit (49.4s)
+  [32m✓[0m gemini-cli           49.4s
+
+[32m✓[0m TestInteractiveContentOverlapRevertNewFile (37.4s)
+  [32m✓[0m gemini-cli           37.4s
+
+[32m✓[0m TestInteractiveMultiStep (62.5s)
+  [32m✓[0m gemini-cli           62.5s
+
+[32m✓[0m TestInteractiveShadowBranchCleanedAfterAgentCommit (50.0s)
+  [32m✓[0m gemini-cli           50.0s
+
+[32m✓[0m TestLineAttributionReasonable (16.6s)
+  [32m✓[0m gemini-cli           16.6s
+
+[32m✓[0m TestMidTurnCommit_DifferentFilesThanPreviousTurn (49.5s)
+  [32m✓[0m gemini-cli           49.5s
+
+[32m✓[0m TestMixedNewAndModifiedFiles (18.4s)
+  [32m✓[0m gemini-cli           18.4s
+
+[32m✓[0m TestModifiedFileAlwaysGetsCheckpoint (11.1s)
+  [32m✓[0m gemini-cli           11.1s
+
+[32m✓[0m TestModifyExistingTrackedFile (18.5s)
+  [32m✓[0m gemini-cli           18.5s
+
+[32m✓[0m TestMultiSessionManualCommit (30.2s)
+  [32m✓[0m gemini-cli           30.2s
+
+[32m✓[0m TestMultiSessionSequential (64.8s)
+  [32m✓[0m gemini-cli           64.8s
+
+[32m✓[0m TestPartialCommitStashNewPrompt (20.3s)
+  [32m✓[0m gemini-cli           20.3s
+
+[32m✓[0m TestPartialStaging (35.1s)
+  [32m✓[0m gemini-cli           35.1s
+
+[32m✓[0m TestRapidSequentialCommits (70.3s)
+  [32m✓[0m gemini-cli           70.3s
+
+[32m✓[0m TestResumeFromClonedRepo (15.0s)
+  [32m✓[0m gemini-cli           15.0s
+
+[32m✓[0m TestResumeFromFeatureBranch (15.0s)
+  [32m✓[0m gemini-cli           15.0s
+
+[32m✓[0m TestResumeMetadataBranchAlreadyLocal (16.3s)
+  [32m✓[0m gemini-cli           16.3s
+
+[32m✓[0m TestResumeNoCheckpointOnBranch (0.2s)
+  [32m✓[0m gemini-cli           0.2s
+
+[32m✓[0m TestResumeOlderCheckpointWithNewerCommits (14.5s)
+  [32m✓[0m gemini-cli           14.5s
+
+[32m✓[0m TestResumeSquashMergeMultipleCheckpoints (27.6s)
+  [32m✓[0m gemini-cli           27.6s
+
+[32m✓[0m TestRewindAfterCommit (19.2s)
+  [32m✓[0m gemini-cli           19.2s
+
+[32m✓[0m TestRewindMultipleFiles (18.4s)
+  [32m✓[0m gemini-cli           18.4s
+
+[32m✓[0m TestRewindPreCommit (30.4s)
+  [32m✓[0m gemini-cli           30.4s
+
+[32m✓[0m TestRewindSquashMergeMultipleCheckpoints (25.5s)
+  [32m✓[0m gemini-cli           25.5s
+
+[32m✓[0m TestSessionDepletedManualEditNoCheckpoint (18.5s)
+  [32m✓[0m gemini-cli           18.5s
+
+[32m✓[0m TestSingleSessionAgentCommitInTurn (35.3s)
+  [32m✓[0m gemini-cli           35.3s
+
+[32m✓[0m TestSingleSessionManualCommit (14.1s)
+  [32m✓[0m gemini-cli           14.1s
+
+[32m✓[0m TestSingleSessionSubagentCommitInTurn (37.9s)
+  [32m✓[0m gemini-cli           37.9s
+
+[32m✓[0m TestSplitModificationsToExistingFiles (24.9s)
+  [32m✓[0m gemini-cli           24.9s
+
+[32m✓[0m TestStashModificationsToTrackedFiles (16.7s)
+  [32m✓[0m gemini-cli           16.7s
+
+[32m✓[0m TestStashSecondPromptUnstashCommitAll (26.2s)
+  [32m✓[0m gemini-cli           26.2s
+
+[32m✓[0m TestSubagentCommitFlow (19.9s)
+  [32m✓[0m gemini-cli           19.9s
+
+[32m✓[0m TestTrailerRemovalSkipsCondensation (20.8s)
+  [32m✓[0m gemini-cli           20.8s
+
+[32m✓[0m TestUserSplitsAgentChanges (13.5s)
+  [32m✓[0m gemini-cli           13.5s
+
+[32m🎉 ALL 49 TESTS PASSED 🎉[0m
+
+
+entire binary:  /home/runner/work/cli/cli/entire
+entire version: Entire CLI v0.5.1-dev-70ca9ed5 (70ca9ed5)
+Go version: go1.26.1
+OS/Arch: linux/amd64
+
+artifacts: /home/runner/work/cli/cli/e2e/artifacts/2026-03-24T17-27-43

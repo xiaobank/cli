@@ -25,7 +25,7 @@ func TestInteractiveMultiStep(t *testing.T) {
 		s.WaitFor(t, session, prompt, 60*time.Second)
 		testutil.WaitForFileExists(t, s.Dir, "docs/*.md", 30*time.Second)
 
-		s.Send(t, session, "now commit it")
+		s.Send(t, session, "now commit it. Do not ask for confirmation, just commit directly.")
 		s.WaitFor(t, session, prompt, 60*time.Second)
 		testutil.AssertNewCommits(t, s, 1)
 
