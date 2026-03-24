@@ -88,15 +88,11 @@ func (s *ManualCommitStrategy) getCheckpointLog(ctx context.Context, checkpointI
 // sessionAttrData captures per-session data needed to compute combined attribution
 // after the condensation loop has cleared state.PromptAttributions.
 type sessionAttrData struct {
+	condenseOpts // Embedded: shadowRef, headTree, parentTree, repoDir, headCommitHash, parentCommitHash
+
 	promptAttributions []PromptAttribution
 	filesTouched       []string
-	shadowRef          *plumbing.Reference
-	headTree           *object.Tree
-	parentTree         *object.Tree
-	repoDir            string
 	attrBase           string
-	headCommit         string
-	parentCommit       string
 }
 
 // computeCombinedAttribution merges PromptAttributions from all sessions sharing
@@ -125,10 +121,22 @@ func computeCombinedAttribution(
 	}
 
 	first := sessions[0]
+	attrBase := first.attrBase
+	for i := 1; i < len(sessions); i++ {
+		if sessions[i].attrBase != attrBase {
+			logging.Warn(logging.WithComponent(ctx, "attribution"),
+				"combined attribution: sessions have divergent attribution base commits; using first session's base",
+				slog.String("first_base", attrBase),
+				slog.String("divergent_base", sessions[i].attrBase),
+				slog.Int("session_index", i),
+			)
+			break
+		}
+	}
 	syntheticState := &SessionState{
 		PromptAttributions:    merged,
-		AttributionBaseCommit: first.attrBase,
-		BaseCommit:            first.attrBase,
+		AttributionBaseCommit: attrBase,
+		BaseCommit:            attrBase,
 	}
 	syntheticData := &ExtractedSessionData{
 		FilesTouched: allFilesTouched,
@@ -139,9 +147,43 @@ func computeCombinedAttribution(
 		parentTree:            first.parentTree,
 		repoDir:               first.repoDir,
 		attributionBaseCommit: first.attrBase,
-		headCommitHash:        first.headCommit,
-		parentCommitHash:      first.parentCommit,
+		headCommitHash:        first.headCommitHash,
+		parentCommitHash:      first.parentCommitHash,
 	})
+}
+
+// resolveCommitContext extracts HEAD tree, parent tree, and parent commit hash
+// from a commit object. Best-effort: warns on failure and leaves fields nil/empty.
+// Both parentTree and parentCommitHash are set together or not at all, so callers
+// can rely on them being in sync.
+func resolveCommitContext(ctx context.Context, commit *object.Commit) (headTree, parentTree *object.Tree, parentCommitHash string) {
+	logCtx := logging.WithComponent(ctx, "checkpoint")
+
+	if t, err := commit.Tree(); err != nil {
+		logging.Warn(logCtx, "failed to resolve HEAD tree; attribution will be skipped",
+			slog.String("commit", commit.Hash.String()),
+			slog.String("error", err.Error()))
+	} else {
+		headTree = t
+	}
+
+	if commit.NumParents() > 0 {
+		rawHash := commit.ParentHashes[0]
+		if parent, err := commit.Parent(0); err != nil {
+			logging.Warn(logCtx, "failed to load parent commit; parent-scoped attribution unavailable",
+				slog.String("parent_hash", rawHash.String()),
+				slog.String("error", err.Error()))
+		} else if t, err := parent.Tree(); err != nil {
+			logging.Warn(logCtx, "failed to load parent tree; parent-scoped attribution unavailable",
+				slog.String("parent_hash", rawHash.String()),
+				slog.String("error", err.Error()))
+		} else {
+			parentTree = t
+			parentCommitHash = rawHash.String()
+		}
+	}
+
+	return headTree, parentTree, parentCommitHash
 }
 
 // condenseOpts provides pre-resolved git objects to avoid redundant reads.
@@ -150,8 +192,8 @@ type condenseOpts struct {
 	headTree         *object.Tree        // Pre-resolved HEAD tree (passed through to calculateSessionAttributions)
 	repoDir          string              // Repository worktree path for git CLI commands
 	headCommitHash   string              // HEAD commit hash (passed through for attribution)
-	parentTree       *object.Tree        // HEAD's first parent tree (nil iff parentCommitHash is empty)
-	parentCommitHash string              // HEAD's first parent hash (empty iff parentTree is nil — initial commit or resolution failure)
+	parentTree       *object.Tree        // HEAD's first parent tree (nil when parentCommitHash is empty or parent resolution failed)
+	parentCommitHash string              // HEAD's first parent hash (empty when parentTree is nil — initial commit or resolution failure)
 }
 
 // CondenseSession condenses a session's shadow branch to permanent storage.
@@ -912,31 +954,17 @@ func (s *ManualCommitStrategy) CondenseSessionByID(ctx context.Context, sessionI
 	if repoDir, rdErr := paths.WorktreeRoot(ctx); rdErr == nil {
 		headCommitOpts.repoDir = repoDir
 	}
-	if headRef, hrErr := repo.Head(); hrErr == nil {
+	if headRef, hrErr := repo.Head(); hrErr != nil {
+		logging.Warn(logCtx, "condense-by-id: failed to resolve HEAD; attribution context unavailable",
+			slog.String("error", hrErr.Error()))
+	} else {
 		headCommitOpts.headCommitHash = headRef.Hash().String()
-		if headCommit, hcErr := repo.CommitObject(headRef.Hash()); hcErr == nil {
-			if t, tErr := headCommit.Tree(); tErr != nil {
-				logging.Warn(logCtx, "condense-by-id: failed to resolve HEAD tree; attribution will be skipped",
-					slog.String("commit", headRef.Hash().String()),
-					slog.String("error", tErr.Error()))
-			} else {
-				headCommitOpts.headTree = t
-			}
-			if headCommit.NumParents() > 0 {
-				rawHash := headCommit.ParentHashes[0]
-				if parent, pErr := headCommit.Parent(0); pErr != nil {
-					logging.Warn(logCtx, "condense-by-id: failed to load parent commit; parent-scoped attribution unavailable",
-						slog.String("parent_hash", rawHash.String()),
-						slog.String("error", pErr.Error()))
-				} else if t, tErr := parent.Tree(); tErr != nil {
-					logging.Warn(logCtx, "condense-by-id: failed to load parent tree; parent-scoped attribution unavailable",
-						slog.String("parent_hash", rawHash.String()),
-						slog.String("error", tErr.Error()))
-				} else {
-					headCommitOpts.parentTree = t
-					headCommitOpts.parentCommitHash = rawHash.String()
-				}
-			}
+		if headCommit, hcErr := repo.CommitObject(headRef.Hash()); hcErr != nil {
+			logging.Warn(logCtx, "condense-by-id: failed to load HEAD commit object",
+				slog.String("commit", headRef.Hash().String()),
+				slog.String("error", hcErr.Error()))
+		} else {
+			headCommitOpts.headTree, headCommitOpts.parentTree, headCommitOpts.parentCommitHash = resolveCommitContext(ctx, headCommit)
 		}
 	}
 

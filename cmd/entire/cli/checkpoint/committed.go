@@ -1106,6 +1106,10 @@ func (s *GitStore) UpdateSummary(ctx context.Context, checkpointID id.Checkpoint
 // for an existing checkpoint, setting CombinedAttribution.
 // Returns ErrCheckpointNotFound if the checkpoint does not exist.
 func (s *GitStore) UpdateCheckpointSummary(ctx context.Context, opts UpdateCheckpointSummaryOptions) error {
+	if opts.CombinedAttribution == nil {
+		return nil // No-op: nothing to patch
+	}
+
 	if err := ctx.Err(); err != nil {
 		return err //nolint:wrapcheck // Propagating context cancellation
 	}

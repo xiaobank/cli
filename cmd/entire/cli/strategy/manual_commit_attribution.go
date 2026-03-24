@@ -248,22 +248,23 @@ func CalculateAttributionWithAccumulated(
 	// Calculate total user edits to non-agent files (files not in filesTouched).
 	// Scope this to the attributed commit only by diffing parent→head. If parent
 	// context is unavailable, fall back to the session base behavior.
+	// IMPORTANT: nonAgentBaseTree and nonAgentBaseCommit must reference the same
+	// commit — getAllChangedFiles has a fast path (CLI diff-tree using hashes) and
+	// a slow path (go-git tree walk using trees). If they diverge, attribution
+	// produces inconsistent results depending on which path fires.
 	nonAgentBaseTree := baseTree
+	nonAgentBaseCommit := attributionBaseCommit
 	if parentTree != nil {
 		nonAgentBaseTree = parentTree
+		nonAgentBaseCommit = parentCommitHash
 	} else if parentCommitHash != "" {
 		// parentCommitHash is set but parentTree is nil — parent object resolution
-		// failed (e.g. shallow clone, pack corruption). Fall back to session base,
-		// but warn because non-agent file counts may be inflated.
+		// failed (e.g. shallow clone, pack corruption). Fall back to session base
+		// for both tree and hash to keep them in sync.
 		logging.Warn(logging.WithComponent(ctx, "attribution"),
 			"attribution: parent tree unavailable despite parent hash being set; non-agent file counts may be inflated",
 			slog.String("parent_commit_hash", parentCommitHash),
 		)
-	}
-
-	nonAgentBaseCommit := attributionBaseCommit
-	if parentCommitHash != "" {
-		nonAgentBaseCommit = parentCommitHash
 	}
 
 	allChangedFiles, err := getAllChangedFiles(ctx, nonAgentBaseTree, headTree, repoDir, nonAgentBaseCommit, headCommitHash)

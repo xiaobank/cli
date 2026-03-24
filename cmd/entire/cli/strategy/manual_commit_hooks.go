@@ -846,31 +846,7 @@ func (s *ManualCommitStrategy) PostCommit(ctx context.Context) error { //nolint:
 	// per-session functions (filesOverlapWithContent, filesWithRemainingAgentChanges,
 	// calculateSessionAttributions).
 	_, resolveTreesSpan := perf.Start(ctx, "resolve_commit_trees")
-	var headTree *object.Tree
-	if t, err := commit.Tree(); err != nil {
-		logging.Warn(logCtx, "post-commit: failed to resolve HEAD tree; attribution will be skipped",
-			slog.String("commit", commit.Hash.String()),
-			slog.String("error", err.Error()))
-	} else {
-		headTree = t
-	}
-	var parentTree *object.Tree
-	var parentCommitHash string
-	if commit.NumParents() > 0 {
-		rawHash := commit.ParentHashes[0]
-		if parent, err := commit.Parent(0); err != nil {
-			logging.Warn(logCtx, "post-commit: failed to load parent commit; parent-scoped attribution unavailable",
-				slog.String("parent_hash", rawHash.String()),
-				slog.String("error", err.Error()))
-		} else if t, err := parent.Tree(); err != nil {
-			logging.Warn(logCtx, "post-commit: failed to load parent tree; parent-scoped attribution unavailable",
-				slog.String("parent_hash", rawHash.String()),
-				slog.String("error", err.Error()))
-		} else {
-			parentTree = t
-			parentCommitHash = rawHash.String()
-		}
-	}
+	headTree, parentTree, parentCommitHash := resolveCommitContext(ctx, commit)
 
 	committedFileSet := filesChangedInCommit(ctx, worktreePath, commit, headTree, parentTree)
 	resolveTreesSpan.End()
@@ -1043,28 +1019,28 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 		slog.Any("files", filesTouchedBefore),
 	)
 
-	// Collect PromptAttributions BEFORE condensation clears them.
+	// Snapshot PromptAttributions BEFORE condensation clears them.
 	// condenseAndUpdateState sets state.PromptAttributions = nil, so we must
-	// capture them here for the combined attribution pass after the session loop.
+	// capture them here. The snapshot is only committed to attrAccumulator after
+	// we confirm condensation occurred (below), to avoid computing combined
+	// attribution for sessions that weren't actually condensed.
 	attrBase := state.AttributionBaseCommit
 	if attrBase == "" {
 		attrBase = state.BaseCommit
 	}
-	var parentCommit string
-	if commit.NumParents() > 0 {
-		parentCommit = commit.ParentHashes[0].String()
-	}
-	attrAccumulator[shadowBranchName] = append(attrAccumulator[shadowBranchName], sessionAttrData{
+	snapshotAttr := sessionAttrData{
+		condenseOpts: condenseOpts{
+			shadowRef:        shadowRef,
+			headTree:         headTree,
+			parentTree:       parentTree,
+			repoDir:          repoDir,
+			headCommitHash:   newHead,
+			parentCommitHash: parentCommitHash,
+		},
 		promptAttributions: append([]PromptAttribution(nil), state.PromptAttributions...),
 		filesTouched:       append([]string(nil), filesTouchedBefore...),
-		shadowRef:          shadowRef,
-		headTree:           headTree,
-		parentTree:         parentTree,
-		repoDir:            repoDir,
 		attrBase:           attrBase,
-		headCommit:         newHead,
-		parentCommit:       parentCommit,
-	})
+	}
 
 	// Run the state machine transition with handler for strategy-specific actions.
 	_, transitionAndCondenseSpan := perf.Start(ctx, "transition_and_condense")
@@ -1094,6 +1070,13 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 			slog.String("error", err.Error()))
 	}
 	transitionAndCondenseSpan.End()
+
+	// Only include this session in the combined attribution accumulator if it
+	// was actually condensed. Non-condensed sessions haven't written their data
+	// to the checkpoint yet, so including them would produce premature results.
+	if handler.condensed {
+		attrAccumulator[shadowBranchName] = append(attrAccumulator[shadowBranchName], snapshotAttr)
+	}
 
 	// Record checkpoint ID for ACTIVE sessions so HandleTurnEnd can finalize
 	// with full transcript. IDLE/ENDED sessions already have complete transcripts.

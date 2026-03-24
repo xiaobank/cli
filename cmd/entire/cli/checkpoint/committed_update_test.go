@@ -580,5 +580,122 @@ func TestGetGitAuthorFromRepo_NoConfig(t *testing.T) {
 	}
 }
 
+func TestUpdateCheckpointSummary_SetsCombinedAttribution(t *testing.T) {
+	t.Parallel()
+	_, store, cpID := setupRepoForUpdate(t)
+
+	combined := &InitialAttribution{
+		AgentLines:      15,
+		HumanAdded:      3,
+		HumanModified:   1,
+		HumanRemoved:    0,
+		TotalCommitted:  18,
+		AgentPercentage: 83.3,
+	}
+
+	err := store.UpdateCheckpointSummary(context.Background(), UpdateCheckpointSummaryOptions{
+		CheckpointID:        cpID,
+		CombinedAttribution: combined,
+	})
+	if err != nil {
+		t.Fatalf("UpdateCheckpointSummary() error = %v", err)
+	}
+
+	summary, err := store.ReadCommitted(context.Background(), cpID)
+	if err != nil {
+		t.Fatalf("ReadCommitted() error = %v", err)
+	}
+
+	if summary.CombinedAttribution == nil {
+		t.Fatal("CombinedAttribution is nil after update")
+	}
+	if summary.CombinedAttribution.AgentLines != 15 {
+		t.Errorf("AgentLines = %d, want 15", summary.CombinedAttribution.AgentLines)
+	}
+	if summary.CombinedAttribution.HumanAdded != 3 {
+		t.Errorf("HumanAdded = %d, want 3", summary.CombinedAttribution.HumanAdded)
+	}
+	if summary.CombinedAttribution.AgentPercentage != 83.3 {
+		t.Errorf("AgentPercentage = %.1f, want 83.3", summary.CombinedAttribution.AgentPercentage)
+	}
+}
+
+func TestUpdateCheckpointSummary_NonexistentCheckpoint(t *testing.T) {
+	t.Parallel()
+	_, store, _ := setupRepoForUpdate(t)
+
+	err := store.UpdateCheckpointSummary(context.Background(), UpdateCheckpointSummaryOptions{
+		CheckpointID: id.MustCheckpointID("deadbeef1234"),
+		CombinedAttribution: &InitialAttribution{
+			AgentLines: 10,
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error for nonexistent checkpoint, got nil")
+	}
+}
+
+func TestUpdateCheckpointSummary_PreservesExistingFields(t *testing.T) {
+	t.Parallel()
+	_, store, cpID := setupRepoForUpdate(t)
+
+	summaryBefore, err := store.ReadCommitted(context.Background(), cpID)
+	if err != nil {
+		t.Fatalf("ReadCommitted() before error = %v", err)
+	}
+
+	err = store.UpdateCheckpointSummary(context.Background(), UpdateCheckpointSummaryOptions{
+		CheckpointID: cpID,
+		CombinedAttribution: &InitialAttribution{
+			AgentLines:      10,
+			TotalCommitted:  10,
+			AgentPercentage: 100.0,
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpdateCheckpointSummary() error = %v", err)
+	}
+
+	summaryAfter, err := store.ReadCommitted(context.Background(), cpID)
+	if err != nil {
+		t.Fatalf("ReadCommitted() after error = %v", err)
+	}
+
+	if summaryAfter.CheckpointID != summaryBefore.CheckpointID {
+		t.Errorf("CheckpointID changed: %q -> %q", summaryBefore.CheckpointID, summaryAfter.CheckpointID)
+	}
+	if summaryAfter.Strategy != summaryBefore.Strategy {
+		t.Errorf("Strategy changed: %q -> %q", summaryBefore.Strategy, summaryAfter.Strategy)
+	}
+	if len(summaryAfter.Sessions) != len(summaryBefore.Sessions) {
+		t.Errorf("Sessions count changed: %d -> %d", len(summaryBefore.Sessions), len(summaryAfter.Sessions))
+	}
+	if summaryAfter.CombinedAttribution == nil {
+		t.Fatal("CombinedAttribution should be set after update")
+	}
+}
+
+func TestUpdateCheckpointSummary_NilCombinedAttributionIsNoop(t *testing.T) {
+	t.Parallel()
+	_, store, cpID := setupRepoForUpdate(t)
+
+	// Nil CombinedAttribution should be a no-op (no error, no unnecessary commit)
+	err := store.UpdateCheckpointSummary(context.Background(), UpdateCheckpointSummaryOptions{
+		CheckpointID:        cpID,
+		CombinedAttribution: nil,
+	})
+	if err != nil {
+		t.Fatalf("UpdateCheckpointSummary(nil) error = %v", err)
+	}
+
+	summary, err := store.ReadCommitted(context.Background(), cpID)
+	if err != nil {
+		t.Fatalf("ReadCommitted() error = %v", err)
+	}
+	if summary.CombinedAttribution != nil {
+		t.Errorf("CombinedAttribution should remain nil, got %+v", summary.CombinedAttribution)
+	}
+}
+
 // Verify go-git config import is used (compile-time check).
 var _ = config.GlobalScope
