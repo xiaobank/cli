@@ -2,6 +2,7 @@ package transcript
 
 import (
 	"encoding/json"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -42,6 +43,23 @@ func TestCompact_AssistantStripping(t *testing.T) {
 
 	expected := []string{
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:00:01Z","id":"msg-1","content":[{"type":"text","text":"Here's my answer."},{"type":"tool_use","id":"tu-1","name":"Bash","input":{"command":"ls"}},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"abc"}}]}`,
+	}
+
+	result, err := Compact(input, defaultOpts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertJSONLines(t, result, expected)
+}
+
+func TestCompact_AssistantThinkingOnly(t *testing.T) {
+	t.Parallel()
+
+	input := []byte(`{"type":"assistant","timestamp":"2026-01-01T00:00:01Z","requestId":"req-1","message":{"id":"msg-1","content":[{"type":"thinking","thinking":"hmm..."}]}}
+`)
+
+	expected := []string{
+		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:00:01Z","id":"msg-1","content":[]}`,
 	}
 
 	result, err := Compact(input, defaultOpts)
@@ -121,6 +139,22 @@ func TestCompact_AssistantStringContent(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	assertJSONLines(t, result, expected)
+}
+
+func TestCompact_RealFile(t *testing.T) {
+	content, err := os.ReadFile("../../../../full-example.jsonl")
+	if err != nil {
+		t.Skip("no full-example.jsonl found")
+	}
+	result, err := Compact(content, CompactOptions{
+		Agent:      "claude-code",
+		CLIVersion: "0.5.1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile("../../../../transcript-output.jsonl", result, 0644)
+	t.Logf("wrote %d bytes", len(result))
 }
 
 // --- Truncation + filtering tests ---
@@ -470,8 +504,13 @@ func TestCompact_FactoryDroidNonMessageEntriesDropped(t *testing.T) {
 
 // --- Gemini format tests ---
 
-func TestCompact_GeminiAssistantType(t *testing.T) {
+func TestCompact_GeminiFixture(t *testing.T) {
 	t.Parallel()
+
+	input, err := os.ReadFile("testdata/gemini_full.jsonl")
+	if err != nil {
+		t.Fatalf("failed to read fixture: %v", err)
+	}
 
 	geminiOpts := CompactOptions{
 		Agent:      "gemini-cli",
@@ -479,47 +518,44 @@ func TestCompact_GeminiAssistantType(t *testing.T) {
 		StartLine:  0,
 	}
 
-	// Gemini transcripts use type:"gemini" for assistant messages.
-	input := []byte(`{"type":"user","timestamp":"t1","message":{"content":"hello"}}
-{"type":"gemini","timestamp":"t2","message":{"id":"g1","content":[{"type":"text","text":"Hi from Gemini!"}]}}
-`)
-
-	expected := []string{
-		`{"v":1,"agent":"gemini-cli","cli_version":"0.5.1","type":"user","ts":"t1","content":"hello"}`,
-		`{"v":1,"agent":"gemini-cli","cli_version":"0.5.1","type":"assistant","ts":"t2","id":"g1","content":[{"type":"text","text":"Hi from Gemini!"}]}`,
+	expected, err := os.ReadFile("testdata/gemini_expected.jsonl")
+	if err != nil {
+		t.Fatalf("failed to read expected output: %v", err)
 	}
 
 	result, err := Compact(input, geminiOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	assertJSONLines(t, result, expected)
+	assertJSONLines(t, result, nonEmptyLines(expected))
 }
 
-func TestCompact_GeminiStringContent(t *testing.T) {
+// --- OpenCode format tests ---
+
+func TestCompact_OpenCodeFixture(t *testing.T) {
 	t.Parallel()
 
-	geminiOpts := CompactOptions{
-		Agent:      "gemini-cli",
+	input, err := os.ReadFile("testdata/opencode_full.jsonl")
+	if err != nil {
+		t.Fatalf("failed to read fixture: %v", err)
+	}
+
+	openCodeOpts := CompactOptions{
+		Agent:      "opencode",
 		CLIVersion: "0.5.1",
 		StartLine:  0,
 	}
 
-	// Gemini assistant messages may have string content rather than content blocks.
-	input := []byte(`{"type":"user","timestamp":"t1","message":{"content":"what is 2+2?"}}
-{"type":"gemini","timestamp":"t2","message":{"id":"g1","content":"It's 4."}}
-`)
-
-	expected := []string{
-		`{"v":1,"agent":"gemini-cli","cli_version":"0.5.1","type":"user","ts":"t1","content":"what is 2+2?"}`,
-		`{"v":1,"agent":"gemini-cli","cli_version":"0.5.1","type":"assistant","ts":"t2","id":"g1","content":"It's 4."}`,
+	expected, err := os.ReadFile("testdata/opencode_expected.jsonl")
+	if err != nil {
+		t.Fatalf("failed to read expected output: %v", err)
 	}
 
-	result, err := Compact(input, geminiOpts)
+	result, err := Compact(input, openCodeOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	assertJSONLines(t, result, expected)
+	assertJSONLines(t, result, nonEmptyLines(expected))
 }
 
 // --- IDE context tag stripping tests ---
