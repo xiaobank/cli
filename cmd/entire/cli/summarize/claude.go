@@ -1,16 +1,13 @@
 package summarize
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"os"
 	"os/exec"
-	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
+	"github.com/entireio/cli/cmd/entire/cli/llmcli"
 )
 
 // summarizationPromptTemplate is the prompt used to generate summaries via the Claude CLI.
@@ -47,9 +44,8 @@ Guidelines:
 - Return ONLY the JSON object, no markdown formatting or explanation`
 
 // DefaultModel is the default model used for summarization.
-// Sonnet provides a good balance of quality and cost, with 1M context window
-// to handle long transcripts without truncation.
-const DefaultModel = "sonnet"
+// Delegates to llmcli.DefaultModel for a single source of truth.
+const DefaultModel = llmcli.DefaultModel
 
 // ClaudeGenerator generates summaries using the Claude CLI.
 type ClaudeGenerator struct {
@@ -66,86 +62,22 @@ type ClaudeGenerator struct {
 	CommandRunner func(ctx context.Context, name string, args ...string) *exec.Cmd
 }
 
-// claudeCLIResponse represents the JSON response from the Claude CLI.
-type claudeCLIResponse struct {
-	Result string `json:"result"`
-}
-
 // Generate creates a summary from checkpoint data by calling the Claude CLI.
 func (g *ClaudeGenerator) Generate(ctx context.Context, input Input) (*checkpoint.Summary, error) {
-	// Format the transcript for the prompt
 	transcriptText := FormatCondensedTranscript(input)
-
-	// Build the prompt
 	prompt := buildSummarizationPrompt(transcriptText)
 
-	// Execute the Claude CLI
-	runner := g.CommandRunner
-	if runner == nil {
-		runner = exec.CommandContext
+	runner := &llmcli.Runner{
+		ClaudePath:    g.ClaudePath,
+		Model:         g.Model,
+		CommandRunner: g.CommandRunner,
 	}
 
-	claudePath := g.ClaudePath
-	if claudePath == "" {
-		claudePath = "claude"
-	}
-
-	model := g.Model
-	if model == "" {
-		model = DefaultModel
-	}
-
-	// Use empty --setting-sources to skip all settings (user, project, local).
-	// This avoids loading MCP servers, hooks, or other config that could interfere
-	// with a simple --print summarization call.
-	cmd := runner(ctx, claudePath, "--print", "--output-format", "json", "--model", model, "--setting-sources", "")
-
-	// Fully isolate the subprocess from the user's git repo (ENT-242).
-	// Claude Code performs internal git operations (plugin cache, context gathering)
-	// that pollute the worktree index with phantom entries from its plugin cache.
-	// We must both change the working directory AND strip GIT_* env vars, because
-	// git hooks set GIT_DIR which lets Claude Code find the repo regardless of cwd.
-	// This also prevents recursive triggering of Entire's own git hooks.
-	cmd.Dir = os.TempDir()
-	cmd.Env = stripGitEnv(os.Environ())
-
-	// Pass prompt via stdin
-	cmd.Stdin = strings.NewReader(prompt)
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
+	resultJSON, err := runner.Execute(ctx, prompt)
 	if err != nil {
-		// Check if the command was not found
-		var execErr *exec.Error
-		if errors.As(err, &execErr) {
-			return nil, fmt.Errorf("claude CLI not found: %w", err)
-		}
-
-		// Check for exit error
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return nil, fmt.Errorf("claude CLI failed (exit %d): %s", exitErr.ExitCode(), stderr.String())
-		}
-
-		return nil, fmt.Errorf("failed to run claude CLI: %w", err)
+		return nil, err
 	}
 
-	// Parse the CLI response
-	var cliResponse claudeCLIResponse
-	if err := json.Unmarshal(stdout.Bytes(), &cliResponse); err != nil {
-		return nil, fmt.Errorf("failed to parse claude CLI response: %w", err)
-	}
-
-	// The result field contains the actual JSON summary
-	resultJSON := cliResponse.Result
-
-	// Try to extract JSON if it's wrapped in markdown code blocks
-	resultJSON = extractJSONFromMarkdown(resultJSON)
-
-	// Parse the summary from the result
 	var summary checkpoint.Summary
 	if err := json.Unmarshal([]byte(resultJSON), &summary); err != nil {
 		return nil, fmt.Errorf("failed to parse summary JSON: %w (response: %s)", err, resultJSON)
@@ -159,40 +91,14 @@ func buildSummarizationPrompt(transcriptText string) string {
 	return fmt.Sprintf(summarizationPromptTemplate, transcriptText)
 }
 
-// stripGitEnv returns a copy of env with all GIT_* variables removed.
-// This prevents a subprocess from discovering or modifying the parent's git repo.
+// stripGitEnv delegates to llmcli.StripGitEnv.
+// Kept as a package-level alias so existing tests that call stripGitEnv directly continue to compile.
 func stripGitEnv(env []string) []string {
-	filtered := make([]string, 0, len(env))
-	for _, e := range env {
-		if !strings.HasPrefix(e, "GIT_") {
-			filtered = append(filtered, e)
-		}
-	}
-	return filtered
+	return llmcli.StripGitEnv(env)
 }
 
-// extractJSONFromMarkdown attempts to extract JSON from markdown code blocks.
-// If the input is not wrapped in code blocks, it returns the input unchanged.
+// extractJSONFromMarkdown delegates to llmcli.ExtractJSONFromMarkdown.
+// Kept as a package-level alias so existing tests that call extractJSONFromMarkdown directly continue to compile.
 func extractJSONFromMarkdown(s string) string {
-	s = strings.TrimSpace(s)
-
-	// Check for ```json ... ``` blocks
-	if strings.HasPrefix(s, "```json") {
-		s = strings.TrimPrefix(s, "```json")
-		if idx := strings.LastIndex(s, "```"); idx != -1 {
-			s = s[:idx]
-		}
-		return strings.TrimSpace(s)
-	}
-
-	// Check for ``` ... ``` blocks
-	if strings.HasPrefix(s, "```") {
-		s = strings.TrimPrefix(s, "```")
-		if idx := strings.LastIndex(s, "```"); idx != -1 {
-			s = s[:idx]
-		}
-		return strings.TrimSpace(s)
-	}
-
-	return s
+	return llmcli.ExtractJSONFromMarkdown(s)
 }
