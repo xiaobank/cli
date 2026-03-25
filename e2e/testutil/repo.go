@@ -85,7 +85,10 @@ func SetupRepo(t *testing.T, agent agents.Agent) *RepoState {
 			t.Fatalf("configure droid repo settings: %v", err)
 		}
 	}
-	PatchSettings(t, dir, map[string]any{"log_level": "debug"})
+	PatchSettings(t, dir, map[string]any{
+		"log_level":      "debug",
+		"commit_linking": "always", // Auto-link commits without TTY prompt — interactive tmux sessions have a real TTY, so the hook would block waiting for user input
+	})
 
 	// Copilot CLI blocks on a "No copilot instructions found" notice in fresh
 	// repos that lack .github/copilot-instructions.md, preventing the interactive
