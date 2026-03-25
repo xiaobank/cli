@@ -107,14 +107,25 @@ const (
 	pollInterval = 500 * time.Millisecond
 )
 
-// stableContent returns the content with the last few lines stripped,
-// so that TUI status bar updates don't prevent the settle timer.
+// Braille spinner characters used by various TUI frameworks (ora, etc.).
+// These cycle rapidly and must be normalized to prevent stableContent drift.
+var brailleSpinnerRe = regexp.MustCompile(`[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]`)
+
+// Countdown timers like "1m)", "59s)", "1m30s)" shown in gemini-cli shell tool UIs.
+var countdownTimerRe = regexp.MustCompile(`\d+[ms]\d*[ms]?\)`)
+
+// stableContent returns the content with the last few lines stripped and
+// animated elements (spinners, countdown timers) normalized, so that TUI
+// status bar updates and animations don't prevent the settle timer.
 func stableContent(content string) string {
 	lines := strings.Split(content, "\n")
 	if len(lines) > 3 {
 		lines = lines[:len(lines)-3]
 	}
-	return strings.Join(lines, "\n")
+	s := strings.Join(lines, "\n")
+	s = brailleSpinnerRe.ReplaceAllString(s, "~")
+	s = countdownTimerRe.ReplaceAllString(s, "T)")
+	return s
 }
 
 func (s *TmuxSession) WaitFor(pattern string, timeout time.Duration) (string, error) {

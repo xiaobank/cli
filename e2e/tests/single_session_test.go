@@ -99,7 +99,7 @@ func TestSingleSessionSubagentCommitInTurn(t *testing.T) {
 
 		testutil.AssertFileExists(t, s.Dir, "docs/*.md")
 
-		testutil.WaitForCheckpoint(t, s, 15*time.Second)
+		testutil.WaitForCheckpoint(t, s, 30*time.Second) // subagent commits can take longer to condense
 		testutil.AssertCheckpointAdvanced(t, s)
 
 		cpID := testutil.AssertHasCheckpointTrailer(t, s.Dir, "HEAD")
