@@ -19,6 +19,7 @@ type SessionScore struct {
 	TurnCount     int             `json:"turn_count"`
 	FilesCount    int             `json:"files_count"`
 	FrictionCount int             `json:"friction_count"`
+	HasSummary    bool            `json:"has_summary"`
 }
 
 // ScoreBreakdown shows individual scoring dimensions (each 0-100).

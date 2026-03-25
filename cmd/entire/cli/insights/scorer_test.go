@@ -16,37 +16,43 @@ func TestScoreSession_TokenEfficiency(t *testing.T) {
 		wantExact *float64
 	}{
 		{
-			name:      "zero files returns neutral 50",
-			data:      SessionData{TotalTokens: 1000, FilesCount: 0},
+			name:      "zero turns returns neutral 50",
+			data:      SessionData{TotalTokens: 1000, TurnCount: 0},
 			wantExact: ptr(50.0),
 		},
 		{
 			name:      "zero tokens returns neutral 50",
-			data:      SessionData{TotalTokens: 0, FilesCount: 5},
+			data:      SessionData{TotalTokens: 0, TurnCount: 5},
 			wantExact: ptr(50.0),
 		},
 		{
 			name:      "both zero returns neutral 50",
-			data:      SessionData{TotalTokens: 0, FilesCount: 0},
+			data:      SessionData{TotalTokens: 0, TurnCount: 0},
 			wantExact: ptr(50.0),
 		},
 		{
-			name:    "low tokens per file scores high",
-			data:    SessionData{TotalTokens: 1000, FilesCount: 10},
-			wantMin: 88.0, // 100 * exp(-100/8000) ≈ 98.8
+			name:    "100k tokens/turn scores high",
+			data:    SessionData{TotalTokens: 500000, TurnCount: 5}, // 100k/turn
+			wantMin: 80.0,
 			wantMax: 100.0,
 		},
 		{
-			name:    "8000 tokens per file scores ~36.8",
-			data:    SessionData{TotalTokens: 8000, FilesCount: 1},
-			wantMin: 36.0, // 100 * exp(-1) ≈ 36.79
-			wantMax: 38.0,
+			name:    "500k tokens/turn scores ~50",
+			data:    SessionData{TotalTokens: 500000, TurnCount: 1}, // 500k/turn
+			wantMin: 45.0,
+			wantMax: 55.0,
 		},
 		{
-			name:    "very high tokens per file scores low",
-			data:    SessionData{TotalTokens: 100000, FilesCount: 1},
-			wantMin: 0.0,
-			wantMax: 1.0, // near zero
+			name:    "2M tokens/turn scores low",
+			data:    SessionData{TotalTokens: 2000000, TurnCount: 1}, // 2M/turn
+			wantMin: 5.0,
+			wantMax: 20.0,
+		},
+		{
+			name:    "real-world: 3M tokens 6 turns",
+			data:    SessionData{TotalTokens: 3000000, TurnCount: 6}, // 500k/turn
+			wantMin: 45.0,
+			wantMax: 55.0,
 		},
 	}
 
@@ -83,40 +89,40 @@ func TestScoreSession_FirstPassSuccess(t *testing.T) {
 			wantExact: ptr(50.0),
 		},
 		{
-			name:    "perfect session scores 80",
+			name:    "perfect session scores 90",
 			data:    SessionData{HasSummary: true, FrictionCount: 0, TurnCount: 5, OpenItemCount: 0},
-			wantMin: 80.0,
+			wantMin: 90.0,
+			wantMax: 90.0,
+		},
+		{
+			name:    "friction deducts 5 per count",
+			data:    SessionData{HasSummary: true, FrictionCount: 2, TurnCount: 5, OpenItemCount: 0},
+			wantMin: 80.0, // 90 - 2*5 = 80
 			wantMax: 80.0,
 		},
 		{
-			name:    "friction deducts 10 per count",
-			data:    SessionData{HasSummary: true, FrictionCount: 2, TurnCount: 5, OpenItemCount: 0},
-			wantMin: 60.0, // 80 - 2*10 = 60
-			wantMax: 60.0,
-		},
-		{
-			name:    "extra turns deduct 3 per turn over 5",
+			name:    "extra turns deduct 2 per turn over 5",
 			data:    SessionData{HasSummary: true, FrictionCount: 0, TurnCount: 8, OpenItemCount: 0},
-			wantMin: 71.0, // 80 - 3*3 = 71
-			wantMax: 71.0,
+			wantMin: 84.0, // 90 - 3*2 = 84
+			wantMax: 84.0,
 		},
 		{
-			name:    "open items deduct 5 each",
+			name:    "open items deduct 3 each",
 			data:    SessionData{HasSummary: true, FrictionCount: 0, TurnCount: 5, OpenItemCount: 2},
-			wantMin: 70.0, // 80 - 2*5 = 70
-			wantMax: 70.0,
+			wantMin: 84.0, // 90 - 2*3 = 84
+			wantMax: 84.0,
 		},
 		{
 			name:    "clamped at 0 for severe friction",
-			data:    SessionData{HasSummary: true, FrictionCount: 10, TurnCount: 5, OpenItemCount: 0},
+			data:    SessionData{HasSummary: true, FrictionCount: 20, TurnCount: 5, OpenItemCount: 0},
 			wantMin: 0.0,
 			wantMax: 0.0,
 		},
 		{
 			name:    "turns <= 5 do not deduct extra",
 			data:    SessionData{HasSummary: true, FrictionCount: 0, TurnCount: 1, OpenItemCount: 0},
-			wantMin: 80.0,
-			wantMax: 80.0,
+			wantMin: 90.0,
+			wantMax: 90.0,
 		},
 	}
 
@@ -146,10 +152,11 @@ func TestScoreSession_FrictionScore(t *testing.T) {
 		want float64
 	}{
 		{"zero friction is 100", SessionData{FrictionCount: 0}, 100.0},
-		{"one friction is 80", SessionData{FrictionCount: 1}, 80.0},
-		{"two friction is 60", SessionData{FrictionCount: 2}, 60.0},
-		{"five friction is 0", SessionData{FrictionCount: 5}, 0.0},
-		{"six friction clamped to 0", SessionData{FrictionCount: 6}, 0.0},
+		{"one friction is 85", SessionData{FrictionCount: 1}, 85.0},
+		{"two friction is 70", SessionData{FrictionCount: 2}, 70.0},
+		{"three friction is 55", SessionData{FrictionCount: 3}, 55.0},
+		{"five friction is 25", SessionData{FrictionCount: 5}, 25.0},
+		{"seven friction clamped to 0", SessionData{FrictionCount: 7}, 0.0},
 		{"ten friction clamped to 0", SessionData{FrictionCount: 10}, 0.0},
 	}
 
@@ -192,40 +199,34 @@ func TestScoreSession_FocusScore(t *testing.T) {
 			wantMax: 50.0,
 		},
 		{
-			name:    "ratio 1.0 (in 0.5-3.0 range) scores 90",
-			data:    SessionData{FilesCount: 5, TurnCount: 5},
+			name:    "ratio 1.0 (turns/files) scores highest",
+			data:    SessionData{FilesCount: 5, TurnCount: 5}, // ratio=1.0
 			wantMin: 90.0,
-			wantMax: 90.0,
+			wantMax: 95.0,
 		},
 		{
-			name:    "ratio 2.0 (in 0.5-3.0 range) scores 90",
-			data:    SessionData{FilesCount: 10, TurnCount: 5},
-			wantMin: 90.0,
-			wantMax: 90.0,
+			name:    "ratio 2.0 scores moderately",
+			data:    SessionData{FilesCount: 5, TurnCount: 10}, // ratio=2.0
+			wantMin: 70.0,
+			wantMax: 85.0,
 		},
 		{
-			name:    "ratio 0.5 (boundary) scores 90",
-			data:    SessionData{FilesCount: 1, TurnCount: 2},
-			wantMin: 90.0,
-			wantMax: 90.0,
+			name:    "ratio 0.5 scores moderately",
+			data:    SessionData{FilesCount: 2, TurnCount: 1}, // ratio=0.5
+			wantMin: 70.0,
+			wantMax: 85.0,
 		},
 		{
-			name:    "ratio below 0.5 scores lower",
-			data:    SessionData{FilesCount: 1, TurnCount: 10}, // ratio = 0.1
-			wantMin: 50.0,                                      // 50 + 0.1*80 = 58
-			wantMax: 60.0,
-		},
-		{
-			name:    "ratio above 3.0 scores lower",
-			data:    SessionData{FilesCount: 40, TurnCount: 5}, // ratio = 8.0
-			wantMin: 30.0,                                      // 90 - (8-3)*10 = 40, but clamped
-			wantMax: 42.0,
-		},
-		{
-			name:    "very high ratio clamped to 0",
-			data:    SessionData{FilesCount: 1000, TurnCount: 1}, // ratio = 1000
+			name:    "many turns per file scores low",
+			data:    SessionData{FilesCount: 1, TurnCount: 10}, // ratio=10.0
 			wantMin: 0.0,
-			wantMax: 0.0,
+			wantMax: 15.0,
+		},
+		{
+			name:    "very scattered (ratio 0.1) scores low",
+			data:    SessionData{FilesCount: 10, TurnCount: 1}, // ratio=0.1
+			wantMin: 0.0,
+			wantMax: 15.0,
 		},
 	}
 

@@ -93,6 +93,7 @@ func (idb *InsightsDB) migrate() error {
 			score_first_pass     REAL,
 			score_friction       REAL,
 			score_focus          REAL,
+			has_summary          INTEGER DEFAULT 0,
 			PRIMARY KEY (checkpoint_id, session_index)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at)`,

@@ -72,6 +72,11 @@ func runImprove(ctx context.Context, w io.Writer, last int, dryRun bool, outputJ
 	// Non-fatal: continue with whatever is in the cache.
 	refreshCacheIfStale(ctx, idb) //nolint:errcheck,gosec // Non-fatal; continue with stale cache
 
+	// Generate summaries for recent sessions that lack them.
+	if !dryRun {
+		backfillSummaries(ctx, w, idb, last)
+	}
+
 	// Phase 1: Query SQLite index for recurring friction themes (2+ occurrences).
 	frictionThemes, err := idb.QueryRecurringFriction(ctx, 2)
 	if err != nil {

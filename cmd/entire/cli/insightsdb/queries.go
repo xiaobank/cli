@@ -106,7 +106,7 @@ const sessionColumns = `
 	api_call_count, duration_ms, turn_count,
 	intent, outcome, agent_percentage,
 	overall_score, score_token_efficiency, score_first_pass,
-	score_friction, score_focus`
+	score_friction, score_focus, has_summary`
 
 // querySessions executes a SELECT on sessions with the given args,
 // then populates denormalized fields for each row.
@@ -142,7 +142,7 @@ func scanSession(rows *sql.Rows) (SessionRow, error) {
 	var row SessionRow
 	var createdAt string
 	var agent, model, branch, intent, outcome sql.NullString
-	var overallScore, tokenEff, firstPass, friction, focus sql.NullFloat64
+	var hasSummary int
 
 	err := rows.Scan(
 		&row.CheckpointID, &row.SessionID, &row.SessionIndex,
@@ -150,8 +150,8 @@ func scanSession(rows *sql.Rows) (SessionRow, error) {
 		&row.InputTokens, &row.CacheTokens, &row.OutputTokens, &row.TotalTokens,
 		&row.APICallCount, &row.DurationMs, &row.TurnCount,
 		&intent, &outcome, &row.AgentPct,
-		&overallScore, &tokenEff, &firstPass,
-		&friction, &focus,
+		&row.OverallScore, &row.ScoreTokenEff, &row.ScoreFirstPass,
+		&row.ScoreFriction, &row.ScoreFocus, &hasSummary,
 	)
 	if err != nil {
 		return row, fmt.Errorf("scan session row: %w", err)
@@ -162,11 +162,7 @@ func scanSession(rows *sql.Rows) (SessionRow, error) {
 	row.Branch = branch.String
 	row.Intent = intent.String
 	row.Outcome = outcome.String
-	row.OverallScore = overallScore.Float64
-	row.ScoreTokenEff = tokenEff.Float64
-	row.ScoreFirstPass = firstPass.Float64
-	row.ScoreFriction = friction.Float64
-	row.ScoreFocus = focus.Float64
+	row.HasSummary = hasSummary == 1
 
 	t, err := time.Parse(time.RFC3339, createdAt)
 	if err != nil {

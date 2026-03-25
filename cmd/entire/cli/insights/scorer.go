@@ -45,51 +45,47 @@ func clampScore(s float64) float64 {
 	return s
 }
 
-// scoreTokenEfficiency returns 100*exp(-tokensPerFile/8000).
-// Returns 50 (neutral) when filesCount==0 or totalTokens==0.
+// scoreTokenEfficiency uses a sigmoid centered at 500k tokens/turn.
+// Lower tokens per turn = higher efficiency.
+// ~100k/turn → ~85, ~500k → 50, ~2M → ~12.
+// Returns 50 (neutral) when turns==0 or totalTokens==0.
 func scoreTokenEfficiency(data SessionData) float64 {
-	if data.FilesCount == 0 || data.TotalTokens == 0 {
+	if data.TurnCount == 0 || data.TotalTokens == 0 {
 		return 50
 	}
-	tokensPerFile := float64(data.TotalTokens) / float64(data.FilesCount)
-	return 100 * math.Exp(-tokensPerFile/8000)
+	tokensPerTurn := float64(data.TotalTokens) / float64(data.TurnCount)
+	return clampScore(100 / (1 + math.Pow(tokensPerTurn/500000, 1.5)))
 }
 
-// scoreFirstPassSuccess returns a score starting at 80, deducting for friction,
-// extra turns, and open items. Returns 50 (neutral) when HasSummary is false.
+// scoreFirstPassSuccess starts at 90, deducting for friction, extra turns,
+// and open items. Returns 50 (neutral) when HasSummary is false.
 func scoreFirstPassSuccess(data SessionData) float64 {
 	if !data.HasSummary {
 		return 50
 	}
-	score := 80.0
-	score -= float64(data.FrictionCount) * 10
+	score := 90.0
+	score -= float64(data.FrictionCount) * 5
 	if data.TurnCount > 5 {
-		score -= float64(data.TurnCount-5) * 3
+		score -= float64(data.TurnCount-5) * 2
 	}
-	score -= float64(data.OpenItemCount) * 5
+	score -= float64(data.OpenItemCount) * 3
 	return clampScore(score)
 }
 
-// scoreFriction returns 100 - frictionCount*20, clamped to [0,100].
+// scoreFriction returns 100 - frictionCount*15, clamped to [0,100].
+// 0 friction → 100, 3 → 55, 5 → 25, 7+ → 0.
 func scoreFriction(data SessionData) float64 {
-	return clampScore(100 - float64(data.FrictionCount)*20)
+	return clampScore(100 - float64(data.FrictionCount)*15)
 }
 
-// scoreFocus returns a score based on the file-to-turn ratio.
+// scoreFocus uses a gaussian curve on turns-per-file ratio.
+// Peak at ratio=1 (1 turn per file). Gradual falloff for scattered or over-focused sessions.
 // Returns 50 (neutral) when turns==0 or files==0.
 func scoreFocus(data SessionData) float64 {
 	if data.TurnCount == 0 || data.FilesCount == 0 {
 		return 50
 	}
-	ratio := float64(data.FilesCount) / float64(data.TurnCount)
-	var score float64
-	switch {
-	case ratio >= 0.5 && ratio <= 3.0:
-		score = 90
-	case ratio < 0.5:
-		score = 50 + ratio*80
-	default: // ratio > 3.0
-		score = 90 - (ratio-3.0)*10
-	}
-	return clampScore(score)
+	ratio := float64(data.TurnCount) / float64(data.FilesCount)
+	deviation := math.Log2(math.Max(ratio, 0.1))
+	return clampScore(95 * math.Exp(-deviation*deviation/4))
 }

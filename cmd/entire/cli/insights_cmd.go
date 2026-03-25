@@ -10,10 +10,12 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
+	checkpointid "github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/insights"
 	"github.com/entireio/cli/cmd/entire/cli/insightsdb"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
+	"github.com/entireio/cli/cmd/entire/cli/summarize"
 	"github.com/entireio/cli/cmd/entire/cli/termstyle"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/spf13/cobra"
@@ -70,6 +72,9 @@ func runInsights(ctx context.Context, w io.Writer, last int, agentFilter string,
 	// Non-fatal: continue with whatever is in the cache.
 	// If the cache is empty the command will show an empty report.
 	refreshCacheIfStale(ctx, idb) //nolint:errcheck,gosec // Non-fatal; continue with stale cache
+
+	// Generate summaries for recent sessions that lack them.
+	backfillSummaries(ctx, w, idb, last)
 
 	var rows []insightsdb.SessionRow
 	if agentFilter != "" {
@@ -175,6 +180,82 @@ func refreshCacheIfStale(ctx context.Context, idb *insightsdb.InsightsDB) error 
 	return nil
 }
 
+// backfillSummaries generates summaries for the last N sessions that lack them.
+// It reads transcripts from the checkpoint store, calls Claude to summarize,
+// and updates the cache. Errors on individual sessions are skipped.
+func backfillSummaries(ctx context.Context, w io.Writer, idb *insightsdb.InsightsDB, lastN int) {
+	rows, err := idb.QueryLastNSessions(ctx, lastN)
+	if err != nil {
+		return
+	}
+
+	// Filter to sessions without summaries.
+	var unsummarized []insightsdb.SessionRow
+	for _, r := range rows {
+		if !r.HasSummary {
+			unsummarized = append(unsummarized, r)
+		}
+	}
+	if len(unsummarized) == 0 {
+		return
+	}
+
+	repo, err := openRepository(ctx)
+	if err != nil {
+		return
+	}
+	store := checkpoint.NewGitStore(repo)
+	gen := &summarize.ClaudeGenerator{}
+
+	s := termstyle.New(w)
+	fmt.Fprintf(w, "%s Generating summaries for %d sessions...\n",
+		s.Render(s.Dim, "i"), len(unsummarized))
+
+	generated := 0
+
+	for _, row := range unsummarized {
+		cpID, parseErr := checkpointid.NewCheckpointID(row.CheckpointID)
+		if parseErr != nil {
+			continue
+		}
+
+		content, readErr := store.ReadSessionContent(ctx, cpID, row.SessionIndex)
+		if readErr != nil || len(content.Transcript) == 0 {
+			continue
+		}
+
+		condensed, buildErr := summarize.BuildCondensedTranscriptFromBytes(content.Transcript, content.Metadata.Agent)
+		if buildErr != nil || len(condensed) == 0 {
+			continue
+		}
+
+		input := summarize.Input{
+			Transcript:   condensed,
+			FilesTouched: row.FilesTouched,
+		}
+		summary, genErr := gen.Generate(ctx, input)
+		if genErr != nil || summary == nil {
+			continue
+		}
+
+		// Rebuild the row with summary data.
+		content.Metadata.Summary = summary
+		updated := metadataToSessionRow(row.CheckpointID, row.SessionIndex, &content.Metadata)
+
+		if updateErr := idb.UpdateSessionSummary(ctx, updated); updateErr != nil {
+			continue
+		}
+
+		generated++
+		fmt.Fprintf(w, "  %s %s (%d/%d)\n",
+			s.Render(s.Green, "✓"), row.CheckpointID[:12], generated, len(unsummarized))
+	}
+
+	if generated > 0 {
+		fmt.Fprintf(w, "  Generated %d summaries\n\n", generated)
+	}
+}
+
 // metadataToSessionRow converts CommittedMetadata into an insightsdb.SessionRow,
 // computing quality scores where summary data is available.
 func metadataToSessionRow(cpID string, sessionIndex int, meta *checkpoint.CommittedMetadata) insightsdb.SessionRow {
@@ -201,6 +282,7 @@ func metadataToSessionRow(cpID string, sessionIndex int, meta *checkpoint.Commit
 	}
 
 	if meta.Summary != nil {
+		row.HasSummary = true
 		row.Intent = meta.Summary.Intent
 		row.Outcome = meta.Summary.Outcome
 		row.Friction = meta.Summary.Friction
@@ -214,23 +296,26 @@ func metadataToSessionRow(cpID string, sessionIndex int, meta *checkpoint.Commit
 		for _, l := range meta.Summary.Learnings.Code {
 			row.Learnings = append(row.Learnings, insightsdb.LearningRow{Scope: "code", Finding: l.Finding, Path: l.Path})
 		}
-
-		// Compute session quality scores.
-		data := insights.SessionData{
-			TotalTokens:   row.TotalTokens,
-			FilesCount:    len(meta.FilesTouched),
-			FrictionCount: len(meta.Summary.Friction),
-			TurnCount:     row.TurnCount,
-			OpenItemCount: len(meta.Summary.OpenItems),
-			HasSummary:    true,
-		}
-		breakdown := insights.ScoreSession(data)
-		row.OverallScore = insights.ComputeOverall(breakdown)
-		row.ScoreTokenEff = breakdown.TokenEfficiency
-		row.ScoreFirstPass = breakdown.FirstPassSuccess
-		row.ScoreFriction = breakdown.FrictionScore
-		row.ScoreFocus = breakdown.FocusScore
 	}
+
+	// Always compute scores — token efficiency and focus work without summaries.
+	// Friction/first-pass default to neutral when no summary exists.
+	data := insights.SessionData{
+		TotalTokens:   row.TotalTokens,
+		FilesCount:    len(meta.FilesTouched),
+		FrictionCount: len(row.Friction),
+		TurnCount:     row.TurnCount,
+		HasSummary:    row.HasSummary,
+	}
+	if meta.Summary != nil {
+		data.OpenItemCount = len(meta.Summary.OpenItems)
+	}
+	breakdown := insights.ScoreSession(data)
+	row.OverallScore = insights.ComputeOverall(breakdown)
+	row.ScoreTokenEff = breakdown.TokenEfficiency
+	row.ScoreFirstPass = breakdown.FirstPassSuccess
+	row.ScoreFriction = breakdown.FrictionScore
+	row.ScoreFocus = breakdown.FocusScore
 
 	row.FilesTouched = meta.FilesTouched
 	return row
@@ -257,6 +342,7 @@ func sessionRowsToScores(rows []insightsdb.SessionRow) []insights.SessionScore {
 			TurnCount:     r.TurnCount,
 			FilesCount:    len(r.FilesTouched),
 			FrictionCount: len(r.Friction),
+			HasSummary:    r.HasSummary,
 		})
 	}
 	return scores
@@ -310,6 +396,9 @@ func renderInsightsTerminal(w io.Writer, report insights.Report) {
 			ss.FilesCount,
 			ss.FrictionCount,
 		)
+		if !ss.HasSummary {
+			statsLine += "  (no summary)"
+		}
 		fmt.Fprintln(w, s.Render(s.Gray, statsLine))
 		fmt.Fprintln(w)
 	}
