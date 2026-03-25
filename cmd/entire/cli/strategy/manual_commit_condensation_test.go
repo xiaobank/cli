@@ -337,3 +337,65 @@ func TestCalculateTokenUsage_DroidStartOffsetBeyondEnd(t *testing.T) {
 		t.Errorf("APICallCount = %d, want 0", usage.APICallCount)
 	}
 }
+
+func TestTotalTokensFromUsage_Nil(t *testing.T) {
+	t.Parallel()
+
+	if got := totalTokensFromUsage(nil); got != 0 {
+		t.Errorf("totalTokensFromUsage(nil) = %d, want 0", got)
+	}
+}
+
+func TestTotalTokensFromUsage_Flat(t *testing.T) {
+	t.Parallel()
+
+	tu := &agent.TokenUsage{
+		InputTokens:         100,
+		CacheCreationTokens: 20,
+		CacheReadTokens:     30,
+		OutputTokens:        50,
+	}
+	if got := totalTokensFromUsage(tu); got != 200 {
+		t.Errorf("totalTokensFromUsage(flat) = %d, want 200", got)
+	}
+}
+
+func TestTotalTokensFromUsage_WithSubagent(t *testing.T) {
+	t.Parallel()
+
+	tu := &agent.TokenUsage{
+		InputTokens:  100,
+		OutputTokens: 50,
+		SubagentTokens: &agent.TokenUsage{
+			InputTokens:  40,
+			OutputTokens: 10,
+		},
+	}
+	if got := totalTokensFromUsage(tu); got != 200 {
+		t.Errorf("totalTokensFromUsage(with subagent) = %d, want 200", got)
+	}
+}
+
+func TestTurnCountFromState_UsesTurnCount(t *testing.T) {
+	t.Parallel()
+
+	state := &SessionState{
+		SessionTurnCount: 7,
+		StepCount:        3,
+	}
+	if got := turnCountFromState(state); got != 7 {
+		t.Errorf("turnCountFromState(SessionTurnCount=7) = %d, want 7", got)
+	}
+}
+
+func TestTurnCountFromState_FallsBackToStepCount(t *testing.T) {
+	t.Parallel()
+
+	state := &SessionState{
+		SessionTurnCount: 0,
+		StepCount:        5,
+	}
+	if got := turnCountFromState(state); got != 5 {
+		t.Errorf("turnCountFromState(SessionTurnCount=0, StepCount=5) = %d, want 5", got)
+	}
+}

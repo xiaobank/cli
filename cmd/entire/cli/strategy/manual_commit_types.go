@@ -6,6 +6,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/insights"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/stringutil"
 )
@@ -52,9 +53,10 @@ type CondenseResult struct {
 	SessionID            string
 	CheckpointsCount     int
 	FilesTouched         []string
-	Prompts              []string // User prompts from the condensed session
-	TotalTranscriptLines int      // Total lines in transcript after this condensation
-	Transcript           []byte   // Raw transcript bytes for downstream consumers (trail title generation)
+	Prompts              []string               // User prompts from the condensed session
+	TotalTranscriptLines int                    // Total lines in transcript after this condensation
+	Transcript           []byte                 // Raw transcript bytes for downstream consumers (trail title generation)
+	SessionScore         *insights.SessionScore // Quality score (nil if scoring was skipped)
 }
 
 // ExtractedSessionData contains data extracted from a shadow branch.

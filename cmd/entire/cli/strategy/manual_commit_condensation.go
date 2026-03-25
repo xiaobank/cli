@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/agent/factoryaidroid"
@@ -17,6 +18,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	cpkg "github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/insights"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
@@ -243,6 +245,34 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 		}
 	}
 
+	// Compute session quality score (pure math, <1ms, no AI call)
+	var sessionScore *insights.SessionScore
+	if summary != nil {
+		data := insights.SessionData{
+			TotalTokens:   totalTokensFromUsage(sessionData.TokenUsage),
+			FilesCount:    len(sessionData.FilesTouched),
+			FrictionCount: len(summary.Friction),
+			TurnCount:     turnCountFromState(state),
+			OpenItemCount: len(summary.OpenItems),
+			HasSummary:    true,
+		}
+		breakdown := insights.ScoreSession(data)
+		overall := insights.ComputeOverall(breakdown)
+		sessionScore = &insights.SessionScore{
+			CheckpointID:  string(checkpointID),
+			SessionID:     state.SessionID,
+			Agent:         state.AgentType,
+			Model:         state.ModelName,
+			CreatedAt:     time.Now(),
+			Overall:       overall,
+			Breakdown:     breakdown,
+			TokensUsed:    data.TotalTokens,
+			TurnCount:     data.TurnCount,
+			FilesCount:    data.FilesCount,
+			FrictionCount: data.FrictionCount,
+		}
+	}
+
 	// Write checkpoint metadata using the checkpoint store
 	if err := store.WriteCommitted(ctx, cpkg.WriteCommittedOptions{
 		CheckpointID:                checkpointID,
@@ -277,6 +307,7 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 		Prompts:              sessionData.Prompts,
 		TotalTranscriptLines: sessionData.FullTranscriptLines,
 		Transcript:           sessionData.Transcript,
+		SessionScore:         sessionScore,
 	}, nil
 }
 
@@ -292,6 +323,26 @@ func buildSessionMetrics(state *SessionState) *cpkg.SessionMetrics {
 		ContextTokens:     state.ContextTokens,
 		ContextWindowSize: state.ContextWindowSize,
 	}
+}
+
+// totalTokensFromUsage flattens TokenUsage for scoring.
+func totalTokensFromUsage(tu *agent.TokenUsage) int {
+	if tu == nil {
+		return 0
+	}
+	total := tu.InputTokens + tu.CacheCreationTokens + tu.CacheReadTokens + tu.OutputTokens
+	if tu.SubagentTokens != nil {
+		total += totalTokensFromUsage(tu.SubagentTokens)
+	}
+	return total
+}
+
+// turnCountFromState extracts the turn count from session state.
+func turnCountFromState(state *SessionState) int {
+	if state.SessionTurnCount > 0 {
+		return state.SessionTurnCount
+	}
+	return state.StepCount // fallback to checkpoint count
 }
 
 func hasTokenUsageData(usage *agent.TokenUsage) bool {
