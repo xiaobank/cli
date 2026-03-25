@@ -18,6 +18,28 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/object"
 )
 
+// gitSubprocessEnv returns a copy of the current process environment suitable for
+// spawning git subprocesses that need credential-helper access.
+//
+// The betterleaks library (used for secret redaction) sets GIT_CONFIG_GLOBAL=/dev/null
+// and GIT_CONFIG_NOSYSTEM=1 in its init(), which prevents git from reading ~/.gitconfig
+// where credential helpers (e.g. gh auth git-credential) are configured. This function
+// strips those vars so that git can authenticate normally, while keeping
+// GIT_TERMINAL_PROMPT=0 to prevent interactive prompts in hook/non-TTY contexts.
+func gitSubprocessEnv() []string {
+	env := os.Environ()
+	filtered := make([]string, 0, len(env))
+	for _, e := range env {
+		if strings.HasPrefix(e, "GIT_CONFIG_GLOBAL=") ||
+			strings.HasPrefix(e, "GIT_CONFIG_NOSYSTEM=") ||
+			strings.HasPrefix(e, "GIT_NO_REPLACE_OBJECTS=") {
+			continue
+		}
+		filtered = append(filtered, e)
+	}
+	return append(filtered, "GIT_TERMINAL_PROMPT=0")
+}
+
 // pushBranchIfNeeded pushes a branch to the given target if it has unpushed changes.
 // The target can be a remote name (e.g., "origin") or a URL for direct push.
 // When pushing to a URL, the "has unpushed" optimization is skipped since there are
@@ -125,6 +147,7 @@ func tryPushSessionsCommon(ctx context.Context, remote, branchName string) error
 	// Use --no-verify to prevent recursive hook calls
 	cmd := exec.CommandContext(ctx, "git", "push", "--no-verify", remote, branchName)
 	cmd.Stdin = nil // Disconnect stdin to prevent hanging in hook context
+	cmd.Env = gitSubprocessEnv()
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -161,6 +184,7 @@ func fetchAndMergeSessionsCommon(ctx context.Context, target, branchName string)
 	// Use git CLI for fetch (go-git's fetch can be tricky with auth)
 	fetchCmd := exec.CommandContext(ctx, "git", "fetch", target, refSpec)
 	fetchCmd.Stdin = nil
+	fetchCmd.Env = gitSubprocessEnv()
 	if output, err := fetchCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("fetch failed: %s", output)
 	}
