@@ -67,17 +67,15 @@ func runInsights(ctx context.Context, w io.Writer, last int, agentFilter string,
 	}
 	defer func() { _ = idb.Close() }()
 
-	if err = refreshCacheIfStale(ctx, idb); err != nil {
-		// Non-fatal: log but continue with whatever is in the cache.
-		// If the cache is empty the command will show an empty report.
-		_ = err
-	}
+	// Non-fatal: continue with whatever is in the cache.
+	// If the cache is empty the command will show an empty report.
+	refreshCacheIfStale(ctx, idb) //nolint:errcheck,gosec // Non-fatal; continue with stale cache
 
 	var rows []insightsdb.SessionRow
 	if agentFilter != "" {
-		rows, err = idb.QueryByAgent(agentFilter, last)
+		rows, err = idb.QueryByAgent(ctx, agentFilter, last)
 	} else {
-		rows, err = idb.QueryLastNSessions(last)
+		rows, err = idb.QueryLastNSessions(ctx, last)
 	}
 	if err != nil {
 		return fmt.Errorf("query sessions: %w", err)
@@ -104,7 +102,8 @@ func runInsights(ctx context.Context, w io.Writer, last int, agentFilter string,
 	if outputJSON {
 		return renderInsightsJSON(w, report)
 	}
-	return renderInsightsTerminal(w, report)
+	renderInsightsTerminal(w, report)
+	return nil
 }
 
 // refreshCacheIfStale checks whether the insights cache is up-to-date with the
@@ -117,14 +116,14 @@ func refreshCacheIfStale(ctx context.Context, idb *insightsdb.InsightsDB) error 
 
 	// Resolve the current tip of entire/checkpoints/v1.
 	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
-	ref, err := repo.Reference(refName, true)
-	if err != nil {
+	ref, resolveErr := repo.Reference(refName, true)
+	if resolveErr != nil {
 		// Branch doesn't exist yet — nothing to cache.
-		return nil
+		return nil //nolint:nilerr // Missing branch is expected, not an error
 	}
 	currentTip := ref.Hash().String()
 
-	cachedTip, err := idb.GetBranchTip()
+	cachedTip, err := idb.GetBranchTip(ctx)
 	if err != nil {
 		return fmt.Errorf("get cached branch tip: %w", err)
 	}
@@ -144,7 +143,7 @@ func refreshCacheIfStale(ctx context.Context, idb *insightsdb.InsightsDB) error 
 		cpIDStr := info.CheckpointID.String()
 
 		// Check whether we already have this checkpoint cached.
-		has, hasErr := idb.HasCheckpoint(cpIDStr)
+		has, hasErr := idb.HasCheckpoint(ctx, cpIDStr)
 		if hasErr != nil {
 			return fmt.Errorf("check checkpoint %s: %w", cpIDStr, hasErr)
 		}
@@ -164,13 +163,16 @@ func refreshCacheIfStale(ctx context.Context, idb *insightsdb.InsightsDB) error 
 				continue
 			}
 			row := metadataToSessionRow(cpIDStr, i, &content.Metadata)
-			if insertErr := idb.InsertSession(row); insertErr != nil {
+			if insertErr := idb.InsertSession(ctx, row); insertErr != nil {
 				return fmt.Errorf("insert session %s/%d: %w", cpIDStr, i, insertErr)
 			}
 		}
 	}
 
-	return idb.SetBranchTip(currentTip)
+	if err := idb.SetBranchTip(ctx, currentTip); err != nil {
+		return fmt.Errorf("set branch tip: %w", err)
+	}
+	return nil
 }
 
 // metadataToSessionRow converts CommittedMetadata into an insightsdb.SessionRow,
@@ -271,7 +273,7 @@ func renderInsightsJSON(w io.Writer, report insights.Report) error {
 }
 
 // renderInsightsTerminal writes a styled terminal view of the insights report.
-func renderInsightsTerminal(w io.Writer, report insights.Report) error {
+func renderInsightsTerminal(w io.Writer, report insights.Report) {
 	s := termstyle.New(w)
 
 	fmt.Fprintln(w, s.Render(s.Bold, "Entire Insights"))
@@ -361,6 +363,4 @@ func renderInsightsTerminal(w io.Writer, report insights.Report) error {
 		}
 		fmt.Fprintln(w)
 	}
-
-	return nil
 }

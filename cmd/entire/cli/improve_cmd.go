@@ -68,19 +68,17 @@ func runImprove(ctx context.Context, w io.Writer, last int, dryRun bool, outputJ
 	}
 	defer func() { _ = idb.Close() }()
 
-	if err = refreshCacheIfStale(ctx, idb); err != nil {
-		// Non-fatal: continue with whatever is in the cache.
-		_ = err
-	}
+	// Non-fatal: continue with whatever is in the cache.
+	refreshCacheIfStale(ctx, idb) //nolint:errcheck,gosec // Non-fatal; continue with stale cache
 
 	// Phase 1: Query SQLite index for recurring friction themes (2+ occurrences).
-	frictionThemes, err := idb.QueryRecurringFriction(2)
+	frictionThemes, err := idb.QueryRecurringFriction(ctx, 2)
 	if err != nil {
 		return fmt.Errorf("query recurring friction: %w", err)
 	}
 
 	// Fetch the last N sessions for summary stats.
-	rows, err := idb.QueryLastNSessions(last)
+	rows, err := idb.QueryLastNSessions(ctx, last)
 	if err != nil {
 		return fmt.Errorf("query sessions: %w", err)
 	}
@@ -166,7 +164,7 @@ func attachTranscriptExcerpts(ctx context.Context, idb *insightsdb.InsightsDB, p
 	}
 
 	for i := range patterns[:limit] {
-		cpIDs, queryErr := idb.QuerySessionsWithFriction("%" + patterns[i].Theme + "%")
+		cpIDs, queryErr := idb.QuerySessionsWithFriction(ctx, "%"+patterns[i].Theme+"%")
 		if queryErr != nil {
 			continue
 		}

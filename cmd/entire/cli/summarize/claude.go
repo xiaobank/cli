@@ -75,7 +75,7 @@ func (g *ClaudeGenerator) Generate(ctx context.Context, input Input) (*checkpoin
 
 	resultJSON, err := runner.Execute(ctx, prompt)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("execute claude CLI: %w", err)
 	}
 
 	var summary checkpoint.Summary

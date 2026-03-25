@@ -1,6 +1,7 @@
 package insightsdb
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
@@ -15,25 +16,25 @@ type FrictionTheme struct {
 
 // QueryLastNSessions returns the most recent N sessions ordered by created_at DESC.
 // Denormalized fields (FilesTouched, Friction, Learnings) are populated.
-func (idb *InsightsDB) QueryLastNSessions(n int) ([]SessionRow, error) {
-	return idb.querySessions(
+func (idb *InsightsDB) QueryLastNSessions(ctx context.Context, n int) ([]SessionRow, error) {
+	return idb.querySessions(ctx,
 		"SELECT "+sessionColumns+" FROM sessions ORDER BY created_at DESC LIMIT ?",
 		n,
 	)
 }
 
 // QueryByAgent returns sessions filtered by agent name, most recent first.
-func (idb *InsightsDB) QueryByAgent(agent string, limit int) ([]SessionRow, error) {
-	return idb.querySessions(
+func (idb *InsightsDB) QueryByAgent(ctx context.Context, agent string, limit int) ([]SessionRow, error) {
+	return idb.querySessions(ctx,
 		"SELECT "+sessionColumns+" FROM sessions WHERE agent = ? ORDER BY created_at DESC LIMIT ?",
 		agent, limit,
 	)
 }
 
 // SessionCount returns the total number of cached sessions.
-func (idb *InsightsDB) SessionCount() (int, error) {
+func (idb *InsightsDB) SessionCount(ctx context.Context) (int, error) {
 	var count int
-	if err := idb.db.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&count); err != nil {
+	if err := idb.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM sessions").Scan(&count); err != nil {
 		return 0, fmt.Errorf("session count: %w", err)
 	}
 	return count, nil
@@ -41,8 +42,8 @@ func (idb *InsightsDB) SessionCount() (int, error) {
 
 // QueryRecurringFriction returns friction themes occurring at least minCount times,
 // ordered by count descending.
-func (idb *InsightsDB) QueryRecurringFriction(minCount int) ([]FrictionTheme, error) {
-	rows, err := idb.db.Query(`
+func (idb *InsightsDB) QueryRecurringFriction(ctx context.Context, minCount int) ([]FrictionTheme, error) {
+	rows, err := idb.db.QueryContext(ctx, `
 		SELECT text, COUNT(*) AS cnt, GROUP_CONCAT(DISTINCT checkpoint_id) AS sessions
 		FROM friction
 		GROUP BY text
@@ -64,13 +65,16 @@ func (idb *InsightsDB) QueryRecurringFriction(minCount int) ([]FrictionTheme, er
 		theme.Sessions = splitCSV(sessionsCSV)
 		themes = append(themes, theme)
 	}
-	return themes, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate friction themes: %w", err)
+	}
+	return themes, nil
 }
 
 // QuerySessionsWithFriction returns checkpoint IDs of sessions containing
 // friction matching the given SQL LIKE pattern (e.g., "%tool call failed%").
-func (idb *InsightsDB) QuerySessionsWithFriction(pattern string) ([]string, error) {
-	rows, err := idb.db.Query(
+func (idb *InsightsDB) QuerySessionsWithFriction(ctx context.Context, pattern string) ([]string, error) {
+	rows, err := idb.db.QueryContext(ctx,
 		"SELECT DISTINCT checkpoint_id FROM friction WHERE text LIKE ?",
 		pattern,
 	)
@@ -87,7 +91,10 @@ func (idb *InsightsDB) QuerySessionsWithFriction(pattern string) ([]string, erro
 		}
 		ids = append(ids, id)
 	}
-	return ids, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate session friction: %w", err)
+	}
+	return ids, nil
 }
 
 // sessionColumns is the ordered column list for SELECT queries on the sessions table.
@@ -102,8 +109,8 @@ const sessionColumns = `
 
 // querySessions executes a SELECT on sessions with the given args,
 // then populates denormalized fields for each row.
-func (idb *InsightsDB) querySessions(query string, args ...interface{}) ([]SessionRow, error) {
-	rows, err := idb.db.Query(query, args...)
+func (idb *InsightsDB) querySessions(ctx context.Context, query string, args ...interface{}) ([]SessionRow, error) {
+	rows, err := idb.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query sessions: %w", err)
 	}
@@ -122,7 +129,7 @@ func (idb *InsightsDB) querySessions(query string, args ...interface{}) ([]Sessi
 	}
 
 	for i := range sessions {
-		if err = idb.populateDenormalized(&sessions[i]); err != nil {
+		if err = idb.populateDenormalized(ctx, &sessions[i]); err != nil {
 			return nil, err
 		}
 	}
@@ -169,22 +176,22 @@ func scanSession(rows *sql.Rows) (SessionRow, error) {
 }
 
 // populateDenormalized loads files_touched, friction, and learnings for the session.
-func (idb *InsightsDB) populateDenormalized(row *SessionRow) error {
+func (idb *InsightsDB) populateDenormalized(ctx context.Context, row *SessionRow) error {
 	var err error
-	row.FilesTouched, err = idb.loadFilesTouched(row.CheckpointID, row.SessionIndex)
+	row.FilesTouched, err = idb.loadFilesTouched(ctx, row.CheckpointID, row.SessionIndex)
 	if err != nil {
 		return err
 	}
-	row.Friction, err = idb.loadFriction(row.CheckpointID, row.SessionIndex)
+	row.Friction, err = idb.loadFriction(ctx, row.CheckpointID, row.SessionIndex)
 	if err != nil {
 		return err
 	}
-	row.Learnings, err = idb.loadLearnings(row.CheckpointID, row.SessionIndex)
+	row.Learnings, err = idb.loadLearnings(ctx, row.CheckpointID, row.SessionIndex)
 	return err
 }
 
-func (idb *InsightsDB) loadFilesTouched(checkpointID string, sessionIndex int) ([]string, error) {
-	rows, err := idb.db.Query(
+func (idb *InsightsDB) loadFilesTouched(ctx context.Context, checkpointID string, sessionIndex int) ([]string, error) {
+	rows, err := idb.db.QueryContext(ctx,
 		"SELECT file_path FROM files_touched WHERE checkpoint_id = ? AND session_index = ?",
 		checkpointID, sessionIndex,
 	)
@@ -201,11 +208,14 @@ func (idb *InsightsDB) loadFilesTouched(checkpointID string, sessionIndex int) (
 		}
 		files = append(files, f)
 	}
-	return files, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate files_touched: %w", err)
+	}
+	return files, nil
 }
 
-func (idb *InsightsDB) loadFriction(checkpointID string, sessionIndex int) ([]string, error) {
-	rows, err := idb.db.Query(
+func (idb *InsightsDB) loadFriction(ctx context.Context, checkpointID string, sessionIndex int) ([]string, error) {
+	rows, err := idb.db.QueryContext(ctx,
 		"SELECT text FROM friction WHERE checkpoint_id = ? AND session_index = ?",
 		checkpointID, sessionIndex,
 	)
@@ -222,11 +232,14 @@ func (idb *InsightsDB) loadFriction(checkpointID string, sessionIndex int) ([]st
 		}
 		friction = append(friction, f)
 	}
-	return friction, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate friction: %w", err)
+	}
+	return friction, nil
 }
 
-func (idb *InsightsDB) loadLearnings(checkpointID string, sessionIndex int) ([]LearningRow, error) {
-	rows, err := idb.db.Query(
+func (idb *InsightsDB) loadLearnings(ctx context.Context, checkpointID string, sessionIndex int) ([]LearningRow, error) {
+	rows, err := idb.db.QueryContext(ctx,
 		"SELECT scope, finding, path FROM learnings WHERE checkpoint_id = ? AND session_index = ?",
 		checkpointID, sessionIndex,
 	)
@@ -245,7 +258,10 @@ func (idb *InsightsDB) loadLearnings(checkpointID string, sessionIndex int) ([]L
 		l.Path = path.String
 		learnings = append(learnings, l)
 	}
-	return learnings, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate learnings: %w", err)
+	}
+	return learnings, nil
 }
 
 // splitCSV splits a GROUP_CONCAT result on commas.
@@ -255,7 +271,7 @@ func splitCSV(s string) []string {
 	}
 	var parts []string
 	start := 0
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		if s[i] == ',' {
 			parts = append(parts, s[start:i])
 			start = i + 1
