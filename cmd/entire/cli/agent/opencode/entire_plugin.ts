@@ -115,12 +115,19 @@ export const EntirePlugin: Plugin = async ({ directory }) => {
             break
           }
 
+          case "session.idle":
           case "session.status": {
-            // session.status fires in both TUI and non-interactive (run) mode.
-            // session.idle is deprecated and not reliably emitted in run mode.
-            const props = (event as any).properties
-            if (props?.status?.type !== "idle") break
-            const sessionID = props?.sessionID ?? currentSessionID
+            // session.status fires with status.type "idle" when the agent finishes.
+            // session.idle is a separate event that some OpenCode versions emit instead.
+            // Handle both for compatibility across OpenCode versions.
+            let sessionID: string | null = null
+            if (event.type === "session.idle") {
+              sessionID = (event as any).properties?.sessionID ?? currentSessionID
+            } else {
+              const props = (event as any).properties
+              if (props?.status?.type !== "idle") break
+              sessionID = props?.sessionID ?? currentSessionID
+            }
             if (!sessionID) break
             // Use sync variant: `opencode run` exits on the same idle event,
             // so an async hook would be killed before completing.
