@@ -62,6 +62,11 @@ func Compact(content []byte, opts CompactOptions) ([]byte, error) {
 		return compactOpenCode(truncated, opts)
 	}
 
+	// Detect Gemini format: a single JSON object with "sessionId" and "messages" keys (no "info").
+	if isGeminiFormat(truncated) {
+		return compactGemini(truncated, opts)
+	}
+
 	meta := newCompactMeta(opts)
 	reader := bufio.NewReader(bytes.NewReader(truncated))
 	var result []byte
@@ -627,4 +632,180 @@ func msToTimestamp(ms int64) json.RawMessage {
 	}
 	t := time.UnixMilli(ms).UTC()
 	return mustMarshal(t.Format(time.RFC3339Nano))
+}
+
+// --- Gemini CLI format support ---
+//
+// Gemini transcripts are a single JSON object (not JSONL):
+//
+//	{"sessionId":"...","messages":[{"id":"...","timestamp":"...","type":"user"|"gemini"|"info","content":"...","toolCalls":[...]}]}
+//
+// Key differences: "gemini" for assistant type, "info" messages are dropped,
+// toolCalls at message level, timestamps are ISO strings.
+
+// geminiDroppedTypes are Gemini message types that carry no transcript-relevant data.
+var geminiDroppedTypes = map[string]bool{
+	"info": true,
+}
+
+// isGeminiFormat checks whether content is a single JSON object with the
+// Gemini session shape: top-level "sessionId" and "messages" keys, but NO "info"
+// key (which distinguishes it from OpenCode format).
+func isGeminiFormat(content []byte) bool {
+	trimmed := bytes.TrimSpace(content)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return false
+	}
+	var probe struct {
+		SessionID *json.RawMessage `json:"sessionId"`
+		Messages  *json.RawMessage `json:"messages"`
+		Info      *json.RawMessage `json:"info"`
+	}
+	if json.Unmarshal(trimmed, &probe) != nil {
+		return false
+	}
+	return probe.SessionID != nil && probe.Messages != nil && probe.Info == nil
+}
+
+// geminiMessage mirrors the Gemini message structure for unmarshaling.
+type geminiMessage struct {
+	ID        string           `json:"id"`
+	Timestamp string           `json:"timestamp"`
+	Type      string           `json:"type"`
+	Content   string           `json:"content"`
+	ToolCalls []geminiToolCall `json:"toolCalls"`
+}
+
+// geminiToolCall represents a single tool invocation within a Gemini message.
+type geminiToolCall struct {
+	ID     string                 `json:"id"`
+	Name   string                 `json:"name"`
+	Args   map[string]interface{} `json:"args"`
+	Result []geminiToolResult     `json:"result"`
+	Status string                 `json:"status"`
+}
+
+// geminiToolResult represents a tool result entry from the Gemini format.
+type geminiToolResult struct {
+	FunctionResponse struct {
+		ID       string `json:"id"`
+		Name     string `json:"name"`
+		Response struct {
+			Output string `json:"output"`
+		} `json:"response"`
+	} `json:"functionResponse"`
+}
+
+// compactGemini converts a full Gemini session JSON into transcript lines.
+func compactGemini(content []byte, opts CompactOptions) ([]byte, error) {
+	var session struct {
+		Messages []geminiMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(content), &session); err != nil {
+		return nil, fmt.Errorf("parsing gemini session: %w", err)
+	}
+
+	meta := newCompactMeta(opts)
+	var result []byte
+
+	for _, msg := range session.Messages {
+		if geminiDroppedTypes[msg.Type] {
+			continue
+		}
+
+		ts := mustMarshal(msg.Timestamp)
+
+		switch msg.Type {
+		case TypeUser:
+			line := convertGeminiUser(msg, ts, meta)
+			if line != nil {
+				result = append(result, line...)
+				result = append(result, '\n')
+			}
+		case "gemini":
+			line := convertGeminiAssistant(msg, ts, meta)
+			if line != nil {
+				result = append(result, line...)
+				result = append(result, '\n')
+			}
+		}
+	}
+
+	return result, nil
+}
+
+// convertGeminiUser produces a single user line with plain string content.
+func convertGeminiUser(msg geminiMessage, ts json.RawMessage, meta compactMeta) []byte {
+	if msg.Content == "" {
+		return nil
+	}
+
+	return marshalOrdered(
+		"v", meta.v,
+		"agent", meta.agent,
+		"cli_version", meta.cliVersion,
+		"type", mustMarshal(TypeUser),
+		"ts", ts,
+		"id", mustMarshal(msg.ID),
+		"content", mustMarshal(msg.Content),
+	)
+}
+
+// convertGeminiAssistant produces a single assistant line with content array
+// containing text blocks and tool_use blocks.
+func convertGeminiAssistant(msg geminiMessage, ts json.RawMessage, meta compactMeta) []byte {
+	contentBlocks := make([]map[string]json.RawMessage, 0, 1+len(msg.ToolCalls))
+
+	if msg.Content != "" {
+		contentBlocks = append(contentBlocks, map[string]json.RawMessage{
+			"type": mustMarshal(ContentTypeText),
+			"text": mustMarshal(msg.Content),
+		})
+	}
+
+	for _, tc := range msg.ToolCalls {
+		toolBlock := map[string]json.RawMessage{
+			"type":  mustMarshal(ContentTypeToolUse),
+			"id":    mustMarshal(tc.ID),
+			"name":  mustMarshal(tc.Name),
+			"input": mustMarshal(tc.Args),
+		}
+
+		toolBlock["result"] = geminiToolResultCompact(tc)
+		contentBlocks = append(contentBlocks, toolBlock)
+	}
+
+	if len(contentBlocks) == 0 {
+		return nil
+	}
+
+	contentJSON, err := json.Marshal(contentBlocks)
+	if err != nil {
+		return nil
+	}
+
+	return marshalOrdered(
+		"v", meta.v,
+		"agent", meta.agent,
+		"cli_version", meta.cliVersion,
+		"type", mustMarshal(TypeAssistant),
+		"ts", ts,
+		"id", mustMarshal(msg.ID),
+		"content", json.RawMessage(contentJSON),
+	)
+}
+
+// geminiToolResultCompact builds the compact {"output":"...","status":"..."}
+// object from a Gemini tool call.
+func geminiToolResultCompact(tc geminiToolCall) json.RawMessage {
+	output := ""
+	if len(tc.Result) > 0 {
+		output = tc.Result[0].FunctionResponse.Response.Output
+	}
+
+	result := map[string]string{
+		"output": output,
+		"status": tc.Status,
+	}
+	return mustMarshal(result)
 }
