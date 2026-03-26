@@ -40,11 +40,11 @@ func newCompactMeta(opts Options) compactMeta {
 // Compact converts a full.jsonl transcript into the condensed transcript.jsonl format.
 //
 // The output format puts version, agent, and cli_version on every line,
-// flattens the message wrapper, and splits user tool results into separate entries:
+// merges streaming assistant fragments with the same message ID, and inlines
+// tool results into the preceding assistant's tool_use blocks:
 //
 //	{"v":1,"agent":"claude-code","cli_version":"0.42.0","type":"user","ts":"...","content":"..."}
-//	{"v":1,"agent":"claude-code","cli_version":"0.42.0","type":"user_tool_result","ts":"...","tool_use_id":"...","result":{...}}
-//	{"v":1,"agent":"claude-code","cli_version":"0.42.0","type":"assistant","ts":"...","id":"msg_xxx","content":[...]}
+//	{"v":1,"agent":"claude-code","cli_version":"0.42.0","type":"assistant","ts":"...","id":"msg_xxx","content":[{"type":"text","text":"..."},{"type":"tool_use","id":"...","name":"...","input":{...},"result":{"output":"...","status":"..."}}]}
 func Compact(content []byte, opts Options) ([]byte, error) {
 	truncated := transcript.SliceFromLine(content, opts.StartLine)
 	if truncated == nil {
@@ -108,17 +108,121 @@ func normalizeKind(raw map[string]json.RawMessage) string {
 type linePreprocessor func(map[string]json.RawMessage) map[string]json.RawMessage
 
 // compactJSONL converts JSONL transcripts (Claude Code, Cursor) into the
-// compact format, one line at a time.
+// compact format.
 func compactJSONL(content []byte, opts Options) ([]byte, error) {
 	return compactJSONLWith(content, opts, nil)
 }
 
-// compactJSONLWith converts JSONL transcripts into the compact format,
-// applying an optional per-line preprocessor before conversion.
+// parsedEntry is an intermediate representation of a JSONL line used during
+// the two-pass compact conversion.
+type parsedEntry struct {
+	kind      string // "user" or "assistant"
+	ts        json.RawMessage
+	id        string          // message ID (assistant only)
+	content   json.RawMessage // stripped assistant content array, or nil
+	userText  string          // extracted user text
+	toolUseID string          // tool_use_id from user tool_result (single result per entry)
+	toolOut   string          // tool output text (from toolUseResult.stdout or tool_result.content)
+	isError   bool            // whether the tool result was an error
+}
+
+// compactJSONLWith converts JSONL transcripts into the compact format.
+// It uses a two-pass approach:
+//  1. Parse all lines into intermediate entries
+//  2. Merge streaming assistant fragments (same msg ID), inline tool results
+//     from user lines into preceding assistant tool_use blocks, and drop
+//     tool-result-only user lines.
 func compactJSONLWith(content []byte, opts Options, preprocess linePreprocessor) ([]byte, error) {
 	meta := newCompactMeta(opts)
-	reader := bufio.NewReader(bytes.NewReader(content))
+
+	// Pass 1: parse all lines into intermediate entries.
+	entries, err := parseJSONLEntries(content, preprocess)
+	if err != nil {
+		return nil, err
+	}
+
+	// Pass 2: merge and emit.
 	var result []byte
+	for i := 0; i < len(entries); i++ {
+		e := entries[i]
+
+		switch e.kind {
+		case transcript.TypeAssistant:
+			// Merge consecutive assistant entries with the same message ID.
+			merged := e
+			for i+1 < len(entries) && entries[i+1].kind == transcript.TypeAssistant && entries[i+1].id == e.id {
+				i++
+				merged = mergeAssistantEntries(merged, entries[i])
+			}
+
+			// Look ahead for a user tool_result to inline.
+			if i+1 < len(entries) && entries[i+1].kind == transcript.TypeUser && entries[i+1].toolUseID != "" {
+				userEntry := entries[i+1]
+				merged = inlineToolResult(merged, userEntry)
+				i++ // consume the user tool_result entry
+
+				// If the consumed user entry also had text content, emit it
+				// as a separate user line after the assistant.
+				if userEntry.userText != "" {
+					emitAssistant(&result, meta, merged)
+					emitUser(&result, meta, userEntry)
+					continue
+				}
+			}
+
+			if isEmptyContentArray(merged.content) {
+				continue
+			}
+
+			emitAssistant(&result, meta, merged)
+
+		case transcript.TypeUser:
+			// User entries that are purely tool results were already consumed
+			// by the assistant look-ahead above. If we reach one here it was
+			// not preceded by an assistant with a matching tool_use, so emit
+			// it only if it has text content.
+			if e.toolUseID != "" && e.userText == "" {
+				continue
+			}
+			emitUser(&result, meta, e)
+		}
+	}
+
+	return result, nil
+}
+
+func emitAssistant(result *[]byte, meta compactMeta, e parsedEntry) {
+	b := marshalOrdered(
+		"v", meta.v,
+		"agent", meta.agent,
+		"cli_version", meta.cliVersion,
+		"type", mustMarshal(transcript.TypeAssistant),
+		"ts", e.ts,
+		"id", jsonStringOrNil(e.id),
+		"content", e.content,
+	)
+	*result = append(*result, b...)
+	*result = append(*result, '\n')
+}
+
+func emitUser(result *[]byte, meta compactMeta, e parsedEntry) {
+	b := marshalOrdered(
+		"v", meta.v,
+		"agent", meta.agent,
+		"cli_version", meta.cliVersion,
+		"type", mustMarshal(transcript.TypeUser),
+		"ts", e.ts,
+		"content", mustMarshal(e.userText),
+	)
+	*result = append(*result, b...)
+	*result = append(*result, '\n')
+}
+
+// parseJSONLEntries parses all JSONL lines into intermediate entries,
+// filtering dropped types and malformed lines.
+func parseJSONLEntries(content []byte, preprocess linePreprocessor) ([]parsedEntry, error) {
+	reader := bufio.NewReader(bytes.NewReader(content))
+	var entries []parsedEntry
 
 	for {
 		lineBytes, err := reader.ReadBytes('\n')
@@ -127,10 +231,8 @@ func compactJSONLWith(content []byte, opts Options, preprocess linePreprocessor)
 		}
 
 		if len(bytes.TrimSpace(lineBytes)) > 0 {
-			outputLines := convertLine(lineBytes, meta, preprocess)
-			for _, ol := range outputLines {
-				result = append(result, ol...)
-				result = append(result, '\n')
+			if e, ok := parseLine(lineBytes, preprocess); ok {
+				entries = append(entries, e)
 			}
 		}
 
@@ -139,55 +241,128 @@ func compactJSONLWith(content []byte, opts Options, preprocess linePreprocessor)
 		}
 	}
 
-	return result, nil
+	return entries, nil
 }
 
-// convertLine converts a single JSONL line into zero or more compact transcript lines.
-func convertLine(lineBytes []byte, meta compactMeta, preprocess linePreprocessor) [][]byte {
+// parseLine converts a single JSONL line into a parsedEntry.
+// Returns ok=false for dropped/malformed lines.
+func parseLine(lineBytes []byte, preprocess linePreprocessor) (parsedEntry, bool) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(lineBytes, &raw); err != nil {
-		return nil
+		return parsedEntry{}, false
 	}
 
 	if preprocess != nil {
 		raw = preprocess(raw)
 	}
 
-	switch normalizeKind(raw) {
-	case transcript.TypeAssistant:
-		return convertAssistant(raw, meta)
-	case transcript.TypeUser:
-		return convertUser(raw, meta)
-	default:
-		return nil
+	kind := normalizeKind(raw)
+	if kind == "" {
+		return parsedEntry{}, false
 	}
-}
 
-func convertAssistant(raw map[string]json.RawMessage, meta compactMeta) [][]byte {
-	var id, content json.RawMessage
-	if msg := parseMessage(raw); msg != nil {
-		id = msg["id"]
-		if contentRaw, ok := msg["content"]; ok {
-			content = stripAssistantContent(contentRaw)
+	e := parsedEntry{
+		kind: kind,
+		ts:   raw["timestamp"],
+	}
+
+	msg := parseMessage(raw)
+
+	switch kind {
+	case transcript.TypeAssistant:
+		if msg != nil {
+			e.id = unquote(msg["id"])
+			if contentRaw, ok := msg["content"]; ok {
+				e.content = stripAssistantContent(contentRaw)
+			}
+		}
+
+	case transcript.TypeUser:
+		if msg != nil {
+			if contentRaw, ok := msg["content"]; ok {
+				text, toolResults := extractUserContent(contentRaw)
+				e.userText = text
+				if len(toolResults) > 0 {
+					e.toolUseID = toolResults[0].toolUseID
+					e.toolOut = toolResults[0].output
+					e.isError = toolResults[0].isError
+				}
+			}
+		}
+		// Also check toolUseResult.stdout which may have the output.
+		if turRaw, ok := raw["toolUseResult"]; ok {
+			var tur map[string]json.RawMessage
+			if json.Unmarshal(turRaw, &tur) == nil {
+				if stdout := unquote(tur["stdout"]); stdout != "" {
+					e.toolOut = stdout
+				}
+			}
 		}
 	}
 
-	// Drop assistant lines that are empty after stripping thinking blocks
-	// (e.g. streaming intermediates with only thinking content).
-	if isEmptyContentArray(content) {
-		return nil
+	return e, true
+}
+
+// mergeAssistantEntries combines two assistant entries with the same message ID.
+// Content arrays are concatenated; the later timestamp wins.
+func mergeAssistantEntries(a, b parsedEntry) parsedEntry {
+	merged := a
+	merged.ts = b.ts
+
+	var aBlocks, bBlocks []json.RawMessage
+	_ = json.Unmarshal(a.content, &aBlocks) //nolint:errcheck // best-effort merge
+	_ = json.Unmarshal(b.content, &bBlocks) //nolint:errcheck // best-effort merge
+	all := append(aBlocks, bBlocks...)      //nolint:gocritic // intentional append to new slice
+	if data, err := json.Marshal(all); err == nil {
+		merged.content = data
 	}
 
-	b := marshalOrdered(
-		"v", meta.v,
-		"agent", meta.agent,
-		"cli_version", meta.cliVersion,
-		"type", mustMarshal(transcript.TypeAssistant),
-		"ts", raw["timestamp"],
-		"id", id,
-		"content", content,
+	return merged
+}
+
+// inlineToolResult adds a "result" field to the last tool_use block in the
+// assistant entry's content, using the output from a user tool_result entry.
+func inlineToolResult(assistant, user parsedEntry) parsedEntry {
+	var blocks []map[string]json.RawMessage
+	if json.Unmarshal(assistant.content, &blocks) != nil || len(blocks) == 0 {
+		return assistant
+	}
+
+	// Find the tool_use block matching the user's tool_use_id (or the last one).
+	idx := len(blocks) - 1
+	for i := len(blocks) - 1; i >= 0; i-- {
+		if unquote(blocks[i]["type"]) == transcript.ContentTypeToolUse {
+			if user.toolUseID == "" || unquote(blocks[i]["id"]) == user.toolUseID {
+				idx = i
+				break
+			}
+		}
+	}
+
+	status := "success"
+	if user.isError {
+		status = "error"
+	}
+
+	resultObj := marshalOrdered(
+		"output", mustMarshal(user.toolOut),
+		"status", mustMarshal(status),
 	)
-	return [][]byte{b}
+	blocks[idx]["result"] = resultObj
+
+	if data, err := json.Marshal(blocks); err == nil {
+		assistant.content = data
+	}
+
+	return assistant
+}
+
+// jsonStringOrNil returns a JSON-encoded string, or nil if s is empty.
+func jsonStringOrNil(s string) json.RawMessage {
+	if s == "" {
+		return nil
+	}
+	return mustMarshal(s)
 }
 
 // isEmptyContentArray returns true if raw is a JSON empty array (`[]`).
@@ -196,60 +371,10 @@ func isEmptyContentArray(raw json.RawMessage) bool {
 	return json.Unmarshal(raw, &arr) == nil && len(arr) == 0
 }
 
-func convertUser(raw map[string]json.RawMessage, meta compactMeta) [][]byte {
-	var lines [][]byte
-	ts := raw["timestamp"]
-
-	var textContent string
-	var toolResults []toolResultEntry
-
-	if msg := parseMessage(raw); msg != nil {
-		if contentRaw, ok := msg["content"]; ok {
-			textContent, toolResults = extractUserContent(contentRaw)
-		}
-	}
-
-	b := marshalOrdered(
-		"v", meta.v,
-		"agent", meta.agent,
-		"cli_version", meta.cliVersion,
-		"type", mustMarshal(transcript.TypeUser),
-		"ts", ts,
-		"content", mustMarshal(textContent),
-	)
-	lines = append(lines, b)
-
-	// full.jsonl has a single toolUseResult per user entry, not one per tool_use_id.
-	// When there are multiple tool_result blocks, each user_tool_result line gets the
-	// same minimized result — a known limitation of the source format.
-	var minimizedResult json.RawMessage
-	if turRaw, ok := raw["toolUseResult"]; ok {
-		minimizedResult = minimizeToolUseResult(turRaw)
-	}
-
-	for _, tr := range toolResults {
-		result := minimizedResult
-		if result == nil {
-			result = mustMarshal(map[string]interface{}{})
-		}
-
-		b := marshalOrdered(
-			"v", meta.v,
-			"agent", meta.agent,
-			"cli_version", meta.cliVersion,
-			"type", mustMarshal("user_tool_result"),
-			"ts", ts,
-			"tool_use_id", mustMarshal(tr.toolUseID),
-			"result", result,
-		)
-		lines = append(lines, b)
-	}
-
-	return lines
-}
-
 type toolResultEntry struct {
 	toolUseID string
+	output    string
+	isError   bool
 }
 
 // parseMessage extracts and parses the "message" field from a JSONL transcript
@@ -286,8 +411,14 @@ func extractUserContent(contentRaw json.RawMessage) (string, []toolResultEntry) 
 		blockType := unquote(block["type"])
 
 		if blockType == "tool_result" {
+			var isErr bool
+			if raw, ok := block["is_error"]; ok {
+				_ = json.Unmarshal(raw, &isErr) //nolint:errcheck // best-effort
+			}
 			toolResults = append(toolResults, toolResultEntry{
 				toolUseID: unquote(block["tool_use_id"]),
+				output:    unquote(block["content"]),
+				isError:   isErr,
 			})
 			continue
 		}
@@ -340,23 +471,6 @@ func stripAssistantContent(contentRaw json.RawMessage) json.RawMessage {
 		return contentRaw
 	}
 	return b
-}
-
-// minimizeToolUseResult keeps only fields needed for replaying tool calls
-// (type, file metadata, error, answers). Output text and other verbose
-// fields are dropped to reduce transcript size.
-func minimizeToolUseResult(raw json.RawMessage) json.RawMessage {
-	var obj map[string]json.RawMessage
-	if json.Unmarshal(raw, &obj) != nil {
-		return raw
-	}
-
-	return marshalOrdered(
-		"type", obj["type"],
-		"file", obj["file"],
-		"error", obj["error"],
-		"answers", obj["answers"],
-	)
 }
 
 // marshalOrdered produces a JSON object with keys in the given order.

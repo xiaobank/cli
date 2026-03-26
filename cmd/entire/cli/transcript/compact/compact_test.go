@@ -14,6 +14,14 @@ var defaultOpts = Options{
 	StartLine:  0,
 }
 
+func agentOpts(agent string) Options {
+	return Options{
+		Agent:      agent,
+		CLIVersion: "0.5.1",
+		StartLine:  0,
+	}
+}
+
 // --- Claude Code tests ---
 
 func TestCompact_SimpleConversation(t *testing.T) {
@@ -70,31 +78,16 @@ func TestCompact_AssistantThinkingOnly(t *testing.T) {
 func TestCompact_UserWithToolResult(t *testing.T) {
 	t.Parallel()
 
-	input := []byte(`{"type":"user","uuid":"u2","timestamp":"2026-01-01T00:01:00Z","parentUuid":"u1","cwd":"/repo","sessionId":"sess-1","message":{"content":[{"type":"tool_result","tool_use_id":"tu-1","content":"file1.txt\nfile2.txt"},{"type":"text","text":"now fix the bug"}]},"toolUseResult":{"type":"text","file":{"filePath":"/repo/file1.txt","numLines":10},"output":"long output...","matchCount":2}}
+	// Assistant with tool_use followed by user with tool_result: the result
+	// is inlined into the assistant's tool_use block and the user tool_result
+	// line is dropped.
+	input := []byte(`{"type":"assistant","timestamp":"2026-01-01T00:00:59Z","requestId":"req-1","message":{"id":"msg-1","content":[{"type":"tool_use","id":"tu-1","name":"Bash","input":{"command":"ls"}}]}}
+{"type":"user","uuid":"u2","timestamp":"2026-01-01T00:01:00Z","parentUuid":"u1","cwd":"/repo","sessionId":"sess-1","message":{"content":[{"type":"tool_result","tool_use_id":"tu-1","content":"file1.txt\nfile2.txt"},{"type":"text","text":"now fix the bug"}]},"toolUseResult":{"type":"text","file":{"filePath":"/repo/file1.txt","numLines":10},"output":"file1.txt\nfile2.txt","matchCount":2}}
 `)
 
 	expected := []string{
+		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:00:59Z","id":"msg-1","content":[{"type":"tool_use","id":"tu-1","name":"Bash","input":{"command":"ls"},"result":{"output":"file1.txt\nfile2.txt","status":"success"}}]}`,
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"2026-01-01T00:01:00Z","content":"now fix the bug"}`,
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user_tool_result","ts":"2026-01-01T00:01:00Z","tool_use_id":"tu-1","result":{"type":"text","file":{"filePath":"/repo/file1.txt","numLines":10}}}`,
-	}
-
-	result, err := Compact(input, defaultOpts)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertJSONLines(t, result, expected)
-}
-
-func TestCompact_MultipleToolResults(t *testing.T) {
-	t.Parallel()
-
-	input := []byte(`{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:00Z","message":{"content":[{"type":"tool_result","tool_use_id":"tu-1","content":"result1"},{"type":"tool_result","tool_use_id":"tu-2","content":"result2"},{"type":"text","text":"continue"}]},"toolUseResult":{"type":"text"}}
-`)
-
-	expected := []string{
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"2026-01-01T00:00:00Z","content":"continue"}`,
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user_tool_result","ts":"2026-01-01T00:00:00Z","tool_use_id":"tu-1","result":{"type":"text"}}`,
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user_tool_result","ts":"2026-01-01T00:00:00Z","tool_use_id":"tu-2","result":{"type":"text"}}`,
 	}
 
 	result, err := Compact(input, defaultOpts)
@@ -107,12 +100,14 @@ func TestCompact_MultipleToolResults(t *testing.T) {
 func TestCompact_UserNoText(t *testing.T) {
 	t.Parallel()
 
-	input := []byte(`{"type":"user","uuid":"u1","timestamp":"t1","message":{"content":[{"type":"tool_result","tool_use_id":"tu-1","content":"done"}]},"toolUseResult":{"type":"text"}}
+	// User entry with only tool_result (no text) preceded by assistant with tool_use:
+	// result is inlined and user line is dropped entirely (no text content).
+	input := []byte(`{"type":"assistant","timestamp":"t0","requestId":"req-1","message":{"id":"msg-1","content":[{"type":"tool_use","id":"tu-1","name":"Bash","input":{"command":"echo done"}}]}}
+{"type":"user","uuid":"u1","timestamp":"t1","message":{"content":[{"type":"tool_result","tool_use_id":"tu-1","content":"done"}]},"toolUseResult":{"stdout":"done","stderr":""}}
 `)
 
 	expected := []string{
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"t1","content":""}`,
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user_tool_result","ts":"t1","tool_use_id":"tu-1","result":{"type":"text"}}`,
+		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"t0","id":"msg-1","content":[{"type":"tool_use","id":"tu-1","name":"Bash","input":{"command":"echo done"},"result":{"output":"done","status":"success"}}]}`,
 	}
 
 	result, err := Compact(input, defaultOpts)
@@ -162,21 +157,7 @@ func TestCompact_HumanTypeAlias(t *testing.T) {
 func TestCompact_ClaudeFixture(t *testing.T) {
 	t.Parallel()
 
-	input, err := os.ReadFile("testdata/claude_full.jsonl")
-	if err != nil {
-		t.Fatalf("failed to read fixture: %v", err)
-	}
-
-	expected, err := os.ReadFile("testdata/claude_expected.jsonl")
-	if err != nil {
-		t.Fatalf("failed to read expected output: %v", err)
-	}
-
-	result, err := Compact(input, defaultOpts)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	assertJSONLines(t, result, nonEmptyLines(expected))
+	assertFixtureTransform(t, defaultOpts, "testdata/claude_full.jsonl", "testdata/claude_expected.jsonl")
 }
 
 // --- Truncation + filtering tests ---
@@ -197,9 +178,10 @@ func TestCompact_FullFixture_WithTruncation(t *testing.T) {
 
 	opts := Options{Agent: "claude-code", CLIVersion: "0.5.1", StartLine: 3}
 
+	// Starting at line 3 (user with tool_result), there's no preceding assistant
+	// to inline into, so user text is emitted and tool result is lost.
 	expected := []string{
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"2026-01-01T00:01:00Z","content":"now fix the bug"}`,
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user_tool_result","ts":"2026-01-01T00:01:00Z","tool_use_id":"tu-1","result":{"type":"text","file":{"filePath":"/repo/file1.txt","numLines":10}}}`,
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:01:01Z","id":"msg-2","content":[{"type":"text","text":"I found the issue."},{"type":"tool_use","id":"tu-2","name":"Edit","input":{"file_path":"/repo/bug.go","old_string":"bad","new_string":"good"}}]}`,
 	}
 
@@ -216,12 +198,11 @@ func TestCompact_FullFixture_NoTruncation(t *testing.T) {
 	expected := []string{
 		// Line 0: user "hello"
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"2026-01-01T00:00:00Z","content":"hello"}`,
-		// Line 1: assistant (thinking stripped, caller stripped)
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:00:01Z","id":"msg-1","content":[{"type":"text","text":"Hi there!"},{"type":"tool_use","id":"tu-1","name":"Bash","input":{"command":"ls"}}]}`,
+		// Line 1: assistant (thinking stripped, caller stripped, tool result inlined from line 3)
+		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:00:01Z","id":"msg-1","content":[{"type":"text","text":"Hi there!"},{"type":"tool_use","id":"tu-1","name":"Bash","input":{"command":"ls"},"result":{"output":"file1.txt\nfile2.txt","status":"success"}}]}`,
 		// Line 2: progress — dropped
-		// Line 3: user with tool_result — split
+		// Line 3: user with tool_result — inlined above, user text emitted
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"2026-01-01T00:01:00Z","content":"now fix the bug"}`,
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user_tool_result","ts":"2026-01-01T00:01:00Z","tool_use_id":"tu-1","result":{"type":"text","file":{"filePath":"/repo/file1.txt","numLines":10}}}`,
 		// Line 4: assistant (thinking + redacted_thinking stripped)
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:01:01Z","id":"msg-2","content":[{"type":"text","text":"I found the issue."},{"type":"tool_use","id":"tu-2","name":"Edit","input":{"file_path":"/repo/bug.go","old_string":"bad","new_string":"good"}}]}`,
 		// Lines 5-6: file-history-snapshot, system — dropped
@@ -253,22 +234,21 @@ func TestCompact_FieldOrder(t *testing.T) {
 	}
 }
 
-// --- Shared toolUseResult limitation test ---
+// --- Tool result inlining edge cases ---
 
-func TestCompact_MultipleToolResults_SharedResult(t *testing.T) {
+func TestCompact_ToolResultInlinedIntoPrecedingAssistant(t *testing.T) {
 	t.Parallel()
 
-	// full.jsonl has a single toolUseResult per user entry. When there are multiple
-	// tool_result blocks, each user_tool_result line gets the same minimized result.
-	// This test documents that known limitation.
-	input := []byte(`{"type":"user","uuid":"u1","timestamp":"t1","message":{"content":[{"type":"tool_result","tool_use_id":"tu-1","content":"result1"},{"type":"tool_result","tool_use_id":"tu-2","content":"result2"},{"type":"text","text":"ok"}]},"toolUseResult":{"type":"text","file":{"filePath":"/repo/a.txt","numLines":5}}}
+	// When a user entry has tool_result blocks preceded by an assistant with
+	// matching tool_use, the result is inlined and the user text is emitted
+	// separately.
+	input := []byte(`{"type":"assistant","timestamp":"t0","requestId":"req-1","message":{"id":"msg-1","content":[{"type":"tool_use","id":"tu-1","name":"Bash","input":{"command":"cat a.txt"}}]}}
+{"type":"user","uuid":"u1","timestamp":"t1","message":{"content":[{"type":"tool_result","tool_use_id":"tu-1","content":"done"},{"type":"text","text":"next"}]}}
 `)
 
 	expected := []string{
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"t1","content":"ok"}`,
-		// Both tool results get the same minimized result — this is intentionally lossy
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user_tool_result","ts":"t1","tool_use_id":"tu-1","result":{"type":"text","file":{"filePath":"/repo/a.txt","numLines":5}}}`,
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user_tool_result","ts":"t1","tool_use_id":"tu-2","result":{"type":"text","file":{"filePath":"/repo/a.txt","numLines":5}}}`,
+		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"t0","id":"msg-1","content":[{"type":"tool_use","id":"tu-1","name":"Bash","input":{"command":"cat a.txt"},"result":{"output":"done","status":"success"}}]}`,
+		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"t1","content":"next"}`,
 	}
 
 	result, err := Compact(input, defaultOpts)
@@ -278,19 +258,16 @@ func TestCompact_MultipleToolResults_SharedResult(t *testing.T) {
 	assertJSONLines(t, result, expected)
 }
 
-// --- Missing toolUseResult test ---
-
-func TestCompact_ToolResultWithoutToolUseResult(t *testing.T) {
+func TestCompact_ToolResultWithoutPrecedingAssistant(t *testing.T) {
 	t.Parallel()
 
-	// User entry has tool_result blocks but no toolUseResult field at all.
-	// The result should be an empty object.
+	// User entry has tool_result blocks but no preceding assistant to inline
+	// into. The user text is still emitted; tool result data is lost.
 	input := []byte(`{"type":"user","uuid":"u1","timestamp":"t1","message":{"content":[{"type":"tool_result","tool_use_id":"tu-1","content":"done"},{"type":"text","text":"next"}]}}
 `)
 
 	expected := []string{
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"t1","content":"next"}`,
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user_tool_result","ts":"t1","tool_use_id":"tu-1","result":{}}`,
 	}
 
 	result, err := Compact(input, defaultOpts)
@@ -305,11 +282,7 @@ func TestCompact_ToolResultWithoutToolUseResult(t *testing.T) {
 func TestCompact_CursorRoleOnly(t *testing.T) {
 	t.Parallel()
 
-	cursorOpts := Options{
-		Agent:      "cursor",
-		CLIVersion: "0.5.1",
-		StartLine:  0,
-	}
+	cursorOpts := agentOpts("cursor")
 
 	// Cursor transcripts use "role" instead of "type".
 	input := []byte(`{"role":"user","timestamp":"t1","message":{"content":"hello from cursor"}}
@@ -335,11 +308,7 @@ func TestCompact_StripsIDEContextTags(t *testing.T) {
 	input := []byte(`{"role":"user","timestamp":"t1","message":{"content":"<user_query>\nhello world\n</user_query>"}}
 `)
 
-	cursorOpts := Options{
-		Agent:      "cursor",
-		CLIVersion: "0.5.1",
-		StartLine:  0,
-	}
+	cursorOpts := agentOpts("cursor")
 
 	expected := []string{
 		`{"v":1,"agent":"cursor","cli_version":"0.5.1","type":"user","ts":"t1","content":"hello world"}`,
@@ -375,11 +344,7 @@ func TestCompact_StripsIDEContextTagsFromContentBlocks(t *testing.T) {
 func TestCompact_MixedFormats(t *testing.T) {
 	t.Parallel()
 
-	cursorOpts := Options{
-		Agent:      "cursor",
-		CLIVersion: "0.5.1",
-		StartLine:  0,
-	}
+	cursorOpts := agentOpts("cursor")
 
 	// Mixed transcript: type-based Claude entries, role-based Cursor entries, and human alias.
 	input := []byte(`{"type":"user","timestamp":"t1","message":{"content":"claude user"}}
@@ -410,7 +375,7 @@ func TestCompact_MixedFormats(t *testing.T) {
 func TestCompact_EmptyInput(t *testing.T) {
 	t.Parallel()
 
-	result, err := Compact([]byte{}, Options{Agent: "claude-code", CLIVersion: "0.5.1"})
+	result, err := Compact([]byte{}, defaultOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -444,7 +409,7 @@ not valid json at all
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"t2","id":"m1","content":"hi"}`,
 	}
 
-	result, err := Compact(input, Options{Agent: "claude-code", CLIVersion: "0.5.1"})
+	result, err := Compact(input, defaultOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -460,7 +425,7 @@ func TestCompact_OnlyDroppedTypes(t *testing.T) {
 {"type":"system","message":{"content":"reminder"}}
 `)
 
-	result, err := Compact(input, Options{Agent: "claude-code", CLIVersion: "0.5.1"})
+	result, err := Compact(input, defaultOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -468,6 +433,26 @@ func TestCompact_OnlyDroppedTypes(t *testing.T) {
 }
 
 // --- Helpers ---
+
+func assertFixtureTransform(t *testing.T, opts Options, inputPath, expectedPath string) {
+	t.Helper()
+
+	input, err := os.ReadFile(inputPath)
+	if err != nil {
+		t.Fatalf("failed to read fixture %q: %v", inputPath, err)
+	}
+
+	expected, err := os.ReadFile(expectedPath)
+	if err != nil {
+		t.Fatalf("failed to read expected output %q: %v", expectedPath, err)
+	}
+
+	result, err := Compact(input, opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertJSONLines(t, result, nonEmptyLines(expected))
+}
 
 func nonEmptyLines(data []byte) []string {
 	var lines []string
