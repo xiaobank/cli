@@ -14,14 +14,14 @@ import (
 // Copilot CLI uses events.jsonl with event types like "user.message" and
 // "assistant.message". This is distinct from Claude/Cursor JSONL shapes.
 var copilotEventTypes = map[string]bool{
-	"user.message":           true,
-	"assistant.message":      true,
-	"assistant.turn_start":   true,
-	"assistant.turn_end":     true,
+	"user.message":            true,
+	"assistant.message":       true,
+	"assistant.turn_start":    true,
+	"assistant.turn_end":      true,
 	"tool.execution_complete": true,
-	"session.start":          true,
-	"session.shutdown":       true,
-	"session.model_change":   true,
+	"session.start":           true,
+	"session.shutdown":        true,
+	"session.model_change":    true,
 }
 
 // isCopilotFormat checks whether JSONL content looks like Copilot CLI events.
