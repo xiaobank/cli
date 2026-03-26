@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/entireio/cli/cmd/entire/cli/memoryloop"
 )
 
@@ -28,30 +29,44 @@ func (m settingsModel) update(msg tea.Msg) (settingsModel, tea.Cmd) {
 		return m, nil
 	}
 
-	if keyMsg, ok := msg.(tea.KeyMsg); ok {
-		switch {
-		case key.Matches(keyMsg, settingsKeyMap.Mode):
-			next := cycleMode(m.state.Store.Mode)
-			return m, func() tea.Msg { return settingsChangedMsg{mode: &next} }
+	keyMsg, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
 
-		case key.Matches(keyMsg, settingsKeyMap.Policy):
-			next := cyclePolicy(m.state.Store.ActivationPolicy)
-			return m, func() tea.Msg { return settingsChangedMsg{activationPolicy: &next} }
+	var changed settingsChangedMsg
+	hasChange := false
 
-		case key.Matches(keyMsg, settingsKeyMap.MaxUp):
-			next := m.state.Store.MaxInjected + 1
-			if next > 10 {
-				next = 10
-			}
-			return m, func() tea.Msg { return settingsChangedMsg{maxInjected: &next} }
+	switch {
+	case key.Matches(keyMsg, settingsKeyMap.Mode):
+		next := cycleMode(m.state.Store.Mode)
+		changed.mode = &next
+		hasChange = true
 
-		case key.Matches(keyMsg, settingsKeyMap.MaxDown):
-			next := m.state.Store.MaxInjected - 1
-			if next < 1 {
-				next = 1
-			}
-			return m, func() tea.Msg { return settingsChangedMsg{maxInjected: &next} }
+	case key.Matches(keyMsg, settingsKeyMap.Policy):
+		next := cyclePolicy(m.state.Store.ActivationPolicy)
+		changed.activationPolicy = &next
+		hasChange = true
+
+	case key.Matches(keyMsg, settingsKeyMap.MaxUp):
+		next := m.state.Store.MaxInjected + 1
+		if next > 10 {
+			next = 10
 		}
+		changed.maxInjected = &next
+		hasChange = true
+
+	case key.Matches(keyMsg, settingsKeyMap.MaxDown):
+		next := m.state.Store.MaxInjected - 1
+		if next < 1 {
+			next = 1
+		}
+		changed.maxInjected = &next
+		hasChange = true
+	}
+
+	if hasChange {
+		return m, func() tea.Msg { return changed }
 	}
 	return m, nil
 }
@@ -62,74 +77,86 @@ func (m settingsModel) view() string {
 	}
 	store := m.state.Store
 
+	cardStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("245")).
+		Padding(0, 1).
+		Width(m.width - 2)
+
 	var b strings.Builder
 	b.WriteString("\n")
 
-	// Mode
-	b.WriteString("  ")
-	b.WriteString(m.styles.render(m.styles.bold, "Mode"))
-	b.WriteString("\n")
-	b.WriteString("  ")
-	b.WriteString(m.styles.render(m.styles.dim, "Controls whether active memories inject into prompts"))
-	b.WriteString("\n  ")
-	for _, mode := range modeOrder {
-		label := string(mode)
-		if mode == store.Mode {
-			b.WriteString(m.styles.render(m.styles.active, fmt.Sprintf("[%s]", label)))
-		} else {
-			b.WriteString(m.styles.render(m.styles.dim, fmt.Sprintf(" %s ", label)))
+	// Mode card
+	{
+		var c strings.Builder
+		c.WriteString(m.styles.render(m.styles.bold, "Mode"))
+		c.WriteString("  ")
+		c.WriteString(m.styles.render(m.styles.dim, "Controls whether active memories inject into prompts"))
+		c.WriteString("\n")
+		for _, mode := range modeOrder {
+			label := string(mode)
+			if mode == store.Mode {
+				c.WriteString(m.styles.render(m.styles.active, fmt.Sprintf(" [%s] ", label)))
+			} else {
+				c.WriteString(m.styles.render(m.styles.dim, fmt.Sprintf("  %s  ", label)))
+			}
 		}
-		b.WriteString("  ")
+		b.WriteString(cardStyle.Render(c.String()))
+		b.WriteString("\n")
 	}
-	b.WriteString("\n\n")
 
-	// Policy
-	b.WriteString("  ")
-	b.WriteString(m.styles.render(m.styles.bold, "Activation Policy"))
-	b.WriteString("\n")
-	b.WriteString("  ")
-	b.WriteString(m.styles.render(m.styles.dim, "What happens to newly generated memories"))
-	b.WriteString("\n  ")
-	for _, pol := range policyOrder {
-		label := string(pol)
-		if pol == store.ActivationPolicy {
-			b.WriteString(m.styles.render(m.styles.candidate, fmt.Sprintf("[%s]", label)))
-		} else {
-			b.WriteString(m.styles.render(m.styles.dim, fmt.Sprintf(" %s ", label)))
+	// Policy card
+	{
+		var c strings.Builder
+		c.WriteString(m.styles.render(m.styles.bold, "Activation Policy"))
+		c.WriteString("  ")
+		c.WriteString(m.styles.render(m.styles.dim, "What happens to newly generated memories"))
+		c.WriteString("\n")
+		for _, pol := range policyOrder {
+			label := string(pol)
+			if pol == store.ActivationPolicy {
+				c.WriteString(m.styles.render(m.styles.candidate, fmt.Sprintf(" [%s] ", label)))
+			} else {
+				c.WriteString(m.styles.render(m.styles.dim, fmt.Sprintf("  %s  ", label)))
+			}
 		}
-		b.WriteString("  ")
+		b.WriteString(cardStyle.Render(c.String()))
+		b.WriteString("\n")
 	}
-	b.WriteString("\n\n")
 
-	// Max Injected
-	b.WriteString("  ")
-	b.WriteString(m.styles.render(m.styles.bold, "Max Injected"))
-	b.WriteString("\n")
-	b.WriteString("  ")
-	b.WriteString(m.styles.render(m.styles.dim, "Maximum memories per prompt injection"))
-	b.WriteString("\n  ")
-	fmt.Fprintf(&b, "< %s >",
-		m.styles.render(m.styles.title, fmt.Sprintf(" %d ", store.MaxInjected)))
-	b.WriteString("\n\n")
-
-	// Injection enabled
-	b.WriteString("  ")
-	b.WriteString(m.styles.render(m.styles.bold, "Injection"))
-	b.WriteString("\n  ")
-	if store.InjectionEnabled {
-		b.WriteString(m.styles.render(m.styles.active, "* enabled"))
-	} else {
-		b.WriteString(m.styles.render(m.styles.suppressed, "o disabled"))
+	// Max Injected card
+	{
+		var c strings.Builder
+		c.WriteString(m.styles.render(m.styles.bold, "Max Injected"))
+		c.WriteString("  ")
+		c.WriteString(m.styles.render(m.styles.dim, "Maximum memories per prompt injection"))
+		c.WriteString("\n")
+		fmt.Fprintf(&c, "  ◀  %s  ▶",
+			m.styles.render(m.styles.title, fmt.Sprintf(" %d ", store.MaxInjected)))
+		b.WriteString(cardStyle.Render(c.String()))
+		b.WriteString("\n")
 	}
-	b.WriteString("\n\n")
+
+	// Injection status card
+	{
+		var c strings.Builder
+		c.WriteString(m.styles.render(m.styles.bold, "Injection"))
+		c.WriteString("  ")
+		if store.InjectionEnabled {
+			c.WriteString(m.styles.render(m.styles.active, "● enabled"))
+		} else {
+			c.WriteString(m.styles.render(m.styles.suppressed, "○ disabled"))
+		}
+		b.WriteString(cardStyle.Render(c.String()))
+		b.WriteString("\n")
+	}
 
 	// Stats
+	b.WriteString("\n")
 	b.WriteString("  ")
-	b.WriteString(m.styles.render(m.styles.dim, "Last refresh: "+timeAgo(store.GeneratedAt)))
-	b.WriteString("\n  ")
-	b.WriteString(m.styles.render(m.styles.dim, fmt.Sprintf("Store version: %d", store.Version)))
-	b.WriteString("\n  ")
-	b.WriteString(m.styles.render(m.styles.dim, fmt.Sprintf("Source window: %d sessions", store.SourceWindow)))
+	b.WriteString(m.styles.render(m.styles.dim,
+		fmt.Sprintf("Last refresh: %s  ·  Store version: %d  ·  Source window: %d sessions",
+			timeAgo(store.GeneratedAt), store.Version, store.SourceWindow)))
 	b.WriteString("\n")
 
 	return b.String()

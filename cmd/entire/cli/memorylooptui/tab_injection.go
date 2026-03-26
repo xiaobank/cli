@@ -67,9 +67,13 @@ func (m *injectionModel) setState(state *memoryloop.State) {
 func (m *injectionModel) setSize(w, h int) {
 	m.width = w
 	m.height = h
-	tableH := h - 10 // Reserve space for input + matches
+	// Reserve: prompt tester (3) + section label (2) + detail card (12) + matches (6)
+	tableH := h - 23
 	if tableH < 3 {
 		tableH = 3
+	}
+	if tableH > 10 {
+		tableH = 10 // Cap to avoid pushing detail off screen
 	}
 	m.logTable.SetWidth(w)
 	m.logTable.SetHeight(tableH)
