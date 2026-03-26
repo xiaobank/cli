@@ -15,6 +15,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/insightsdb"
 	"github.com/entireio/cli/cmd/entire/cli/llmcli"
 	"github.com/entireio/cli/cmd/entire/cli/memoryloop"
+	"github.com/entireio/cli/cmd/entire/cli/memorylooptui"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
@@ -80,8 +81,22 @@ func newMemoryLoopCmd() *cobra.Command {
 	cmd.AddCommand(newMemoryLoopUnsuppressCmd())
 	cmd.AddCommand(newMemoryLoopArchiveCmd())
 	cmd.AddCommand(newMemoryLoopPruneCmd())
+	cmd.AddCommand(newMemoryLoopTuiCmd())
 
 	return cmd
+}
+
+func newMemoryLoopTuiCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "tui",
+		Short: "Interactive memory loop dashboard",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if IsAccessibleMode() {
+				return runMemoryLoopShow(cmd.Context(), cmd.OutOrStdout(), "")
+			}
+			return memorylooptui.Run(cmd.Context())
+		},
+	}
 }
 
 func newMemoryLoopAddCmd() *cobra.Command {
