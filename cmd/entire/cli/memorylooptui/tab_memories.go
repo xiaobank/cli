@@ -353,6 +353,9 @@ func (m memoriesModel) view() string {
 
 	var b strings.Builder
 
+	// Blank line for spacing between tab bar and filter bar
+	b.WriteString("\n")
+
 	// Filter bar
 	b.WriteString(m.renderFilterBar())
 	b.WriteString("\n")
@@ -365,9 +368,9 @@ func (m memoriesModel) view() string {
 	// Table
 	b.WriteString(m.table.View())
 
-	// Detail pane
+	// Detail pane with spacing above
 	if m.showDetail {
-		b.WriteString("\n")
+		b.WriteString("\n\n")
 		b.WriteString(m.renderDetail())
 	}
 
@@ -466,11 +469,9 @@ func (m memoriesModel) renderDetail() string {
 	// Wrap in bordered card
 	cardStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("8")).
-		Padding(0, 1)
-	if m.width > 4 {
-		cardStyle = cardStyle.Width(m.width - 4)
-	}
+		BorderForeground(lipgloss.Color("245")).
+		Padding(0, 1).
+		Width(m.width - 2)
 	return cardStyle.Render(b.String())
 }
 

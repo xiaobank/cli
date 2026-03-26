@@ -169,7 +169,7 @@ func (m injectionModel) view() string {
 		}
 		cardStyle := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("8")).
+			BorderForeground(lipgloss.Color("245")).
 			Padding(0, 1)
 		if m.width > 4 {
 			cardStyle = cardStyle.Width(m.width - 4)
@@ -217,7 +217,7 @@ func (m injectionModel) view() string {
 			}
 			detailCard := lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color("8")).
+				BorderForeground(lipgloss.Color("245")).
 				Padding(0, 1)
 			if m.width > 4 {
 				detailCard = detailCard.Width(m.width - 4)
