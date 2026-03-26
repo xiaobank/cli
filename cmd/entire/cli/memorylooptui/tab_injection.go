@@ -49,8 +49,8 @@ func newInjectionModel(s tuiStyles) injectionModel {
 
 	ti := textinput.New()
 	ti.Placeholder = "type a prompt to test memory matching..."
-	ti.Prompt = "> "
-	ti.Width = 60
+	ti.Prompt = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render("\u276f") + " "
+	ti.Width = 80
 
 	return injectionModel{
 		styles:   s,
@@ -73,7 +73,7 @@ func (m *injectionModel) setSize(w, h int) {
 	}
 	m.logTable.SetWidth(w)
 	m.logTable.SetHeight(tableH)
-	m.input.Width = w - 6
+	m.input.Width = w - 4
 }
 
 func (m *injectionModel) rebuildLogTable() {
@@ -135,6 +135,14 @@ func (m injectionModel) update(msg tea.Msg) (injectionModel, tea.Cmd) {
 	return m, nil
 }
 
+func (m injectionModel) selectedLog() *memoryloop.InjectionLog {
+	cursor := m.logTable.Cursor()
+	if m.state == nil || cursor < 0 || cursor >= len(m.state.InjectionLogs) {
+		return nil
+	}
+	return &m.state.InjectionLogs[cursor]
+}
+
 func (m injectionModel) view() string {
 	var b strings.Builder
 
@@ -146,19 +154,29 @@ func (m injectionModel) view() string {
 	b.WriteString(m.input.View())
 	b.WriteString("\n")
 
-	// Match results
+	// Match results in bordered card
 	if len(m.matches) > 0 {
-		b.WriteString("\n  ")
-		b.WriteString(m.styles.render(m.styles.dim, fmt.Sprintf("MATCHES (%d)", len(m.matches))))
-		b.WriteString("\n")
+		var mb strings.Builder
+		mb.WriteString(m.styles.render(m.styles.dim, fmt.Sprintf("MATCHES (%d)", len(m.matches))))
+		mb.WriteString("\n")
 		for _, match := range m.matches {
-			fmt.Fprintf(&b, "  %s  %s\n",
+			fmt.Fprintf(&mb, "%s  %s\n",
 				m.styles.render(m.styles.title, match.Record.Title),
 				m.styles.render(m.styles.active, fmt.Sprintf("score: %d", match.Score)))
 			if match.Reason != "" {
-				fmt.Fprintf(&b, "    %s\n", m.styles.render(m.styles.dim, match.Reason))
+				fmt.Fprintf(&mb, "  %s\n", m.styles.render(m.styles.dim, match.Reason))
 			}
 		}
+		cardStyle := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("8")).
+			Padding(0, 1)
+		if m.width > 4 {
+			cardStyle = cardStyle.Width(m.width - 4)
+		}
+		b.WriteString("\n")
+		b.WriteString(cardStyle.Render(mb.String()))
+		b.WriteString("\n")
 	}
 
 	// Injection logs
@@ -170,6 +188,43 @@ func (m injectionModel) view() string {
 		b.WriteString("  No injection logs yet. Memories inject when mode is auto.\n")
 	} else {
 		b.WriteString(m.logTable.View())
+
+		// Detail view for selected log entry
+		if log := m.selectedLog(); log != nil {
+			var db strings.Builder
+			db.WriteString(m.styles.render(m.styles.title, "Injection Detail"))
+			db.WriteString("\n")
+			fmt.Fprintf(&db, "%s %s\n",
+				m.styles.render(m.styles.dim, "Session:"),
+				log.SessionID)
+			fmt.Fprintf(&db, "%s %s\n",
+				m.styles.render(m.styles.dim, "Time:"),
+				timeAgo(log.InjectedAt))
+			if len(log.InjectedMemoryIDs) > 0 {
+				fmt.Fprintf(&db, "%s %s\n",
+					m.styles.render(m.styles.dim, "Memory IDs:"),
+					strings.Join(log.InjectedMemoryIDs, ", "))
+			}
+			if log.Reason != "" {
+				fmt.Fprintf(&db, "%s %s\n",
+					m.styles.render(m.styles.dim, "Reason:"),
+					log.Reason)
+			}
+			if log.PromptPreview != "" {
+				fmt.Fprintf(&db, "%s\n%s",
+					m.styles.render(m.styles.dim, "Prompt:"),
+					log.PromptPreview)
+			}
+			detailCard := lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("8")).
+				Padding(0, 1)
+			if m.width > 4 {
+				detailCard = detailCard.Width(m.width - 4)
+			}
+			b.WriteString("\n")
+			b.WriteString(detailCard.Render(db.String()))
+		}
 	}
 
 	return b.String()

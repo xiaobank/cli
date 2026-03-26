@@ -433,7 +433,6 @@ func (m memoriesModel) renderDetail() string {
 	}
 	var b strings.Builder
 	// Title line
-	b.WriteString("  ")
 	b.WriteString(m.styles.render(m.styles.title, r.Title))
 	b.WriteString("  ")
 	b.WriteString(kindStyle(m.styles, r.Kind)(string(r.Kind)))
@@ -449,25 +448,30 @@ func (m memoriesModel) renderDetail() string {
 
 	// Body
 	if r.Body != "" {
-		b.WriteString("  " + r.Body + "\n")
+		b.WriteString(r.Body + "\n")
 	}
 
 	// Why
 	if r.Why != "" {
-		b.WriteString("  ")
 		b.WriteString(m.styles.render(m.styles.dim, "WHY"))
 		b.WriteString("\n")
-		b.WriteString("  " + r.Why + "\n")
+		b.WriteString(r.Why + "\n")
 	}
 
 	// Stats
-	b.WriteString("  ")
 	stats := fmt.Sprintf("strength: %d/5 · injected: %dx · matched: %dx · last injected: %s · created: %s",
 		r.Strength, r.InjectCount, r.MatchCount, timeAgo(r.LastInjectedAt), timeAgo(r.CreatedAt))
 	b.WriteString(m.styles.render(m.styles.dim, stats))
-	b.WriteString("\n")
 
-	return b.String()
+	// Wrap in bordered card
+	cardStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("8")).
+		Padding(0, 1)
+	if m.width > 4 {
+		cardStyle = cardStyle.Width(m.width - 4)
+	}
+	return cardStyle.Render(b.String())
 }
 
 func statusDotPlain(status memoryloop.Status) string {

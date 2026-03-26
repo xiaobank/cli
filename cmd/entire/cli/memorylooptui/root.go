@@ -3,7 +3,6 @@ package memorylooptui
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -11,7 +10,6 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/entireio/cli/cmd/entire/cli/memoryloop"
-	"github.com/entireio/cli/cmd/entire/cli/termstyle"
 )
 
 const (
@@ -19,7 +17,7 @@ const (
 	tabInjection = 1
 	tabHistory   = 2
 	tabSettings  = 3
-	maxWidth     = 80
+	maxWidth     = 120
 )
 
 //nolint:recvcheck // bubbletea pattern: value receivers for interface, pointer for pushState mutation
@@ -51,7 +49,7 @@ func Run(ctx context.Context) error {
 	m := rootModel{
 		ctx:          ctx,
 		styles:       styles,
-		width:        min(termstyle.GetTerminalWidth(os.Stdout), maxWidth),
+		width:        maxWidth, // will be updated by tea.WindowSizeMsg
 		spinner:      s,
 		memoriesTab:  newMemoriesModel(styles),
 		injectionTab: newInjectionModel(styles),
@@ -275,7 +273,10 @@ func (m rootModel) handleLifecycleAction(msg lifecycleActionMsg) (tea.Model, tea
 	if err := m.saveState(); err != nil {
 		return m, func() tea.Msg { return errorFlashMsg{text: fmt.Sprintf("save failed: %v", err)} }
 	}
-	m.pushState()
+	m.memoriesTab.setState(m.state)
+	m.injectionTab.setState(m.state)
+	m.historyTab.setState(m.state)
+	m.settingsTab.setState(m.state)
 	return m, nil
 }
 
@@ -292,7 +293,10 @@ func (m rootModel) handleAddMemory(msg addMemoryMsg) (tea.Model, tea.Cmd) {
 	if err := m.saveState(); err != nil {
 		return m, func() tea.Msg { return errorFlashMsg{text: fmt.Sprintf("save failed: %v", err)} }
 	}
-	m.pushState()
+	m.memoriesTab.setState(m.state)
+	m.injectionTab.setState(m.state)
+	m.historyTab.setState(m.state)
+	m.settingsTab.setState(m.state)
 	return m, nil
 }
 
@@ -306,7 +310,10 @@ func (m rootModel) handlePrune() (tea.Model, tea.Cmd) {
 	if err := m.saveState(); err != nil {
 		return m, func() tea.Msg { return errorFlashMsg{text: fmt.Sprintf("save failed: %v", err)} }
 	}
-	m.pushState()
+	m.memoriesTab.setState(m.state)
+	m.injectionTab.setState(m.state)
+	m.historyTab.setState(m.state)
+	m.settingsTab.setState(m.state)
 	msg := fmt.Sprintf("Pruned %d records", result.ArchivedCount)
 	return m, func() tea.Msg { return errorFlashMsg{text: msg} }
 }
@@ -328,7 +335,10 @@ func (m rootModel) handleSettingsChanged(msg settingsChangedMsg) (tea.Model, tea
 	if err := m.saveState(); err != nil {
 		return m, func() tea.Msg { return errorFlashMsg{text: fmt.Sprintf("save failed: %v", err)} }
 	}
-	m.pushState()
+	m.memoriesTab.setState(m.state)
+	m.injectionTab.setState(m.state)
+	m.historyTab.setState(m.state)
+	m.settingsTab.setState(m.state)
 	return m, nil
 }
 
