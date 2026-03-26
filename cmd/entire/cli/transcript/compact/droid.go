@@ -1,13 +1,54 @@
 package compact
 
-import "encoding/json"
+import (
+	"bytes"
+	"encoding/json"
+)
 
-// unwrapEnvelope handles envelope formats where the actual message is nested.
-// Factory AI Droid uses {"type":"message","message":{"role":"user","content":...}}.
-// If the line is an envelope, it promotes inner fields (role, content) to the top
-// level and carries over outer fields (timestamp, id) so converters see a flat structure.
-// Otherwise it returns raw unchanged.
-func unwrapEnvelope(raw map[string]json.RawMessage) map[string]json.RawMessage {
+// isDroidFormat checks whether JSONL content uses Factory AI Droid's envelope
+// format. It scans lines looking for one with a "type" field — if the first
+// such line has type "message" with a nested "message" object, it's Droid format.
+// Non-typed lines (session_start, session_event) are skipped.
+func isDroidFormat(content []byte) bool {
+	for _, line := range bytes.Split(content, []byte("\n")) {
+		line = bytes.TrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		var probe struct {
+			Type    string           `json:"type"`
+			Message *json.RawMessage `json:"message"`
+		}
+		if json.Unmarshal(line, &probe) != nil {
+			continue
+		}
+		if probe.Type == "message" && probe.Message != nil {
+			return true
+		}
+		// If we hit a known Claude Code/Cursor type, it's not Droid.
+		if userAliases[probe.Type] || assistantAliases[probe.Type] || droppedTypes[probe.Type] {
+			return false
+		}
+	}
+	return false
+}
+
+// compactDroid converts Factory AI Droid JSONL transcripts into the compact
+// format. Droid uses the same Anthropic Messages API structure as Claude Code
+// and Cursor, but wraps each message in an envelope that must be unwrapped first.
+func compactDroid(content []byte, opts Options) ([]byte, error) {
+	return compactJSONLWith(content, opts, unwrapDroidEnvelope)
+}
+
+// unwrapDroidEnvelope handles Factory AI Droid's envelope format where the
+// actual message is nested:
+//
+//	{"type":"message","message":{"role":"user","content":...}}
+//
+// It promotes inner fields (role, content) to the top level and carries over
+// outer fields (timestamp, id) so the shared converters see a flat structure.
+// Returns raw unchanged if the line is not a Droid envelope.
+func unwrapDroidEnvelope(raw map[string]json.RawMessage) map[string]json.RawMessage {
 	if unquote(raw["type"]) != "message" {
 		return raw
 	}

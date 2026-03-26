@@ -2,7 +2,7 @@ package compact
 
 import "testing"
 
-// --- Factory AI Droid envelope tests ---
+// --- Factory AI Droid tests ---
 
 func TestCompact_FactoryDroidEnvelope(t *testing.T) {
 	t.Parallel()
