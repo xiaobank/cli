@@ -55,18 +55,16 @@ func TestCompact_AssistantStripping(t *testing.T) {
 func TestCompact_AssistantThinkingOnly(t *testing.T) {
 	t.Parallel()
 
+	// Assistant lines with only thinking content should be dropped entirely
+	// (streaming intermediates that carry no user-visible content).
 	input := []byte(`{"type":"assistant","timestamp":"2026-01-01T00:00:01Z","requestId":"req-1","message":{"id":"msg-1","content":[{"type":"thinking","thinking":"hmm..."}]}}
 `)
-
-	expected := []string{
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:00:01Z","id":"msg-1","content":[]}`,
-	}
 
 	result, err := Compact(input, defaultOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	assertJSONLines(t, result, expected)
+	assertJSONLines(t, result, nil)
 }
 
 func TestCompact_UserWithToolResult(t *testing.T) {
@@ -161,22 +159,24 @@ func TestCompact_HumanTypeAlias(t *testing.T) {
 	assertJSONLines(t, result, expected)
 }
 
-func TestCompact_RealFile(t *testing.T) {
-	content, err := os.ReadFile("../../../../../full-example.jsonl")
+func TestCompact_ClaudeFixture(t *testing.T) {
+	t.Parallel()
+
+	input, err := os.ReadFile("testdata/claude_full.jsonl")
 	if err != nil {
-		t.Skip("no full-example.jsonl found")
+		t.Fatalf("failed to read fixture: %v", err)
 	}
-	result, err := Compact(content, Options{
-		Agent:      "claude-code",
-		CLIVersion: "0.5.1",
-	})
+
+	expected, err := os.ReadFile("testdata/claude_expected.jsonl")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("failed to read expected output: %v", err)
 	}
-	if err := os.WriteFile("../../../../../transcript-output.jsonl", result, 0644); err != nil {
-		t.Fatalf("failed to write output: %v", err)
+
+	result, err := Compact(input, defaultOpts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	t.Logf("wrote %d bytes", len(result))
+	assertJSONLines(t, result, nonEmptyLines(expected))
 }
 
 // --- Truncation + filtering tests ---

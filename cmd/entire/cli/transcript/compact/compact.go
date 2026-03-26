@@ -172,6 +172,12 @@ func convertAssistant(raw map[string]json.RawMessage, meta compactMeta) [][]byte
 		}
 	}
 
+	// Drop assistant lines that are empty after stripping thinking blocks
+	// (e.g. streaming intermediates with only thinking content).
+	if isEmptyContentArray(content) {
+		return nil
+	}
+
 	b := marshalOrdered(
 		"v", meta.v,
 		"agent", meta.agent,
@@ -182,6 +188,12 @@ func convertAssistant(raw map[string]json.RawMessage, meta compactMeta) [][]byte
 		"content", content,
 	)
 	return [][]byte{b}
+}
+
+// isEmptyContentArray returns true if raw is a JSON empty array (`[]`).
+func isEmptyContentArray(raw json.RawMessage) bool {
+	var arr []json.RawMessage
+	return json.Unmarshal(raw, &arr) == nil && len(arr) == 0
 }
 
 func convertUser(raw map[string]json.RawMessage, meta compactMeta) [][]byte {
