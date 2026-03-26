@@ -1,0 +1,14 @@
+{
+  "trail_id": "9517f972a646",
+  "branch": "test-trail-for-docs",
+  "base": "main",
+  "title": "Test trail for docs",
+  "body": "",
+  "status": "draft",
+  "author": "blackgirlbytes",
+  "assignees": [],
+  "labels": [],
+  "created_at": "2026-03-26T12:37:09.44236-07:00",
+  "updated_at": "2026-03-26T12:37:09.44236-07:00",
+  "merged_at": null
+}
