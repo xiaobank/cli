@@ -22,7 +22,7 @@ This repo contains the CLI for Entire.
 
 ## Tech Stack
 
-- Language: Go 1.25.x
+- Language: Go 1.26.x
 - Build tool: mise, go modules
 - Linting: golangci-lint
 

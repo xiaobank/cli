@@ -25,7 +25,6 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/stringutil"
-	"github.com/entireio/cli/cmd/entire/cli/trail"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 	"github.com/entireio/cli/perf"
 	"github.com/entireio/cli/redact"
@@ -368,17 +367,9 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 	}
 	findSessionsSpan.End()
 
-	// Fast path: when an agent is committing (ACTIVE session + no TTY), skip
-	// content detection and interactive prompts. The agent can't respond to TTY
-	// prompts and the content detection can miss mid-session work (no shadow
-	// branch yet, transcript analysis may fail). Generate a checkpoint ID and
-	// add the trailer directly.
-	if !hasTTY() {
-		for _, state := range sessions {
-			if state.Phase.IsActive() {
-				return s.addTrailerForAgentCommit(logCtx, commitMsgFile, state, source)
-			}
-		}
+	// Fast path: skip content detection for mid-turn agent commits.
+	if s.tryAgentCommitFastPath(ctx, commitMsgFile, sessions, source) {
+		return nil
 	}
 
 	// Check if any session has new content to condense
@@ -1101,16 +1092,6 @@ func (s *ManualCommitStrategy) condenseAndUpdateState(
 		return false
 	}
 
-	// Link checkpoint to trail (best-effort)
-	branchName := GetCurrentBranchName(repo)
-	if branchName != "" && branchName != GetDefaultBranchName(repo) {
-		store := trail.NewStore(repo)
-		existing, findErr := store.FindByBranch(branchName)
-		if findErr == nil && existing != nil {
-			appendCheckpointToExistingTrail(store, existing.TrailID, result.CheckpointID, head.Hash(), result.Prompts)
-		}
-	}
-
 	// Track this shadow branch for cleanup
 	shadowBranchesToDelete[shadowBranchName] = struct{}{}
 
@@ -1658,10 +1639,40 @@ func (s *ManualCommitStrategy) extractModifiedFilesFromLiveTranscript(ctx contex
 	return modifiedFiles
 }
 
+// tryAgentCommitFastPath skips content detection for mid-turn agent commits.
+// Returns true if the fast path was taken (trailer added or attempt made),
+// false if the caller should continue with normal content detection.
+//
+// The fast path activates when an ACTIVE session exists and either:
+//   - No TTY is available (agent subprocess, CI), or
+//   - commit_linking="always" (user opted into auto-linking — needed because
+//     some agents like Gemini subagents commit mid-turn from processes that
+//     have /dev/tty but can't respond to prompts, and content detection fails
+//     since the shadow branch doesn't exist yet).
+func (s *ManualCommitStrategy) tryAgentCommitFastPath(ctx context.Context, commitMsgFile string, sessions []*SessionState, source string) bool {
+	skipContentDetection := !hasTTY()
+	if !skipContentDetection {
+		if stngs, err := settings.Load(ctx); err == nil {
+			skipContentDetection = stngs.GetCommitLinking() == settings.CommitLinkingAlways
+		}
+	}
+	if !skipContentDetection {
+		return false
+	}
+	logCtx := logging.WithComponent(ctx, "checkpoint")
+	for _, state := range sessions {
+		if state.Phase.IsActive() {
+			_ = s.addTrailerForAgentCommit(logCtx, commitMsgFile, state, source) //nolint:errcheck // always returns nil; kept for signature stability
+			return true
+		}
+	}
+	return false
+}
+
 // addTrailerForAgentCommit handles the fast path when an agent is committing
 // (ACTIVE session + no TTY). Generates a checkpoint ID and adds the trailer
 // directly, bypassing content detection and interactive prompts.
-func (s *ManualCommitStrategy) addTrailerForAgentCommit(logCtx context.Context, commitMsgFile string, state *SessionState, source string) error {
+func (s *ManualCommitStrategy) addTrailerForAgentCommit(logCtx context.Context, commitMsgFile string, state *SessionState, source string) error { //nolint:unparam // kept for signature stability
 	cpID, err := id.Generate()
 	if err != nil {
 		return nil //nolint:nilerr // Hook must be silent on failure
@@ -2264,6 +2275,12 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 
 	store := checkpoint.NewGitStore(repo)
 
+	// Evaluate v2 flag once before the loop to avoid re-reading settings per checkpoint
+	var v2Store *checkpoint.V2GitStore
+	if settings.IsCheckpointsV2Enabled(logCtx) {
+		v2Store = checkpoint.NewV2GitStore(repo)
+	}
+
 	// Update each checkpoint with the full transcript
 	for _, cpIDStr := range state.TurnCheckpointIDs {
 		cpID, parseErr := id.NewCheckpointID(cpIDStr)
@@ -2276,13 +2293,15 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 			continue
 		}
 
-		updateErr := store.UpdateCommitted(ctx, checkpoint.UpdateCommittedOptions{
+		updateOpts := checkpoint.UpdateCommittedOptions{
 			CheckpointID: cpID,
 			SessionID:    state.SessionID,
 			Transcript:   fullTranscript,
 			Prompts:      prompts,
 			Agent:        state.AgentType,
-		})
+		}
+
+		updateErr := store.UpdateCommitted(ctx, updateOpts)
 		if updateErr != nil {
 			logging.Warn(logCtx, "finalize: failed to update checkpoint",
 				slog.String("checkpoint_id", cpIDStr),
@@ -2290,6 +2309,16 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 			)
 			errCount++
 			continue
+		}
+
+		// Dual-write: update v2 refs when enabled
+		if v2Store != nil {
+			if v2Err := v2Store.UpdateCommitted(logCtx, updateOpts); v2Err != nil {
+				logging.Warn(logCtx, "v2 dual-write update failed",
+					slog.String("checkpoint_id", cpIDStr),
+					slog.String("error", v2Err.Error()),
+				)
+			}
 		}
 
 		logging.Info(logCtx, "finalize: checkpoint updated with full transcript",
@@ -2417,29 +2446,4 @@ func (s *ManualCommitStrategy) carryForwardToNewShadowBranch(
 		slog.String("session_id", state.SessionID),
 		slog.Int("remaining_files", len(remainingFiles)),
 	)
-}
-
-// appendCheckpointToExistingTrail links a checkpoint to the given trail.
-// Best-effort: silently returns on any error (trails are non-critical metadata).
-func appendCheckpointToExistingTrail(store *trail.Store, trailID trail.ID, cpID id.CheckpointID, commitSHA plumbing.Hash, prompts []string) {
-	var summary *string
-	if len(prompts) > 0 {
-		s := truncateForSummary(prompts[len(prompts)-1], 200)
-		summary = &s
-	}
-
-	//nolint:errcheck,gosec // best-effort: trail checkpoint linking is non-critical
-	store.AddCheckpoint(trailID, trail.CheckpointRef{
-		CheckpointID: cpID.String(),
-		CommitSHA:    commitSHA.String(),
-		CreatedAt:    time.Now().UTC(),
-		Summary:      summary,
-	})
-}
-
-// truncateForSummary takes the first line of s and truncates to maxLen runes.
-func truncateForSummary(s string, maxLen int) string {
-	line, _, _ := strings.Cut(s, "\n")
-	line = strings.TrimSpace(line)
-	return stringutil.TruncateRunes(line, maxLen, "...")
 }
