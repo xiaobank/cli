@@ -121,6 +121,8 @@ func ComputeAgentComparisons(scores []SessionScore) []AgentComparison {
 		totalFirstPass  float64
 		totalFrictionSc float64
 		totalFocus      float64
+		totalToolCalls  int
+		toolCounts      map[string]int
 		count           int
 	}
 
@@ -128,7 +130,7 @@ func ComputeAgentComparisons(scores []SessionScore) []AgentComparison {
 	for _, s := range scores {
 		acc, ok := agentMap[s.Agent]
 		if !ok {
-			acc = &accumulator{}
+			acc = &accumulator{toolCounts: make(map[string]int)}
 			agentMap[s.Agent] = acc
 		}
 		acc.totalScore += s.Overall
@@ -139,6 +141,10 @@ func ComputeAgentComparisons(scores []SessionScore) []AgentComparison {
 		acc.totalFirstPass += s.Breakdown.FirstPassSuccess
 		acc.totalFrictionSc += s.Breakdown.FrictionScore
 		acc.totalFocus += s.Breakdown.FocusScore
+		acc.totalToolCalls += s.ToolCallCount
+		for _, tool := range s.TopTools {
+			acc.toolCounts[tool]++
+		}
 		acc.count++
 	}
 
@@ -161,6 +167,8 @@ func ComputeAgentComparisons(scores []SessionScore) []AgentComparison {
 			AvgFriction:  math.Round(acc.totalFriction/n*10) / 10,
 			TopStrength:  topStrength,
 			TopWeakness:  topWeakness,
+			TopTools:     topNFromCounts(acc.toolCounts, 3),
+			AvgToolCalls: math.Round(float64(acc.totalToolCalls)/n*10) / 10,
 		})
 	}
 
@@ -200,4 +208,28 @@ func strengthAndWeakness(tokenEff, firstPass, frictionSc, focus float64) (streng
 		}
 	}
 	return strength, weakness
+}
+
+// topNFromCounts returns the top N keys from a count map, sorted by count descending.
+func topNFromCounts(counts map[string]int, n int) []string {
+	if len(counts) == 0 {
+		return nil
+	}
+	type kv struct {
+		key   string
+		count int
+	}
+	sorted := make([]kv, 0, len(counts))
+	for k, v := range counts {
+		sorted = append(sorted, kv{k, v})
+	}
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].count > sorted[j].count
+	})
+	limit := min(n, len(sorted))
+	result := make([]string, limit)
+	for i := range limit {
+		result[i] = sorted[i].key
+	}
+	return result
 }

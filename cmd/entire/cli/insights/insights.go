@@ -20,6 +20,9 @@ type SessionScore struct {
 	FilesCount    int             `json:"files_count"`
 	FrictionCount int             `json:"friction_count"`
 	HasSummary    bool            `json:"has_summary"`
+	ToolCallCount int             `json:"tool_call_count"`
+	TopTools      []string        `json:"top_tools,omitempty"`
+	SkillsUsed    []string        `json:"skills_used,omitempty"`
 }
 
 // ScoreBreakdown shows individual scoring dimensions (each 0-100).
@@ -66,6 +69,8 @@ type AgentComparison struct {
 	AvgFriction  float64         `json:"avg_friction"`
 	TopStrength  string          `json:"top_strength"`
 	TopWeakness  string          `json:"top_weakness"`
+	TopTools     []string        `json:"top_tools,omitempty"`
+	AvgToolCalls float64         `json:"avg_tool_calls"`
 }
 
 // Report is the full output of `entire insights`.
