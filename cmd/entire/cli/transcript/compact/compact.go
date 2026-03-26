@@ -59,6 +59,10 @@ func Compact(content []byte, opts Options) ([]byte, error) {
 		return compactGemini(truncated, opts)
 	}
 
+	if isCopilotFormat(truncated) {
+		return compactCopilot(truncated, opts)
+	}
+
 	if isDroidFormat(truncated) {
 		return compactDroid(truncated, opts)
 	}
@@ -116,14 +120,12 @@ func compactJSONL(content []byte, opts Options) ([]byte, error) {
 // parsedEntry is an intermediate representation of a JSONL line used during
 // the two-pass compact conversion.
 type parsedEntry struct {
-	kind      string // "user" or "assistant"
-	ts        json.RawMessage
-	id        string          // message ID (assistant only)
-	content   json.RawMessage // stripped assistant content array, or nil
-	userText  string          // extracted user text
-	toolUseID string          // tool_use_id from user tool_result (single result per entry)
-	toolOut   string          // tool output text (from toolUseResult.stdout or tool_result.content)
-	isError   bool            // whether the tool result was an error
+	kind        string // "user" or "assistant"
+	ts          json.RawMessage
+	id          string            // message ID (assistant only)
+	content     json.RawMessage   // stripped assistant content array, or nil
+	userText    string            // extracted user text
+	toolResults []toolResultEntry // user tool_result entries
 }
 
 // compactJSONLWith converts JSONL transcripts into the compact format.
@@ -155,10 +157,10 @@ func compactJSONLWith(content []byte, opts Options, preprocess linePreprocessor)
 				merged = mergeAssistantEntries(merged, entries[i])
 			}
 
-			// Look ahead for a user tool_result to inline.
-			if i+1 < len(entries) && entries[i+1].kind == transcript.TypeUser && entries[i+1].toolUseID != "" {
+			// Look ahead for user tool_result entries to inline.
+			if i+1 < len(entries) && entries[i+1].kind == transcript.TypeUser && hasToolResults(entries[i+1]) {
 				userEntry := entries[i+1]
-				merged = inlineToolResult(merged, userEntry)
+				merged = inlineToolResults(merged, userEntry)
 				i++ // consume the user tool_result entry
 
 				// If the consumed user entry also had text content, emit it
@@ -181,7 +183,7 @@ func compactJSONLWith(content []byte, opts Options, preprocess linePreprocessor)
 			// by the assistant look-ahead above. If we reach one here it was
 			// not preceded by an assistant with a matching tool_use, so emit
 			// it only if it has text content.
-			if e.toolUseID != "" && e.userText == "" {
+			if hasToolResults(e) && e.userText == "" {
 				continue
 			}
 			emitUser(&result, meta, e)
@@ -282,11 +284,7 @@ func parseLine(lineBytes []byte, preprocess linePreprocessor) (parsedEntry, bool
 			if contentRaw, ok := msg["content"]; ok {
 				text, toolResults := extractUserContent(contentRaw)
 				e.userText = text
-				if len(toolResults) > 0 {
-					e.toolUseID = toolResults[0].toolUseID
-					e.toolOut = toolResults[0].output
-					e.isError = toolResults[0].isError
-				}
+				e.toolResults = toolResults
 			}
 		}
 		// Also check toolUseResult.stdout which may have the output.
@@ -294,7 +292,16 @@ func parseLine(lineBytes []byte, preprocess linePreprocessor) (parsedEntry, bool
 			var tur map[string]json.RawMessage
 			if json.Unmarshal(turRaw, &tur) == nil {
 				if stdout := unquote(tur["stdout"]); stdout != "" {
-					e.toolOut = stdout
+					switch len(e.toolResults) {
+					case 0:
+						// Keep compatibility with transcripts that only include toolUseResult.
+						e.toolResults = []toolResultEntry{{
+							output: stdout,
+						}}
+					case 1:
+						// toolUseResult is a single envelope for one tool call.
+						e.toolResults[0].output = stdout
+					}
 				}
 			}
 		}
@@ -320,39 +327,40 @@ func mergeAssistantEntries(a, b parsedEntry) parsedEntry {
 	return merged
 }
 
-// inlineToolResult adds a "result" field to the last tool_use block in the
-// assistant entry's content, using the output from a user tool_result entry.
-func inlineToolResult(assistant, user parsedEntry) parsedEntry {
+// inlineToolResults adds "result" fields to matching tool_use blocks in the
+// assistant entry's content, using outputs from user tool_result entries.
+func inlineToolResults(assistant, user parsedEntry) parsedEntry {
 	var blocks []map[string]json.RawMessage
 	if json.Unmarshal(assistant.content, &blocks) != nil || len(blocks) == 0 {
 		return assistant
 	}
 
-	// Find the tool_use block matching the user's tool_use_id.
-	idx := -1
-	for i := len(blocks) - 1; i >= 0; i-- {
-		if unquote(blocks[i]["type"]) == transcript.ContentTypeToolUse {
-			if user.toolUseID == "" || unquote(blocks[i]["id"]) == user.toolUseID {
-				idx = i
-				break
+	for _, tr := range user.toolResults {
+		// Find the tool_use block matching this tool_use_id.
+		idx := -1
+		for i := len(blocks) - 1; i >= 0; i-- {
+			if unquote(blocks[i]["type"]) == transcript.ContentTypeToolUse {
+				if tr.toolUseID == "" || unquote(blocks[i]["id"]) == tr.toolUseID {
+					idx = i
+					break
+				}
 			}
 		}
-	}
-	// No matching tool_use block: do not attach a result to unrelated content.
-	if idx == -1 {
-		return assistant
-	}
+		// No matching tool_use block: do not attach a result to unrelated content.
+		if idx == -1 {
+			continue
+		}
 
-	status := "success"
-	if user.isError {
-		status = "error"
+		status := "success"
+		if tr.isError {
+			status = "error"
+		}
+		resultObj := marshalOrdered(
+			"output", mustMarshal(tr.output),
+			"status", mustMarshal(status),
+		)
+		blocks[idx]["result"] = resultObj
 	}
-
-	resultObj := marshalOrdered(
-		"output", mustMarshal(user.toolOut),
-		"status", mustMarshal(status),
-	)
-	blocks[idx]["result"] = resultObj
 
 	if data, err := json.Marshal(blocks); err == nil {
 		assistant.content = data
@@ -373,6 +381,10 @@ func jsonStringOrNil(s string) json.RawMessage {
 func isEmptyContentArray(raw json.RawMessage) bool {
 	var arr []json.RawMessage
 	return json.Unmarshal(raw, &arr) == nil && len(arr) == 0
+}
+
+func hasToolResults(e parsedEntry) bool {
+	return len(e.toolResults) > 0
 }
 
 type toolResultEntry struct {

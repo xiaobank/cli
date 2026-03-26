@@ -97,6 +97,25 @@ func TestCompact_UserWithToolResult(t *testing.T) {
 	assertJSONLines(t, result, expected)
 }
 
+func TestCompact_UserWithMultipleToolResults(t *testing.T) {
+	t.Parallel()
+
+	input := []byte(`{"type":"assistant","timestamp":"2026-01-01T00:00:59Z","requestId":"req-1","message":{"id":"msg-1","content":[{"type":"tool_use","id":"tu-1","name":"ReadFile","input":{"path":"a.txt"}},{"type":"tool_use","id":"tu-2","name":"ReadFile","input":{"path":"b.txt"}}]}}
+{"type":"user","uuid":"u2","timestamp":"2026-01-01T00:01:00Z","message":{"content":[{"type":"tool_result","tool_use_id":"tu-1","content":"A"},{"type":"tool_result","tool_use_id":"tu-2","content":"B"},{"type":"text","text":"continue"}]}}
+`)
+
+	expected := []string{
+		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:00:59Z","id":"msg-1","content":[{"type":"tool_use","id":"tu-1","name":"ReadFile","input":{"path":"a.txt"},"result":{"output":"A","status":"success"}},{"type":"tool_use","id":"tu-2","name":"ReadFile","input":{"path":"b.txt"},"result":{"output":"B","status":"success"}}]}`,
+		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"2026-01-01T00:01:00Z","content":"continue"}`,
+	}
+
+	result, err := Compact(input, defaultOpts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertJSONLines(t, result, expected)
+}
+
 func TestCompact_UserNoText(t *testing.T) {
 	t.Parallel()
 
@@ -321,6 +340,29 @@ func TestCompact_MixedFormats(t *testing.T) {
 	}
 
 	result, err := Compact(input, cursorOpts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertJSONLines(t, result, expected)
+}
+
+func TestCompact_CopilotEventsFormat(t *testing.T) {
+	t.Parallel()
+
+	copilotOpts := agentOpts("copilot-cli")
+	input := []byte(`{"type":"session.start","data":{},"id":"0","timestamp":"2026-03-03T00:00:00Z","parentId":""}
+{"type":"user.message","data":{"content":"<user_query>\ncreate hello.txt\n</user_query>"},"id":"2","timestamp":"2026-03-03T00:00:01Z","parentId":""}
+{"type":"assistant.message","data":{"content":""},"id":"4","timestamp":"2026-03-03T00:00:03Z","parentId":"3"}
+{"type":"assistant.message","data":{"content":"Created hello.txt."},"id":"6","timestamp":"2026-03-03T00:00:05Z","parentId":"3"}
+{"type":"session.shutdown","data":{"modelMetrics":{}},"id":"9","timestamp":"2026-03-03T00:00:09Z","parentId":""}
+`)
+
+	expected := []string{
+		`{"v":1,"agent":"copilot-cli","cli_version":"0.5.1","type":"user","ts":"2026-03-03T00:00:01Z","content":"create hello.txt"}`,
+		`{"v":1,"agent":"copilot-cli","cli_version":"0.5.1","type":"assistant","ts":"2026-03-03T00:00:05Z","id":"6","content":"Created hello.txt."}`,
+	}
+
+	result, err := Compact(input, copilotOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
