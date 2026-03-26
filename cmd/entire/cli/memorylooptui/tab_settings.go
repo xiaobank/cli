@@ -83,6 +83,16 @@ func (m settingsModel) view() string {
 		Padding(0, 1).
 		Width(m.width - 2)
 
+	// Chip styles for selected vs unselected options
+	selectedChip := lipgloss.NewStyle().
+		Background(lipgloss.Color("214")).
+		Foreground(lipgloss.Color("0")).
+		Bold(true).
+		Padding(0, 1)
+	unselectedChip := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("245")).
+		Padding(0, 1)
+
 	var b strings.Builder
 	b.WriteString("\n")
 
@@ -96,10 +106,11 @@ func (m settingsModel) view() string {
 		for _, mode := range modeOrder {
 			label := string(mode)
 			if mode == store.Mode {
-				c.WriteString(m.styles.render(m.styles.active, fmt.Sprintf(" [%s] ", label)))
+				c.WriteString(selectedChip.Render(label))
 			} else {
-				c.WriteString(m.styles.render(m.styles.dim, fmt.Sprintf("  %s  ", label)))
+				c.WriteString(unselectedChip.Render(label))
 			}
+			c.WriteString(" ")
 		}
 		b.WriteString(cardStyle.Render(c.String()))
 		b.WriteString("\n")
@@ -115,10 +126,11 @@ func (m settingsModel) view() string {
 		for _, pol := range policyOrder {
 			label := string(pol)
 			if pol == store.ActivationPolicy {
-				c.WriteString(m.styles.render(m.styles.candidate, fmt.Sprintf(" [%s] ", label)))
+				c.WriteString(selectedChip.Render(label))
 			} else {
-				c.WriteString(m.styles.render(m.styles.dim, fmt.Sprintf("  %s  ", label)))
+				c.WriteString(unselectedChip.Render(label))
 			}
+			c.WriteString(" ")
 		}
 		b.WriteString(cardStyle.Render(c.String()))
 		b.WriteString("\n")
@@ -131,8 +143,10 @@ func (m settingsModel) view() string {
 		c.WriteString("  ")
 		c.WriteString(m.styles.render(m.styles.dim, "Maximum memories per prompt injection"))
 		c.WriteString("\n")
-		fmt.Fprintf(&c, "  ◀  %s  ▶",
-			m.styles.render(m.styles.title, fmt.Sprintf(" %d ", store.MaxInjected)))
+		numStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("214")).
+			Bold(true)
+		fmt.Fprintf(&c, "  ◀  %s  ▶", numStyle.Render(fmt.Sprintf(" %d ", store.MaxInjected)))
 		b.WriteString(cardStyle.Render(c.String()))
 		b.WriteString("\n")
 	}
