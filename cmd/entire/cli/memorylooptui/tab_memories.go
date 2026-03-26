@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/table"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/entireio/cli/cmd/entire/cli/memoryloop"
@@ -36,6 +37,9 @@ type memoriesModel struct {
 	searchMode bool
 	searchText string
 	records    []memoryloop.MemoryRecord // filtered subset
+	addMode    bool
+	addFields  [4]textinput.Model // kind, title, body, scope
+	addFocus   int
 }
 
 func newMemoriesModel(s tuiStyles) memoriesModel {
@@ -67,6 +71,37 @@ func newMemoriesModel(s tuiStyles) memoriesModel {
 		styles: s,
 		table:  t,
 	}
+}
+
+// capturesInput returns true when the memories tab is handling keyboard input
+// internally (add form or search mode), so the root model should skip global keys.
+func (m memoriesModel) capturesInput() bool {
+	return m.addMode || m.searchMode
+}
+
+func newAddFields() [4]textinput.Model {
+	kind := textinput.New()
+	kind.Placeholder = "repo_rule | workflow_rule | agent_instruction | skill_patch | anti_pattern"
+	kind.Prompt = "Kind: "
+	kind.Width = 60
+
+	title := textinput.New()
+	title.Placeholder = "memory title"
+	title.Prompt = "Title: "
+	title.Width = 60
+
+	body := textinput.New()
+	body.Placeholder = "memory body"
+	body.Prompt = "Body: "
+	body.Width = 60
+
+	scope := textinput.New()
+	scope.Placeholder = "me | repo"
+	scope.Prompt = "Scope: "
+	scope.Width = 20
+	scope.SetValue("me")
+
+	return [4]textinput.Model{kind, title, body, scope}
 }
 
 func (m *memoriesModel) setState(state *memoryloop.State) {
@@ -152,11 +187,22 @@ func (m memoriesModel) selectedRecord() *memoryloop.MemoryRecord {
 
 func (m memoriesModel) update(msg tea.Msg) (memoriesModel, tea.Cmd) {
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		if m.addMode {
+			return m.updateAddForm(keyMsg)
+		}
+
 		if m.searchMode {
 			return m.updateSearch(keyMsg)
 		}
 
 		switch {
+		case key.Matches(keyMsg, memoriesKeyMap.New):
+			m.addMode = true
+			m.addFields = newAddFields()
+			m.addFocus = 0
+			m.addFields[0].Focus()
+			return m, textinput.Blink
+
 		case key.Matches(keyMsg, memoriesKeyMap.Filter):
 			m.filter = (m.filter + 1) % 5
 			m.rebuildTable()
@@ -219,33 +265,89 @@ func (m memoriesModel) update(msg tea.Msg) (memoriesModel, tea.Cmd) {
 }
 
 func (m memoriesModel) updateSearch(msg tea.KeyMsg) (memoriesModel, tea.Cmd) {
-	switch msg.String() {
-	case "esc":
+	switch {
+	case key.Matches(msg, memoriesKeyMap.Escape):
 		m.searchMode = false
 		m.searchText = ""
 		m.rebuildTable()
 		return m, nil
-	case "enter":
+	case msg.Type == tea.KeyEnter:
 		m.searchMode = false
 		return m, nil
-	case "backspace":
+	case msg.Type == tea.KeyBackspace:
 		if len(m.searchText) > 0 {
-			m.searchText = m.searchText[:len(m.searchText)-1]
+			runes := []rune(m.searchText)
+			m.searchText = string(runes[:len(runes)-1])
 			m.rebuildTable()
 		}
 		return m, nil
 	default:
-		if len(msg.String()) == 1 {
-			m.searchText += msg.String()
+		if len(msg.Runes) > 0 {
+			m.searchText += string(msg.Runes)
 			m.rebuildTable()
 		}
 		return m, nil
 	}
 }
 
+func (m memoriesModel) updateAddForm(msg tea.KeyMsg) (memoriesModel, tea.Cmd) {
+	switch {
+	case key.Matches(msg, memoriesKeyMap.Escape):
+		m.addMode = false
+		return m, nil
+
+	case msg.String() == "tab":
+		// Blur current, advance focus, focus next
+		m.addFields[m.addFocus].Blur()
+		m.addFocus = (m.addFocus + 1) % len(m.addFields)
+		m.addFields[m.addFocus].Focus()
+		return m, textinput.Blink
+
+	case msg.String() == "shift+tab":
+		m.addFields[m.addFocus].Blur()
+		m.addFocus = (m.addFocus + len(m.addFields) - 1) % len(m.addFields)
+		m.addFields[m.addFocus].Focus()
+		return m, textinput.Blink
+
+	case msg.String() == "enter":
+		if m.addFocus < len(m.addFields)-1 {
+			// Not on last field -- advance to next
+			m.addFields[m.addFocus].Blur()
+			m.addFocus++
+			m.addFields[m.addFocus].Focus()
+			return m, textinput.Blink
+		}
+		// On last field -- submit
+		input := memoryloop.ManualRecordInput{
+			Kind:       memoryloop.Kind(m.addFields[0].Value()),
+			Title:      m.addFields[1].Value(),
+			Body:       m.addFields[2].Value(),
+			ScopeKind:  memoryloop.ScopeKind(m.addFields[3].Value()),
+			ScopeValue: "",
+		}
+		m.addMode = false
+		return m, func() tea.Msg { return addMemoryMsg{input: input} }
+	}
+
+	// Delegate to the focused text input for character input
+	var cmd tea.Cmd
+	m.addFields[m.addFocus], cmd = m.addFields[m.addFocus].Update(msg)
+	return m, cmd
+}
+
 func (m memoriesModel) view() string {
-	if m.state == nil || m.state.Store == nil || len(m.state.Store.Records) == 0 {
+	if m.addMode {
+		return m.renderAddForm()
+	}
+
+	if m.state == nil || m.state.Store == nil {
 		return "\n  No memory store found. Switch to History tab and press R to refresh.\n"
+	}
+	if len(m.state.Store.Records) == 0 {
+		return "\n  No memories yet. Press n to add one, or switch to History tab and press R to refresh.\n"
+	}
+	if len(m.records) == 0 {
+		return fmt.Sprintf("\n  No %s memories. Press f to change filter.\n", filterLabels[m.filter])
 	}
 
 	var b strings.Builder
@@ -268,6 +370,22 @@ func (m memoriesModel) view() string {
 		b.WriteString(m.renderDetail())
 	}
 
+	return b.String()
+}
+
+func (m memoriesModel) renderAddForm() string {
+	var b strings.Builder
+	b.WriteString("\n  ")
+	b.WriteString(m.styles.render(m.styles.title, "NEW MEMORY"))
+	b.WriteString("\n\n")
+	for i := range m.addFields {
+		b.WriteString("  ")
+		b.WriteString(m.addFields[i].View())
+		b.WriteString("\n")
+	}
+	b.WriteString("\n  ")
+	b.WriteString(m.styles.render(m.styles.dim, "Tab next field | Enter submit | Esc cancel"))
+	b.WriteString("\n")
 	return b.String()
 }
 
@@ -367,8 +485,9 @@ func statusDotPlain(status memoryloop.Status) string {
 }
 
 func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
 		return s
 	}
-	return s[:maxLen-1] + "\u2026"
+	return string(runes[:maxLen-1]) + "\u2026"
 }

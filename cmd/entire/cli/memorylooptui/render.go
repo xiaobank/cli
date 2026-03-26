@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/entireio/cli/cmd/entire/cli/memoryloop"
 )
 
@@ -111,23 +112,7 @@ func timeAgo(t time.Time) string {
 	}
 }
 
-// lipglossWidth estimates visible width by stripping ANSI sequences.
-// For simple use; not a full ANSI parser.
+// lipglossWidth returns the visible width of a string, correctly handling ANSI sequences.
 func lipglossWidth(s string) int {
-	inEscape := false
-	w := 0
-	for _, r := range s {
-		if r == '\x1b' {
-			inEscape = true
-			continue
-		}
-		if inEscape {
-			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
-				inEscape = false
-			}
-			continue
-		}
-		w++
-	}
-	return w
+	return lipgloss.Width(s)
 }
