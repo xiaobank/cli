@@ -1,0 +1,14 @@
+{
+  "trail_id": "3bf7a2025298",
+  "branch": "test-trail-just-seeing-interactive",
+  "base": "main",
+  "title": "Test Trail Just seeing interactive",
+  "body": "hey hey",
+  "status": "in_progress",
+  "author": "blackgirlbytes",
+  "assignees": [],
+  "labels": [],
+  "created_at": "2026-03-26T12:41:23.660608-07:00",
+  "updated_at": "2026-03-26T12:41:23.660608-07:00",
+  "merged_at": null
+}
