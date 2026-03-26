@@ -21,7 +21,7 @@ func TestCompact_FactoryDroidInlineCases(t *testing.T) {
 {"type":"message","id":"m2","timestamp":"t2","message":{"role":"assistant","content":[{"type":"text","text":"Done!"},{"type":"tool_use","id":"tu-1","name":"Write","input":{"file_path":"hello.txt","content":"hi"}}]}}
 `),
 			expected: []string{
-				`{"v":1,"agent":"factoryai-droid","cli_version":"0.5.1","type":"user","ts":"t1","content":"create a file"}`,
+				`{"v":1,"agent":"factoryai-droid","cli_version":"0.5.1","type":"user","ts":"t1","content":[{"text":"create a file"}]}`,
 				`{"v":1,"agent":"factoryai-droid","cli_version":"0.5.1","type":"assistant","ts":"t2","content":[{"type":"text","text":"Done!"},{"type":"tool_use","id":"tu-1","name":"Write","input":{"file_path":"hello.txt","content":"hi"}}]}`,
 			},
 		},
@@ -31,7 +31,7 @@ func TestCompact_FactoryDroidInlineCases(t *testing.T) {
 			input: []byte(`{"type":"message","id":"m1","timestamp":"t1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu-1","content":"success"},{"type":"text","text":"next step"}]}}
 `),
 			expected: []string{
-				`{"v":1,"agent":"factoryai-droid","cli_version":"0.5.1","type":"user","ts":"t1","content":"next step"}`,
+				`{"v":1,"agent":"factoryai-droid","cli_version":"0.5.1","type":"user","ts":"t1","content":[{"text":"next step"}]}`,
 			},
 		},
 		{
@@ -43,7 +43,7 @@ func TestCompact_FactoryDroidInlineCases(t *testing.T) {
 {"type":"message","id":"m2","timestamp":"t2","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}
 `),
 			expected: []string{
-				`{"v":1,"agent":"factoryai-droid","cli_version":"0.5.1","type":"user","ts":"t1","content":"hello"}`,
+				`{"v":1,"agent":"factoryai-droid","cli_version":"0.5.1","type":"user","ts":"t1","content":[{"text":"hello"}]}`,
 				`{"v":1,"agent":"factoryai-droid","cli_version":"0.5.1","type":"assistant","ts":"t2","content":[{"type":"text","text":"hi"}]}`,
 			},
 		},

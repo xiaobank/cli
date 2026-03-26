@@ -123,6 +123,7 @@ type parsedEntry struct {
 	kind        string // "user" or "assistant"
 	ts          json.RawMessage
 	id          string            // message ID (assistant only)
+	userID      string            // prompt ID (user only, e.g. Claude's promptId)
 	content     json.RawMessage   // stripped assistant content array, or nil
 	userText    string            // extracted user text
 	toolResults []toolResultEntry // user tool_result entries
@@ -208,13 +209,19 @@ func emitAssistant(result *[]byte, meta compactMeta, e parsedEntry) {
 }
 
 func emitUser(result *[]byte, meta compactMeta, e parsedEntry) {
+	block := marshalOrdered(
+		"id", jsonStringOrNil(e.userID),
+		"text", mustMarshal(e.userText),
+	)
+	contentJSON := mustMarshal([]json.RawMessage{block})
+
 	b := marshalOrdered(
 		"v", meta.v,
 		"agent", meta.agent,
 		"cli_version", meta.cliVersion,
 		"type", mustMarshal(transcript.TypeUser),
 		"ts", e.ts,
-		"content", mustMarshal(e.userText),
+		"content", contentJSON,
 	)
 	*result = append(*result, b...)
 	*result = append(*result, '\n')
@@ -280,6 +287,7 @@ func parseLine(lineBytes []byte, preprocess linePreprocessor) (parsedEntry, bool
 		}
 
 	case transcript.TypeUser:
+		e.userID = unquote(raw["promptId"])
 		if msg != nil {
 			if contentRaw, ok := msg["content"]; ok {
 				text, toolResults := extractUserContent(contentRaw)

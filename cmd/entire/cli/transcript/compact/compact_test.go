@@ -32,7 +32,7 @@ func TestCompact_SimpleConversation(t *testing.T) {
 `)
 
 	expected := []string{
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"2026-01-01T00:00:00Z","content":"hello"}`,
+		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"2026-01-01T00:00:00Z","content":[{"text":"hello"}]}`,
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:00:01Z","id":"msg-1","content":[{"type":"text","text":"Hi!"}]}`,
 	}
 
@@ -87,7 +87,7 @@ func TestCompact_UserWithToolResult(t *testing.T) {
 
 	expected := []string{
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:00:59Z","id":"msg-1","content":[{"type":"tool_use","id":"tu-1","name":"Bash","input":{"command":"ls"},"result":{"output":"file1.txt\nfile2.txt","status":"success"}}]}`,
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"2026-01-01T00:01:00Z","content":"now fix the bug"}`,
+		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"2026-01-01T00:01:00Z","content":[{"text":"now fix the bug"}]}`,
 	}
 
 	result, err := Compact(input, defaultOpts)
@@ -106,7 +106,7 @@ func TestCompact_UserWithMultipleToolResults(t *testing.T) {
 
 	expected := []string{
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:00:59Z","id":"msg-1","content":[{"type":"tool_use","id":"tu-1","name":"ReadFile","input":{"path":"a.txt"},"result":{"output":"A","status":"success"}},{"type":"tool_use","id":"tu-2","name":"ReadFile","input":{"path":"b.txt"},"result":{"output":"B","status":"success"}}]}`,
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"2026-01-01T00:01:00Z","content":"continue"}`,
+		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"2026-01-01T00:01:00Z","content":[{"text":"continue"}]}`,
 	}
 
 	result, err := Compact(input, defaultOpts)
@@ -162,7 +162,7 @@ func TestCompact_HumanTypeAlias(t *testing.T) {
 `)
 
 	expected := []string{
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"2026-01-01T00:00:00Z","content":"hello human"}`,
+		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"2026-01-01T00:00:00Z","content":[{"text":"hello human"}]}`,
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:00:01Z","id":"m1","content":[{"type":"text","text":"Hi!"}]}`,
 	}
 
@@ -200,7 +200,7 @@ func TestCompact_FullFixture_WithTruncation(t *testing.T) {
 	// Starting at line 3 (user with tool_result), there's no preceding assistant
 	// to inline into, so user text is emitted and tool result is lost.
 	expected := []string{
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"2026-01-01T00:01:00Z","content":"now fix the bug"}`,
+		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"2026-01-01T00:01:00Z","content":[{"text":"now fix the bug"}]}`,
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:01:01Z","id":"msg-2","content":[{"type":"text","text":"I found the issue."},{"type":"tool_use","id":"tu-2","name":"Edit","input":{"file_path":"/repo/bug.go","old_string":"bad","new_string":"good"}}]}`,
 	}
 
@@ -216,12 +216,12 @@ func TestCompact_FullFixture_NoTruncation(t *testing.T) {
 
 	expected := []string{
 		// Line 0: user "hello"
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"2026-01-01T00:00:00Z","content":"hello"}`,
+		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"2026-01-01T00:00:00Z","content":[{"text":"hello"}]}`,
 		// Line 1: assistant (thinking stripped, caller stripped, tool result inlined from line 3)
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:00:01Z","id":"msg-1","content":[{"type":"text","text":"Hi there!"},{"type":"tool_use","id":"tu-1","name":"Bash","input":{"command":"ls"},"result":{"output":"file1.txt\nfile2.txt","status":"success"}}]}`,
 		// Line 2: progress — dropped
 		// Line 3: user with tool_result — inlined above, user text emitted
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"2026-01-01T00:01:00Z","content":"now fix the bug"}`,
+		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"2026-01-01T00:01:00Z","content":[{"text":"now fix the bug"}]}`,
 		// Line 4: assistant (thinking + redacted_thinking stripped)
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:01:01Z","id":"msg-2","content":[{"type":"text","text":"I found the issue."},{"type":"tool_use","id":"tu-2","name":"Edit","input":{"file_path":"/repo/bug.go","old_string":"bad","new_string":"good"}}]}`,
 		// Lines 5-6: file-history-snapshot, system — dropped
@@ -247,7 +247,7 @@ func TestCompact_FieldOrder(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	expected := `{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"2026-01-01T00:00:00Z","content":"hello"}` + "\n"
+	expected := `{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"2026-01-01T00:00:00Z","content":[{"text":"hello"}]}` + "\n"
 	if string(result) != expected {
 		t.Errorf("field order mismatch:\ngot:  %s\nwant: %s", string(result), expected)
 	}
@@ -266,7 +266,7 @@ func TestCompact_CursorRoleOnly(t *testing.T) {
 `)
 
 	expected := []string{
-		`{"v":1,"agent":"cursor","cli_version":"0.5.1","type":"user","ts":"t1","content":"hello from cursor"}`,
+		`{"v":1,"agent":"cursor","cli_version":"0.5.1","type":"user","ts":"t1","content":[{"text":"hello from cursor"}]}`,
 		`{"v":1,"agent":"cursor","cli_version":"0.5.1","type":"assistant","ts":"t2","content":[{"type":"text","text":"Hi from Cursor!"}]}`,
 	}
 
@@ -287,7 +287,7 @@ func TestCompact_StripsIDEContextTags(t *testing.T) {
 	cursorOpts := agentOpts("cursor")
 
 	expected := []string{
-		`{"v":1,"agent":"cursor","cli_version":"0.5.1","type":"user","ts":"t1","content":"hello world"}`,
+		`{"v":1,"agent":"cursor","cli_version":"0.5.1","type":"user","ts":"t1","content":[{"text":"hello world"}]}`,
 	}
 
 	result, err := Compact(input, cursorOpts)
@@ -305,7 +305,7 @@ func TestCompact_StripsIDEContextTagsFromContentBlocks(t *testing.T) {
 `)
 
 	expected := []string{
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"t1","content":"fix the bug\n\nalso this"}`,
+		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"t1","content":[{"text":"fix the bug\n\nalso this"}]}`,
 	}
 
 	result, err := Compact(input, defaultOpts)
@@ -332,11 +332,11 @@ func TestCompact_MixedFormats(t *testing.T) {
 `)
 
 	expected := []string{
-		`{"v":1,"agent":"cursor","cli_version":"0.5.1","type":"user","ts":"t1","content":"claude user"}`,
+		`{"v":1,"agent":"cursor","cli_version":"0.5.1","type":"user","ts":"t1","content":[{"text":"claude user"}]}`,
 		`{"v":1,"agent":"cursor","cli_version":"0.5.1","type":"assistant","ts":"t2","id":"m1","content":[{"type":"text","text":"claude assistant"}]}`,
-		`{"v":1,"agent":"cursor","cli_version":"0.5.1","type":"user","ts":"t3","content":"cursor user"}`,
+		`{"v":1,"agent":"cursor","cli_version":"0.5.1","type":"user","ts":"t3","content":[{"text":"cursor user"}]}`,
 		`{"v":1,"agent":"cursor","cli_version":"0.5.1","type":"assistant","ts":"t4","content":[{"type":"text","text":"cursor assistant"}]}`,
-		`{"v":1,"agent":"cursor","cli_version":"0.5.1","type":"user","ts":"t5","content":"human alias"}`,
+		`{"v":1,"agent":"cursor","cli_version":"0.5.1","type":"user","ts":"t5","content":[{"text":"human alias"}]}`,
 	}
 
 	result, err := Compact(input, cursorOpts)
@@ -404,7 +404,7 @@ not valid json at all
 `)
 
 	expected := []string{
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"t1","content":"hello"}`,
+		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"t1","content":[{"text":"hello"}]}`,
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"t2","id":"m1","content":"hi"}`,
 	}
 
