@@ -267,9 +267,11 @@ func TestFilesWithRemainingAgentChanges_FileNotCommitted(t *testing.T) {
 		"fileB.txt": []byte("content B"),
 	})
 
-	// Only commit fileA
+	// Create both files on disk, but only commit fileA
 	fileA := filepath.Join(dir, "fileA.txt")
 	require.NoError(t, os.WriteFile(fileA, []byte("content A"), 0o644))
+	fileB := filepath.Join(dir, "fileB.txt")
+	require.NoError(t, os.WriteFile(fileB, []byte("content B"), 0o644))
 	wt, err := repo.Worktree()
 	require.NoError(t, err)
 	_, err = wt.Add("fileA.txt")
@@ -285,9 +287,9 @@ func TestFilesWithRemainingAgentChanges_FileNotCommitted(t *testing.T) {
 	shadowBranch := checkpoint.ShadowBranchNameForCommit("abc1234", "e3b0c4")
 	committedFiles := map[string]struct{}{"fileA.txt": {}}
 
-	// fileB was not committed - should be in remaining
+	// fileB was not committed but exists on disk - should be in remaining
 	remaining := filesWithRemainingAgentChanges(context.Background(), repo, shadowBranch, commit, []string{"fileA.txt", "fileB.txt"}, committedFiles)
-	assert.Equal(t, []string{"fileB.txt"}, remaining, "Uncommitted file should be in remaining")
+	assert.Equal(t, []string{"fileB.txt"}, remaining, "Uncommitted file on disk should be in remaining")
 }
 
 // TestFilesWithRemainingAgentChanges_FullyCommitted tests that files committed with

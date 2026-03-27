@@ -464,8 +464,22 @@ func filesWithRemainingAgentChanges(
 			continue
 		}
 
-		// File wasn't committed at all — it has remaining changes
+		// File wasn't committed at all — check if it still exists on disk.
+		// Files that have been stashed (git stash) or manually removed are no
+		// longer in the working tree, so there's nothing to carry forward.
+		// Without this check, stashed files cause an infinite carry-forward
+		// loop: the file stays in the shadow tree from a previous carry-forward,
+		// isn't committed, and gets carried forward again on every commit.
 		if _, wasCommitted := committedFiles[filePath]; !wasCommitted {
+			if worktreeRoot != "" {
+				absPath := filepath.Join(worktreeRoot, filePath)
+				if _, statErr := os.Stat(absPath); statErr != nil {
+					logging.Debug(logCtx, "filesWithRemainingAgentChanges: file not committed and not on disk (stashed/removed), skipping",
+						slog.String("file", filePath),
+					)
+					continue
+				}
+			}
 			remaining = append(remaining, filePath)
 			logging.Debug(logCtx, "filesWithRemainingAgentChanges: file not committed, keeping",
 				slog.String("file", filePath),
