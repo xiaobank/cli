@@ -358,7 +358,7 @@ func (m memoriesModel) view() string {
 
 	// Filter bar
 	b.WriteString(m.renderFilterBar())
-	b.WriteString("\n")
+	b.WriteString("\n\n")
 
 	// Search bar (if active)
 	if m.searchMode {
@@ -450,7 +450,9 @@ func (m memoriesModel) renderDetail() string {
 	var b strings.Builder
 	// Title line
 	b.WriteString(m.styles.render(m.styles.title, r.Title))
-	b.WriteString("  ")
+	b.WriteString("\n\n")
+
+	// Metadata line (kind, status, scope, origin)
 	b.WriteString(kindStyle(m.styles, r.Kind)(string(r.Kind)))
 	b.WriteString("  ")
 	b.WriteString(statusDot(m.styles, r.Status))
@@ -460,21 +462,23 @@ func (m memoriesModel) renderDetail() string {
 	b.WriteString(m.styles.render(m.styles.dim, string(r.ScopeKind)))
 	b.WriteString("  ")
 	b.WriteString(m.styles.render(m.styles.dim, string(r.Origin)))
-	b.WriteString("\n")
 
 	// Body
 	if r.Body != "" {
-		b.WriteString(r.Body + "\n")
+		b.WriteString("\n\n")
+		b.WriteString(r.Body)
 	}
 
 	// Why
 	if r.Why != "" {
+		b.WriteString("\n\n")
 		b.WriteString(m.styles.render(m.styles.dim, "WHY"))
 		b.WriteString("\n")
-		b.WriteString(r.Why + "\n")
+		b.WriteString(r.Why)
 	}
 
 	// Stats
+	b.WriteString("\n\n")
 	stats := fmt.Sprintf("strength: %d/5 · injected: %dx · matched: %dx · last injected: %s · created: %s",
 		r.Strength, r.InjectCount, r.MatchCount, timeAgo(r.LastInjectedAt), timeAgo(r.CreatedAt))
 	b.WriteString(m.styles.render(m.styles.dim, stats))
@@ -483,7 +487,7 @@ func (m memoriesModel) renderDetail() string {
 	cardStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("245")).
-		Padding(0, 1).
+		Padding(1, 2).
 		Width(m.width - 2)
 	out.WriteString(cardStyle.Render(b.String()))
 	return out.String()
