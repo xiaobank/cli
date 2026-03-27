@@ -71,7 +71,6 @@ func (m rootModel) Init() tea.Cmd {
 	}
 }
 
-//nolint:ireturn // required by bubbletea Model interface
 func (m rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
@@ -260,7 +259,6 @@ func (m rootModel) saveState() error {
 	return memoryloop.SaveState(m.ctx, m.state) //nolint:wrapcheck // internal helper, callers wrap
 }
 
-//nolint:ireturn // returns tea.Model as required by bubbletea dispatch pattern
 func (m rootModel) handleLifecycleAction(msg lifecycleActionMsg) (tea.Model, tea.Cmd) {
 	if m.state == nil || m.state.Store == nil || m.isRefreshing {
 		return m, nil
@@ -280,7 +278,6 @@ func (m rootModel) handleLifecycleAction(msg lifecycleActionMsg) (tea.Model, tea
 	return m, nil
 }
 
-//nolint:ireturn // returns tea.Model as required by bubbletea dispatch pattern
 func (m rootModel) handleAddMemory(msg addMemoryMsg) (tea.Model, tea.Cmd) {
 	if m.state == nil || m.state.Store == nil || m.isRefreshing {
 		return m, nil
@@ -300,7 +297,6 @@ func (m rootModel) handleAddMemory(msg addMemoryMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-//nolint:ireturn // returns tea.Model as required by bubbletea dispatch pattern
 func (m rootModel) handlePrune() (tea.Model, tea.Cmd) {
 	if m.state == nil || m.state.Store == nil || m.isRefreshing {
 		return m, nil
@@ -318,7 +314,6 @@ func (m rootModel) handlePrune() (tea.Model, tea.Cmd) {
 	return m, func() tea.Msg { return errorFlashMsg{text: msg} }
 }
 
-//nolint:ireturn // returns tea.Model as required by bubbletea dispatch pattern
 func (m rootModel) handleSettingsChanged(msg settingsChangedMsg) (tea.Model, tea.Cmd) {
 	if m.state == nil || m.state.Store == nil {
 		return m, nil

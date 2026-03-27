@@ -471,3 +471,151 @@ func splitEvidence(s string) []string {
 	}
 	return strings.Split(s, "\n")
 }
+
+// SkillSignalRow represents a skill signal joined with its session metadata.
+type SkillSignalRow struct {
+	CheckpointID       string
+	SessionIndex       int
+	SessionID          string
+	Agent              string
+	Model              string
+	Branch             string
+	CreatedAt          time.Time
+	TotalTokens        int
+	TurnCount          int
+	OverallScore       float64
+	SkillName          string
+	SkillPath          string
+	Friction           []string
+	MissingInstruction string
+}
+
+// QuerySkillSignalsForSkills returns skill signals joined with session metadata
+// for any skill whose name is in the given list.
+func (idb *InsightsDB) QuerySkillSignalsForSkills(ctx context.Context, skillNames []string) ([]SkillSignalRow, error) {
+	if len(skillNames) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(skillNames))
+	args := make([]interface{}, len(skillNames))
+	for i, name := range skillNames {
+		placeholders[i] = "?"
+		args[i] = name
+	}
+	query := fmt.Sprintf( //nolint:gosec // placeholders are all "?" literals, not user input
+		`SELECT s.checkpoint_id, s.session_index, s.session_id,
+		       s.agent, s.model, s.branch, s.created_at,
+		       s.total_tokens, s.turn_count, s.overall_score,
+		       ss.skill_name, ss.skill_path, ss.friction, ss.missing_instruction
+		FROM skill_signals ss
+		JOIN sessions s ON s.checkpoint_id = ss.checkpoint_id AND s.session_index = ss.session_index
+		WHERE ss.skill_name IN (%s)
+		ORDER BY s.created_at DESC`,
+		strings.Join(placeholders, ","),
+	)
+	rows, err := idb.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query skill signals: %w", err)
+	}
+	defer rows.Close()
+
+	var results []SkillSignalRow
+	for rows.Next() {
+		var row SkillSignalRow
+		var sessionID, agent, model, branch, skillPath, frictionText, missingInstruction sql.NullString
+		var createdAt string
+		var overallScore sql.NullFloat64
+
+		if err = rows.Scan(
+			&row.CheckpointID, &row.SessionIndex, &sessionID,
+			&agent, &model, &branch, &createdAt,
+			&row.TotalTokens, &row.TurnCount, &overallScore,
+			&row.SkillName, &skillPath, &frictionText, &missingInstruction,
+		); err != nil {
+			return nil, fmt.Errorf("scan skill signal row: %w", err)
+		}
+		row.SessionID = sessionID.String
+		row.Agent = agent.String
+		row.Model = model.String
+		row.Branch = branch.String
+		row.SkillPath = skillPath.String
+		row.Friction = splitEvidence(frictionText.String)
+		row.MissingInstruction = missingInstruction.String
+		row.OverallScore = overallScore.Float64
+		t, parseErr := time.Parse(time.RFC3339, createdAt)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse created_at %q: %w", createdAt, parseErr)
+		}
+		row.CreatedAt = t
+		results = append(results, row)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate skill signals: %w", err)
+	}
+	return results, nil
+}
+
+// SkillToolCallRow represents a session that has Skill tool invocations.
+type SkillToolCallRow struct {
+	CheckpointID string
+	SessionIndex int
+	SessionID    string
+	Agent        string
+	Model        string
+	Branch       string
+	CreatedAt    time.Time
+	TotalTokens  int
+	TurnCount    int
+	OverallScore float64
+	SkillCount   int
+}
+
+// QuerySkillToolCallSessions returns sessions that have Skill tool invocations,
+// useful for finding sessions where a skill was used without generating friction.
+func (idb *InsightsDB) QuerySkillToolCallSessions(ctx context.Context) ([]SkillToolCallRow, error) {
+	rows, err := idb.db.QueryContext(ctx, `
+		SELECT s.checkpoint_id, s.session_index, s.session_id,
+		       s.agent, s.model, s.branch, s.created_at,
+		       s.total_tokens, s.turn_count, s.overall_score,
+		       tc.count
+		FROM tool_calls tc
+		JOIN sessions s ON s.checkpoint_id = tc.checkpoint_id AND s.session_index = tc.session_index
+		WHERE tc.tool_name = 'Skill'
+		ORDER BY s.created_at DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("query skill tool call sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var results []SkillToolCallRow
+	for rows.Next() {
+		var row SkillToolCallRow
+		var sessionID, agent, model, branch sql.NullString
+		var createdAt string
+		var overallScore sql.NullFloat64
+
+		if err = rows.Scan(
+			&row.CheckpointID, &row.SessionIndex, &sessionID,
+			&agent, &model, &branch, &createdAt,
+			&row.TotalTokens, &row.TurnCount, &overallScore,
+			&row.SkillCount,
+		); err != nil {
+			return nil, fmt.Errorf("scan skill tool call row: %w", err)
+		}
+		row.SessionID = sessionID.String
+		row.Agent = agent.String
+		row.Model = model.String
+		row.Branch = branch.String
+		row.OverallScore = overallScore.Float64
+		t, parseErr := time.Parse(time.RFC3339, createdAt)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse created_at %q: %w", createdAt, parseErr)
+		}
+		row.CreatedAt = t
+		results = append(results, row)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate skill tool call sessions: %w", err)
+	}
+	return results, nil
+}
