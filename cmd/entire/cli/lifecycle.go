@@ -312,7 +312,7 @@ func maybeInjectMemoryLoop(ctx context.Context, ag agent.Agent, event *agent.Eve
 
 	logEntry := memoryloop.InjectionLog{
 		SessionID:         event.SessionID,
-		PromptPreview:     truncatePromptPreview(event.Prompt, 120),
+		PromptPreview:     truncatePromptPreview(event.Prompt, 500),
 		InjectedMemoryIDs: ids,
 		InjectedAt:        now,
 		Reason:            strings.Join(reasons, ", "),

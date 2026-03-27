@@ -24,7 +24,7 @@ type historyModel struct {
 func newHistoryModel(s tuiStyles) historyModel {
 	columns := []table.Column{
 		{Title: "Time", Width: 12},
-		{Title: "Scope", Width: 8},
+		{Title: "Scope", Width: 16},
 		{Title: "Generated", Width: 9},
 		{Title: "Activated", Width: 9},
 		{Title: "Candidate", Width: 9},
@@ -60,7 +60,7 @@ func (m *historyModel) setSize(w, h int) {
 	m.width = w
 	m.height = h
 	m.table.SetWidth(w)
-	m.table.SetHeight(h - 2)
+	m.table.SetHeight(h - 6)
 }
 
 func (m *historyModel) rebuildTable() {
@@ -73,7 +73,7 @@ func (m *historyModel) rebuildTable() {
 	for i, h := range history {
 		scope := h.Scope
 		if h.ScopeValue != "" {
-			scope += ":" + truncate(h.ScopeValue, 6)
+			scope += ":" + truncate(h.ScopeValue, 12)
 		}
 		rows[i] = table.Row{
 			timeAgo(h.At),
@@ -102,12 +102,24 @@ func (m historyModel) update(msg tea.Msg) (historyModel, tea.Cmd) {
 }
 
 func (m historyModel) view() string {
+	var b strings.Builder
+
+	// Section description
+	b.WriteString("\n  ")
+	b.WriteString(m.styles.render(m.styles.sectionHeader, "REFRESH HISTORY"))
+	b.WriteString("\n  ")
+	b.WriteString(m.styles.render(m.styles.dim,
+		"Each refresh analyzes recent sessions to generate, update, and prune memories."))
+	b.WriteString("\n  ")
+	b.WriteString(m.styles.render(m.styles.dim,
+		"Run: entire memory-loop refresh"))
+	b.WriteString("\n\n")
+
 	if m.state == nil || m.state.Store == nil || len(m.state.Store.RefreshHistory) == 0 {
-		var b strings.Builder
-		b.WriteString("\n  No refresh history yet.\n")
-		b.WriteString("  Press R to run your first refresh.\n")
+		b.WriteString("  No refresh history yet. Press R to run your first refresh.\n")
 		return b.String()
 	}
 
-	return m.table.View()
+	b.WriteString(m.table.View())
+	return b.String()
 }
