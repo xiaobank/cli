@@ -292,6 +292,42 @@ func TestFilesWithRemainingAgentChanges_FileNotCommitted(t *testing.T) {
 	assert.Equal(t, []string{"fileB.txt"}, remaining, "Uncommitted file on disk should be in remaining")
 }
 
+// TestFilesWithRemainingAgentChanges_FileNotOnDisk tests that files not committed
+// AND not on disk (e.g., stashed or manually removed) are excluded from remaining.
+func TestFilesWithRemainingAgentChanges_FileNotOnDisk(t *testing.T) {
+	t.Parallel()
+	dir := setupGitRepo(t)
+
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+
+	createShadowBranchWithContent(t, repo, "abc1234", "e3b0c4", map[string][]byte{
+		"fileA.txt": []byte("content A"),
+		"fileB.txt": []byte("content B"),
+	})
+
+	// Create only fileA on disk; fileB simulates a stashed/removed file
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "fileA.txt"), []byte("content A"), 0o644))
+	wt, err := repo.Worktree()
+	require.NoError(t, err)
+	_, err = wt.Add("fileA.txt")
+	require.NoError(t, err)
+	headCommit, err := wt.Commit("Add file A only", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@test.com", When: time.Now()},
+	})
+	require.NoError(t, err)
+
+	commit, err := repo.CommitObject(headCommit)
+	require.NoError(t, err)
+
+	shadowBranch := checkpoint.ShadowBranchNameForCommit("abc1234", "e3b0c4")
+	committedFiles := map[string]struct{}{"fileA.txt": {}}
+
+	// fileB was not committed and does not exist on disk — should be skipped
+	remaining := filesWithRemainingAgentChanges(context.Background(), repo, shadowBranch, commit, []string{"fileA.txt", "fileB.txt"}, committedFiles)
+	assert.Empty(t, remaining, "File not committed and not on disk should be excluded from remaining")
+}
+
 // TestFilesWithRemainingAgentChanges_FullyCommitted tests that files committed with
 // matching content are NOT in the remaining list.
 func TestFilesWithRemainingAgentChanges_FullyCommitted(t *testing.T) {

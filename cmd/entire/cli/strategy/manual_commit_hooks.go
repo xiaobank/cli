@@ -1043,13 +1043,23 @@ func (s *ManualCommitStrategy) postCommitProcessSession(
 		if len(remainingFiles) == 0 {
 			clearFilesystemPrompt(ctx, state.SessionID)
 		}
+	} else if allFilesGoneFromDisk(repoDir, filesTouchedBefore) {
+		// Session was NOT condensed but ALL carry-forward files are gone from
+		// disk (stashed or removed). Clear FilesTouched and schedule the shadow
+		// branch for deletion — there is nothing left to carry forward.
+		state.FilesTouched = nil
+		shadowBranchesToDelete[shadowBranchName] = struct{}{}
+		logging.Debug(logCtx, "post-commit: all carry-forward files gone from disk, scheduling shadow branch cleanup",
+			slog.String("session_id", state.SessionID),
+			slog.String("shadow_branch", shadowBranchName),
+		)
 	}
 	carryForwardSpan.End()
 
 	// Mark ENDED sessions as fully condensed when no carry-forward remains.
 	// PostCommit will skip these sessions entirely on future commits.
 	// They persist only for LastCheckpointID (amend trailer restoration).
-	if handler.condensed && state.Phase == session.PhaseEnded && len(state.FilesTouched) == 0 {
+	if state.Phase == session.PhaseEnded && len(state.FilesTouched) == 0 {
 		state.FullyCondensed = true
 	}
 
@@ -2409,6 +2419,21 @@ func subtractFiles(files []string, exclude map[string]struct{}) []string {
 		}
 	}
 	return remaining
+}
+
+// allFilesGoneFromDisk returns true when files is non-empty, repoDir is set,
+// and none of the listed files exist on disk. This detects carry-forward files
+// that were stashed or manually removed, so the shadow branch can be cleaned up.
+func allFilesGoneFromDisk(repoDir string, files []string) bool {
+	if repoDir == "" || len(files) == 0 {
+		return false
+	}
+	for _, f := range files {
+		if _, err := os.Stat(filepath.Join(repoDir, f)); err == nil {
+			return false
+		}
+	}
+	return true
 }
 
 // carryForwardToNewShadowBranch creates a new shadow branch at the current HEAD
