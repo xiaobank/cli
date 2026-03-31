@@ -264,6 +264,7 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 		TokenUsage:                  sessionData.TokenUsage,
 		SessionMetrics:              buildSessionMetrics(state),
 		InitialAttribution:          attribution,
+		PromptAttributionsJSON:      marshalPromptAttributions(state.PromptAttributions),
 		Summary:                     summary,
 	}
 
@@ -287,6 +288,19 @@ func (s *ManualCommitStrategy) CondenseSession(ctx context.Context, repo *git.Re
 
 // buildSessionMetrics creates a SessionMetrics from session state if any metrics are available.
 // Returns nil if no hook-provided metrics exist (e.g., for agents that don't report them).
+// marshalPromptAttributions encodes PromptAttributions to JSON for diagnostic persistence.
+// Returns nil if there are no attributions to persist.
+func marshalPromptAttributions(pas []PromptAttribution) json.RawMessage {
+	if len(pas) == 0 {
+		return nil
+	}
+	data, err := json.Marshal(pas)
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
 func buildSessionMetrics(state *SessionState) *cpkg.SessionMetrics {
 	if state.SessionDurationMs == 0 && state.SessionTurnCount == 0 && state.ContextTokens == 0 && state.ContextWindowSize == 0 {
 		return nil
