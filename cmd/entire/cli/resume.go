@@ -438,10 +438,15 @@ func getMetadataTree(ctx context.Context) (*object.Tree, *git.Repository, error)
 	// Try checkpoint_remote if configured. Checkpoints may live in a separate repo,
 	// so this avoids a potentially unnecessary full origin fetch.
 	if fetchErr := FetchMetadataFromCheckpointRemote(ctx); fetchErr == nil {
+		checkpointURL, hasURL, urlErr := strategy.ResolveCheckpointRemoteURL(ctx)
 		freshRepo, freshErr := openRepository(ctx)
 		if freshErr == nil {
 			logRefHash(freshRepo, "checkpoint-remote")
 			metadataTree, treeErr := strategy.GetMetadataBranchTree(freshRepo)
+			if treeErr != nil && urlErr == nil && hasURL && checkpointURL != "" {
+				fetchRef := strategy.MetadataBranchFetchRef(checkpointURL)
+				metadataTree, treeErr = strategy.GetMetadataBranchTreeAtRef(freshRepo, fetchRef)
+			}
 			if treeErr == nil {
 				logging.Debug(logCtx, "metadata tree obtained via checkpoint remote fetch",
 					slog.String("tree_hash", metadataTree.Hash.String()),
@@ -464,6 +469,10 @@ func getMetadataTree(ctx context.Context) (*object.Tree, *git.Repository, error)
 		if repoErr == nil {
 			logRefHash(freshRepo, "full-fetch")
 			metadataTree, treeErr := strategy.GetMetadataBranchTree(freshRepo)
+			if treeErr != nil {
+				fetchRef := strategy.MetadataBranchFetchRef("origin")
+				metadataTree, treeErr = strategy.GetMetadataBranchTreeAtRef(freshRepo, fetchRef)
+			}
 			if treeErr == nil {
 				logging.Debug(logCtx, "metadata tree obtained via full fetch",
 					slog.String("tree_hash", metadataTree.Hash.String()),
@@ -732,17 +741,46 @@ func checkRemoteMetadata(ctx context.Context, w, errW io.Writer, checkpointID id
 				logging.Debug(logCtx, "checkpoint remote: open repository failed after fetch",
 					slog.String("error", freshErr.Error()),
 				)
-			} else if metadataTree, treeErr := strategy.GetMetadataBranchTree(freshRepo); treeErr != nil {
-				logging.Debug(logCtx, "checkpoint remote: fetch succeeded but tree read failed",
-					slog.String("error", treeErr.Error()),
-				)
-			} else if metadata, err := tryReadCheckpointFromTree(ctx, metadataTree, freshRepo, checkpointID); err != nil {
-				logging.Debug(logCtx, "checkpoint remote: tree read succeeded but checkpoint metadata read failed",
-					slog.String("checkpoint_id", checkpointID.String()),
-					slog.String("error", err.Error()),
-				)
 			} else {
-				return resumeSession(ctx, w, errW, metadata, false)
+				fetchRef := strategy.MetadataBranchFetchRef(checkpointURL)
+				var metadataTrees []*object.Tree
+				seen := make(map[plumbing.Hash]struct{})
+				addTree := func(tr *object.Tree) {
+					if _, ok := seen[tr.Hash]; ok {
+						return
+					}
+					seen[tr.Hash] = struct{}{}
+					metadataTrees = append(metadataTrees, tr)
+				}
+				if localTree, err := strategy.GetMetadataBranchTree(freshRepo); err == nil {
+					addTree(localTree)
+				}
+				if fetchedTree, err := strategy.GetMetadataBranchTreeAtRef(freshRepo, fetchRef); err == nil {
+					addTree(fetchedTree)
+				}
+				if len(metadataTrees) == 0 {
+					logging.Debug(logCtx, "checkpoint remote: fetch succeeded but tree read failed",
+						slog.String("error", "could not read local or fetched metadata ref"),
+					)
+				} else {
+					var lastErr error
+					for _, metadataTree := range metadataTrees {
+						metadata, err := tryReadCheckpointFromTree(ctx, metadataTree, freshRepo, checkpointID)
+						if err != nil {
+							lastErr = err
+							continue
+						}
+						return resumeSession(ctx, w, errW, metadata, false)
+					}
+					msg := "checkpoint not found in fetched trees"
+					if lastErr != nil {
+						msg = lastErr.Error()
+					}
+					logging.Debug(logCtx, "checkpoint remote: checkpoint metadata read failed",
+						slog.String("checkpoint_id", checkpointID.String()),
+						slog.String("error", msg),
+					)
+				}
 			}
 		} else {
 			logging.Debug(logCtx, "checkpoint remote fetch failed",

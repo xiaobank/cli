@@ -13,6 +13,8 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 
+	"github.com/go-git/go-git/v6"
+	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -744,8 +746,11 @@ func TestFetchMetadataBranch_FetchesAndCreatesLocalBranch(t *testing.T) {
 	// Branch should now exist
 	assert.True(t, testutil.BranchExists(t, localDir, "entire/checkpoints/v1"))
 
-	// Temp ref should be cleaned up
-	assert.False(t, testutil.BranchExists(t, localDir, "refs/entire-fetch-tmp/entire/checkpoints/v1"))
+	// Fetch ref is retained so the remote tip stays addressable without clobbering the local branch.
+	repo, err := git.PlainOpen(localDir)
+	require.NoError(t, err)
+	_, err = repo.Reference(MetadataBranchFetchRef(remoteDir), true)
+	require.NoError(t, err)
 }
 
 // Not parallel: uses t.Chdir()
@@ -835,6 +840,103 @@ func TestFetchMetadataBranch_UpdatesExistingLocalBranch(t *testing.T) {
 	hash2 := strings.TrimSpace(string(hash2Out))
 
 	assert.NotEqual(t, hash1, hash2, "FetchMetadataBranch should update existing local branch to new remote tip")
+}
+
+// Not parallel: uses t.Chdir()
+func TestFetchMetadataBranch_LocalAheadDoesNotResetBranch(t *testing.T) {
+	ctx := context.Background()
+
+	remoteDir := t.TempDir()
+	testutil.InitRepo(t, remoteDir)
+	testutil.WriteFile(t, remoteDir, "f.txt", "init")
+	testutil.GitAdd(t, remoteDir, "f.txt")
+	testutil.GitCommit(t, remoteDir, "init")
+
+	branchCmd := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
+	branchCmd.Dir = remoteDir
+	branchCmd.Env = testutil.GitIsolatedEnv()
+	branchOut, err := branchCmd.Output()
+	require.NoError(t, err)
+	defaultBranch := strings.TrimSpace(string(branchOut))
+
+	cmd := exec.CommandContext(ctx, "git", "checkout", "--orphan", "entire/checkpoints/v1")
+	cmd.Dir = remoteDir
+	cmd.Env = testutil.GitIsolatedEnv()
+	require.NoError(t, cmd.Run())
+
+	cmd = exec.CommandContext(ctx, "git", "rm", "-rf", ".")
+	cmd.Dir = remoteDir
+	cmd.Env = testutil.GitIsolatedEnv()
+	require.NoError(t, cmd.Run())
+
+	testutil.WriteFile(t, remoteDir, "metadata.json", `{"version": 1}`)
+	testutil.GitAdd(t, remoteDir, "metadata.json")
+	cmd = exec.CommandContext(ctx, "git", "-c", "commit.gpgsign=false", "commit", "-m", "v1 remote")
+	cmd.Dir = remoteDir
+	cmd.Env = testutil.GitIsolatedEnv()
+	require.NoError(t, cmd.Run())
+
+	cmd = exec.CommandContext(ctx, "git", "checkout", defaultBranch)
+	cmd.Dir = remoteDir
+	cmd.Env = testutil.GitIsolatedEnv()
+	require.NoError(t, cmd.Run())
+
+	localDir := t.TempDir()
+	testutil.InitRepo(t, localDir)
+	testutil.WriteFile(t, localDir, "f.txt", "init")
+	testutil.GitAdd(t, localDir, "f.txt")
+	testutil.GitCommit(t, localDir, "init")
+	t.Chdir(localDir)
+
+	require.NoError(t, FetchMetadataBranch(ctx, remoteDir))
+
+	// Local-only commit on metadata branch (ahead of remote).
+	cmd = exec.CommandContext(ctx, "git", "checkout", paths.MetadataBranchName)
+	cmd.Dir = localDir
+	cmd.Env = testutil.GitIsolatedEnv()
+	require.NoError(t, cmd.Run())
+	testutil.WriteFile(t, localDir, "local-only.txt", "x")
+	testutil.GitAdd(t, localDir, "local-only.txt")
+	cmd = exec.CommandContext(ctx, "git", "-c", "commit.gpgsign=false", "commit", "-m", "local only")
+	cmd.Dir = localDir
+	cmd.Env = testutil.GitIsolatedEnv()
+	require.NoError(t, cmd.Run())
+
+	hashLocalOnly := testutil.GetHeadHash(t, localDir)
+
+	cmd = exec.CommandContext(ctx, "git", "checkout", defaultBranch)
+	cmd.Dir = localDir
+	cmd.Env = testutil.GitIsolatedEnv()
+	require.NoError(t, cmd.Run())
+
+	// Advance remote metadata branch.
+	cmd = exec.CommandContext(ctx, "git", "checkout", paths.MetadataBranchName)
+	cmd.Dir = remoteDir
+	cmd.Env = testutil.GitIsolatedEnv()
+	require.NoError(t, cmd.Run())
+	testutil.WriteFile(t, remoteDir, "metadata.json", `{"version": 2}`)
+	testutil.GitAdd(t, remoteDir, "metadata.json")
+	cmd = exec.CommandContext(ctx, "git", "-c", "commit.gpgsign=false", "commit", "-m", "v2 remote")
+	cmd.Dir = remoteDir
+	cmd.Env = testutil.GitIsolatedEnv()
+	require.NoError(t, cmd.Run())
+	cmd = exec.CommandContext(ctx, "git", "checkout", defaultBranch)
+	cmd.Dir = remoteDir
+	cmd.Env = testutil.GitIsolatedEnv()
+	require.NoError(t, cmd.Run())
+
+	require.NoError(t, FetchMetadataBranch(ctx, remoteDir))
+
+	repo, err := git.PlainOpen(localDir)
+	require.NoError(t, err)
+	localRef, err := repo.Reference(plumbing.NewBranchReferenceName(paths.MetadataBranchName), true)
+	require.NoError(t, err)
+	assert.Equal(t, plumbing.NewHash(hashLocalOnly), localRef.Hash(),
+		"local metadata branch should not move backward when ahead of remote")
+
+	fetchRef, err := repo.Reference(MetadataBranchFetchRef(remoteDir), true)
+	require.NoError(t, err)
+	assert.NotEqual(t, localRef.Hash(), fetchRef.Hash(), "fetch ref should track remote tip")
 }
 
 // v2RefSeq is a counter to ensure each call to createV2MainRef produces a distinct commit.

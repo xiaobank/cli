@@ -370,44 +370,14 @@ func FetchAndCheckoutRemoteBranch(ctx context.Context, branchName string) error 
 	return CheckoutBranch(ctx, branchName)
 }
 
-// FetchMetadataBranch fetches the entire/checkpoints/v1 branch from origin and creates/updates the local branch.
-// This is used when the metadata branch exists on remote but not locally.
+// FetchMetadataBranch fetches the entire/checkpoints/v1 branch from origin and advances the
+// local branch only on a fast-forward (or when the branch is missing).
 // Uses git CLI instead of go-git for fetch because go-git doesn't use credential helpers,
 // which breaks HTTPS URLs that require authentication.
 func FetchMetadataBranch(ctx context.Context) error {
-	branchName := paths.MetadataBranchName
-
-	// Use git CLI for fetch (go-git's fetch can be tricky with auth)
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	defer cancel()
-
-	refSpec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branchName, branchName)
-
-	fetchCmd := strategy.CheckpointGitCommand(ctx, "origin", "fetch", "origin", refSpec)
-	if output, err := fetchCmd.CombinedOutput(); err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			return errors.New("fetch timed out after 2 minutes")
-		}
-		return fmt.Errorf("failed to fetch %s from origin: %s: %w", branchName, strings.TrimSpace(string(output)), err)
+	if err := strategy.FetchMetadataBranch(ctx, "origin"); err != nil {
+		return fmt.Errorf("fetch metadata branch from origin: %w", err)
 	}
-
-	repo, err := openRepository(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to open repository: %w", err)
-	}
-
-	// Get the remote branch reference
-	remoteRef, err := repo.Reference(plumbing.NewRemoteReferenceName("origin", branchName), true)
-	if err != nil {
-		return fmt.Errorf("branch '%s' not found on origin: %w", branchName, err)
-	}
-
-	// Create or update local branch pointing to the same commit
-	localRef := plumbing.NewHashReference(plumbing.NewBranchReferenceName(branchName), remoteRef.Hash())
-	if err := repo.Storer.SetReference(localRef); err != nil {
-		return fmt.Errorf("failed to create local %s branch: %w", branchName, err)
-	}
-
 	return nil
 }
 
@@ -444,10 +414,8 @@ func FetchMetadataTreeOnly(ctx context.Context) error {
 		return fmt.Errorf("branch '%s' not found on origin: %w", branchName, err)
 	}
 
-	// Create or update local branch pointing to the same commit
-	localRef := plumbing.NewHashReference(plumbing.NewBranchReferenceName(branchName), remoteRef.Hash())
-	if err := repo.Storer.SetReference(localRef); err != nil {
-		return fmt.Errorf("failed to create local %s branch: %w", branchName, err)
+	if err := strategy.MaybeFastForwardLocalMetadataBranch(ctx, repo, remoteRef.Hash()); err != nil {
+		return fmt.Errorf("failed to update local %s branch: %w", branchName, err)
 	}
 
 	return nil

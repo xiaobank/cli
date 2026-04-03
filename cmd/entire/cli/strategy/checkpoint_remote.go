@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -19,6 +20,9 @@ import (
 
 // checkpointRemoteFetchTimeout is the timeout for fetching branches from the checkpoint URL.
 const checkpointRemoteFetchTimeout = 30 * time.Second
+
+// checkpointMetadataBranchFetchTimeout is the timeout for fetching the metadata branch (full objects).
+const checkpointMetadataBranchFetchTimeout = 2 * time.Minute
 
 // Git remote protocol identifiers.
 const (
@@ -337,18 +341,40 @@ func ResolveCheckpointRemoteURL(ctx context.Context) (string, bool, error) {
 	return checkpointURL, true, nil
 }
 
-// FetchMetadataBranch fetches the metadata branch from the checkpoint remote URL
-// and updates the local branch. Unlike fetchMetadataBranchIfMissing, this always
-// fetches regardless of whether the branch exists locally (for resume scenarios
-// where the local branch may be stale).
-func FetchMetadataBranch(ctx context.Context, remoteURL string) error {
+// metadataBranchFetchRefSpec returns the refspec and destination ref for FetchMetadataBranch.
+// URL targets and absolute filesystem paths (e.g. tests) fetch into refs/entire-fetch-tmp/…;
+// named remotes use refs/remotes/<remote>/… so origin matches normal git layouts.
+func metadataBranchFetchRefSpecAndDest(target string) (refSpec string, destRef plumbing.ReferenceName) {
 	branchName := paths.MetadataBranchName
+	if isURL(target) || filepath.IsAbs(target) {
+		destRef = plumbing.ReferenceName("refs/entire-fetch-tmp/" + branchName)
+		refSpec = fmt.Sprintf("+refs/heads/%s:%s", branchName, destRef)
+		return refSpec, destRef
+	}
+	destRef = plumbing.NewRemoteReferenceName(target, branchName)
+	refSpec = fmt.Sprintf("+refs/heads/%s:%s", branchName, destRef.String())
+	return refSpec, destRef
+}
 
-	fetchCtx, cancel := context.WithTimeout(ctx, checkpointRemoteFetchTimeout)
+// MetadataBranchFetchRef returns the reference updated by FetchMetadataBranch for target
+// (remote name, repo URL, or absolute path to a repo). After a fetch, this ref points at
+// the remote tip even when refs/heads/entire/checkpoints/v1 was not advanced
+// (non-fast-forward).
+func MetadataBranchFetchRef(target string) plumbing.ReferenceName {
+	_, dest := metadataBranchFetchRefSpecAndDest(target)
+	return dest
+}
+
+// FetchMetadataBranch fetches the metadata branch from the checkpoint remote URL
+// and advances the local branch only on a fast-forward (or when the branch is missing).
+// Unlike fetchMetadataBranchIfMissing, this always fetches regardless of whether the branch
+// exists locally. The fetch destination ref (MetadataBranchFetchRef) always receives the
+// remote tip so callers can read new commits when the local branch could not be advanced.
+func FetchMetadataBranch(ctx context.Context, remoteURL string) error {
+	fetchCtx, cancel := context.WithTimeout(ctx, checkpointMetadataBranchFetchTimeout)
 	defer cancel()
 
-	tmpRef := "refs/entire-fetch-tmp/" + branchName
-	refSpec := fmt.Sprintf("+refs/heads/%s:%s", branchName, tmpRef)
+	refSpec, destRef := metadataBranchFetchRefSpecAndDest(remoteURL)
 	fetchCmd := CheckpointGitCommand(fetchCtx, remoteURL, "fetch", "--no-tags", remoteURL, refSpec)
 	// Merge GIT_TERMINAL_PROMPT=0 into whatever env CheckpointGitCommand set.
 	// If the token was injected, cmd.Env is already populated; otherwise use os.Environ().
@@ -372,18 +398,14 @@ func FetchMetadataBranch(ctx context.Context, remoteURL string) error {
 		return fmt.Errorf("failed to open repository: %w", err)
 	}
 
-	fetchedRef, err := repo.Reference(plumbing.ReferenceName(tmpRef), true)
+	fetchedRef, err := repo.Reference(destRef, true)
 	if err != nil {
 		return fmt.Errorf("branch not found after fetch: %w", err)
 	}
 
-	branchRef := plumbing.NewBranchReferenceName(branchName)
-	newRef := plumbing.NewHashReference(branchRef, fetchedRef.Hash())
-	if err := repo.Storer.SetReference(newRef); err != nil {
-		return fmt.Errorf("failed to create local branch from fetched ref: %w", err)
+	if err := MaybeFastForwardLocalMetadataBranch(ctx, repo, fetchedRef.Hash()); err != nil {
+		return fmt.Errorf("failed to update local metadata branch: %w", err)
 	}
-
-	_ = repo.Storer.RemoveReference(plumbing.ReferenceName(tmpRef)) //nolint:errcheck // cleanup is best-effort
 
 	return nil
 }

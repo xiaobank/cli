@@ -117,6 +117,34 @@ func IsAncestorOf(ctx context.Context, repo *git.Repository, commit, target plum
 	return found
 }
 
+// MaybeFastForwardLocalMetadataBranch updates refs/heads/entire/checkpoints/v1 to remoteTip
+// when that branch is missing or remoteTip is an ancestor of (or equal to) the current tip
+// (a fast-forward). If the current tip is not an ancestor of remoteTip, the branch is left
+// unchanged so local-only metadata commits are not discarded.
+func MaybeFastForwardLocalMetadataBranch(ctx context.Context, repo *git.Repository, remoteTip plumbing.Hash) error {
+	branchRef := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
+	localRef, err := repo.Reference(branchRef, true)
+	if errors.Is(err, plumbing.ErrReferenceNotFound) {
+		if setErr := repo.Storer.SetReference(plumbing.NewHashReference(branchRef, remoteTip)); setErr != nil {
+			return fmt.Errorf("create local metadata branch: %w", setErr)
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to read local metadata branch: %w", err)
+	}
+	if localRef.Hash() == remoteTip {
+		return nil
+	}
+	if IsAncestorOf(ctx, repo, localRef.Hash(), remoteTip) {
+		if setErr := repo.Storer.SetReference(plumbing.NewHashReference(branchRef, remoteTip)); setErr != nil {
+			return fmt.Errorf("fast-forward local metadata branch: %w", setErr)
+		}
+		return nil
+	}
+	return nil
+}
+
 // ListCheckpoints returns all checkpoints from the entire/checkpoints/v1 branch.
 // Scans sharded paths: <id[:2]>/<id[2:]>/ directories containing metadata.json.
 func ListCheckpoints(ctx context.Context) ([]CheckpointInfo, error) {
@@ -613,6 +641,25 @@ func GetMetadataBranchTree(repo *git.Repository) (*object.Tree, error) {
 	ref, err := repo.Reference(refName, true)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get metadata branch reference: %w", err)
+	}
+
+	commit, err := repo.CommitObject(ref.Hash())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get metadata branch commit: %w", err)
+	}
+
+	tree, err := commit.Tree()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get metadata branch tree: %w", err)
+	}
+	return tree, nil
+}
+
+// GetMetadataBranchTreeAtRef returns the tree for the commit at refName (a metadata branch ref).
+func GetMetadataBranchTreeAtRef(repo *git.Repository, refName plumbing.ReferenceName) (*object.Tree, error) {
+	ref, err := repo.Reference(refName, true)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get metadata ref %s: %w", refName, err)
 	}
 
 	commit, err := repo.CommitObject(ref.Hash())
