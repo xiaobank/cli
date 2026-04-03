@@ -619,7 +619,7 @@ Setup:
 3. Ensure latest commit does not already contain `Entire-Checkpoint` trailer.
 
 Run:
-1. Execute `entire attach <session-id> --agent <agent-name>`.
+1. Execute `entire attach <session-id>`.
 2. When prompted, allow trailer amendment (or rerun with `--force`).
 
 Checks:
@@ -643,7 +643,7 @@ Setup:
 2. Ensure a second transcript/session exists to attach.
 
 Run:
-1. Execute `entire attach <session-id> --agent <agent-name>`.
+1. Execute `entire attach <session-id>`.
 
 Checks:
 
@@ -666,7 +666,7 @@ Setup:
 1. Use a session ID that already has `LastCheckpointID` in session state.
 
 Run:
-1. Execute `entire attach <existing-session-id> --agent <agent-name>`.
+1. Execute `entire attach <existing-session-id>`.
 
 Expected:
 - Command reports session already has checkpoint.
@@ -680,7 +680,7 @@ Setup:
 3. Attach a new session to that checkpoint.
 
 Run:
-1. Execute `entire attach <session-id> --agent <agent-name>`.
+1. Execute `entire attach <session-id>`.
 
 Checks:
 
