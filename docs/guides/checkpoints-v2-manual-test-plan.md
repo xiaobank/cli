@@ -639,7 +639,7 @@ Expected:
 ### Scenario 2: Attach adds session to existing checkpoint
 
 Setup:
-1. Ensure latest commit already has `Entire-Checkpoint` trailer.
+1. Ensure latest commit already has `Entire-Checkpoint` trailer (this reuses that checkpoint; it does not block attaching additional sessions).
 2. Ensure a second transcript/session exists to attach.
 
 Run:
