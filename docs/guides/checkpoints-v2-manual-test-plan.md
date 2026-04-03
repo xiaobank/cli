@@ -79,6 +79,9 @@ Use this helper to derive `<shard_path>` from a checkpoint ID.
 Use the reusable executable script to determine the shard path.
 
 ```bash
+# Ensure helper directory exists
+mkdir -p scripts
+
 cat > scripts/checkpoint-shard-path <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
