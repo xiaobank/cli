@@ -500,6 +500,8 @@ Expected:
 - What it does: migrates v1 checkpoint storage into v2 split refs.
 - Use it for: upgrading repositories with existing v1 checkpoint history.
 
+Note: `entire migrate` is not implemented yet. Treat this section as a forward-looking validation plan and run it only after the command becomes available.
+
 ### Scenario 1: First migration run
 
 Setup:
