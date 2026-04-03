@@ -23,6 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - Resume failing when checkpoints aren't fetched locally yet ([#796](https://github.com/entireio/cli/pull/796))
 - OpenCode transcript export resilient to stdout truncation ([#832](https://github.com/entireio/cli/pull/832))
+- Checkpoint linkage preserved after git history rewrites (rebase, filter-branch, amend) via tree hash fallback ([#840](https://github.com/entireio/cli/pull/840), [#834](https://github.com/entireio/cli/issues/834))
+- Fail-closed content detection in prepare-commit-msg to prevent dangling checkpoint trailers from stale sessions ([#826](https://github.com/entireio/cli/pull/826))
+
+### Thanks
+
+Thanks to @sanogueralorenzo for the fail-closed content detection fix and OpenCode plugin session-start ordering! Thanks to @SvenMeyer for reporting the checkpoint linkage issue after git history rewrites.
 
 ### Housekeeping
 
