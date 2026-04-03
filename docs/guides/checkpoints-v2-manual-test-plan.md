@@ -422,76 +422,88 @@ Expected:
 
 ## 4) `entire clean`
 
-- What it does: removes retention-expired archived raw transcript generations.
-- Use it for: storage cleanup while preserving permanent checkpoint metadata.
+- What it does: cleans session state and shadow branch data for current HEAD, or orphaned Entire data with `--all`.
+- Use it for: removing stale session metadata and orphaned Entire artifacts.
 
-### Scenario 1: No eligible generations
+### Scenario 1: Current HEAD cleanup
 
 Setup:
-1. Ensure archived generations exist but none are older than retention window.
+1. In `repo-a`, create a session on the current HEAD so there is session state and shadow-branch data.
 
 Run:
-1. Execute `entire clean`.
+1. Execute `entire clean --dry-run` and review the preview.
+2. Execute `entire clean` and confirm the prompt.
 
 Checks:
-Run this block before and after `entire clean`:
 
 ```bash
-# Local v2 metadata ref hash
-git show-ref -- refs/entire/checkpoints/v2/main
-# Local v2 raw current ref hash
-git show-ref -- refs/entire/checkpoints/v2/full/current
-# All local v2 raw refs with object IDs
-git for-each-ref --format='%(refname:short) %(objectname)' 'refs/entire/checkpoints/v2/full/*'
-# Remote view of archived v2 refs on origin
-git ls-remote origin 'refs/entire/checkpoints/v2/full/*'
-# List archived v2 raw generation refs
-git for-each-ref --format='%(refname)' 'refs/entire/checkpoints/v2/full/[0-9]*'
-# Read generation metadata for retention validation
-git show refs/entire/checkpoints/v2/full/0000000000001:generation.json
+# List shadow branches before/after
+git branch --list 'entire/*'
+# List local session state files before/after
+ls .git/entire-sessions
 ```
 
 Expected:
-- No archived refs are deleted.
+- `--dry-run` lists items without deleting.
+- `entire clean` removes current-HEAD session state and shadow branch data.
 
-### Scenario 2: Eligible generation deletion
-
-Setup:
-1. Make at least one archived generation retention-eligible.
-
-Run:
-1. Execute `entire clean`.
-
-Expected:
-- Only eligible archived refs are deleted.
-
-### Scenario 3: Mixed eligibility
+### Scenario 2: Active-session guard and `--force`
 
 Setup:
-1. Have at least two archived generations, one eligible and one not.
+1. Start an active session on current HEAD.
 
 Run:
-1. Execute `entire clean`.
+1. Execute `entire clean` without `--force`.
+2. Execute `entire clean --force`.
 
 Expected:
-- Eligible generation removed; non-eligible remains.
+- Without `--force`, command warns and refuses to clean active session data.
+- With `--force`, command proceeds.
 
-### Scenario 4: Remote deletion behavior
+### Scenario 3: Repository-wide orphan cleanup (`--all`)
 
 Setup:
-1. Configure origin or `checkpoint_remote` for v2 ref pushes.
+1. Create orphaned data (e.g., old shadow branches, orphaned session-state files, or orphaned checkpoint entries on `entire/checkpoints/v1`).
 
 Run:
-1. Execute `entire clean`.
+1. Execute `entire clean --all --dry-run`.
+2. Execute `entire clean --all`.
+
+Checks:
+
+```bash
+# List shadow branches before/after --all
+git branch --list 'entire/*'
+# Inspect session state files before/after --all
+ls .git/entire-sessions
+# Inspect metadata branch tip commit before/after --all
+git log --oneline -1 entire/checkpoints/v1
+```
 
 Expected:
-- Remote archived refs match local deletions.
+- Dry-run previews orphaned items.
+- `--all` removes orphaned items and temporary files.
+- `entire/checkpoints/v1` branch is preserved.
+
+### Scenario 4: Single-session cleanup (`--session`)
+
+Setup:
+1. Ensure at least one known session ID exists.
+
+Run:
+1. Execute `entire clean --session <session-id> --dry-run`.
+2. Execute `entire clean --session <session-id>`.
+
+Expected:
+- Only the specified session is cleaned.
+- File changes remain in working directory (metadata/session cleanup only).
 
 ### Pass checklist
 
-- [ ] Retention eligibility matches configuration.
-- [ ] `/main` and `/full/current` unchanged.
-- [ ] Local and remote deletion results match expected behavior.
+- [ ] Current-HEAD cleanup behavior validated.
+- [ ] Active-session guard and `--force` behavior validated.
+- [ ] `--all` orphan cleanup behavior validated.
+- [ ] `--session` cleanup behavior validated.
 
 ---
 
