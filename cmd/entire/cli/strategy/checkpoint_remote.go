@@ -147,6 +147,16 @@ func ResolveRemoteRepo(ctx context.Context, remoteName string) (host, owner, rep
 	return info.host, info.owner, info.repo, nil
 }
 
+// ParseRemoteURL parses a git remote URL (SSH or HTTPS) into host, owner, and repo.
+// For example, "git@github.com:org/my-repo.git" returns ("github.com", "org", "my-repo", nil).
+func ParseRemoteURL(rawURL string) (host, owner, repo string, err error) {
+	info, err := parseGitRemoteURL(rawURL)
+	if err != nil {
+		return "", "", "", err
+	}
+	return info.host, info.owner, info.repo, nil
+}
+
 // gitRemoteInfo holds parsed components of a git remote URL.
 type gitRemoteInfo struct {
 	protocol string // "ssh" or "https"
@@ -168,7 +178,7 @@ func parseGitRemoteURL(rawURL string) (*gitRemoteInfo, error) {
 		// Split on the first ":"
 		parts := strings.SplitN(rawURL, ":", 2)
 		if len(parts) != 2 {
-			return nil, fmt.Errorf("invalid SSH URL: %s", redactURL(rawURL))
+			return nil, fmt.Errorf("invalid SSH URL: %s", RedactURL(rawURL))
 		}
 		hostPart := parts[0] // e.g., "git@github.com"
 		pathPart := parts[1] // e.g., "org/repo.git"
@@ -189,12 +199,12 @@ func parseGitRemoteURL(rawURL string) (*gitRemoteInfo, error) {
 	// URL format: https://github.com/org/repo.git or ssh://git@github.com/org/repo.git
 	u, err := url.Parse(rawURL)
 	if err != nil {
-		return nil, fmt.Errorf("invalid URL: %s", redactURL(rawURL))
+		return nil, fmt.Errorf("invalid URL: %s", RedactURL(rawURL))
 	}
 
 	protocol := u.Scheme
 	if protocol == "" {
-		return nil, fmt.Errorf("no protocol in URL: %s", redactURL(rawURL))
+		return nil, fmt.Errorf("no protocol in URL: %s", RedactURL(rawURL))
 	}
 	host := u.Hostname()
 
@@ -262,9 +272,9 @@ func getRemoteURL(ctx context.Context, remoteName string) (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
-// redactURL removes credentials from a URL for safe logging.
+// RedactURL removes credentials from a URL for safe logging.
 // Handles both HTTPS URLs with embedded credentials and general URLs.
-func redactURL(rawURL string) string {
+func RedactURL(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		// For non-URL formats (SSH SCP), just return the host portion
@@ -339,7 +349,7 @@ func FetchMetadataBranch(ctx context.Context, remoteURL string) error {
 	if output, err := fetchCmd.CombinedOutput(); err != nil {
 		// Include redacted output for diagnostics without leaking credentials.
 		// Git stderr may echo the URL with embedded credentials, so replace it.
-		redactedURL := redactURL(remoteURL)
+		redactedURL := RedactURL(remoteURL)
 		msg := strings.TrimSpace(strings.ReplaceAll(string(output), remoteURL, redactedURL))
 		if msg != "" {
 			return fmt.Errorf("fetch from %s failed: %s: %w", redactedURL, msg, err)
@@ -381,7 +391,7 @@ func FetchV2MainFromURL(ctx context.Context, remoteURL string) error {
 	}
 	fetchCmd.Env = append(fetchCmd.Env, "GIT_TERMINAL_PROMPT=0")
 	if output, err := fetchCmd.CombinedOutput(); err != nil {
-		redactedURL := redactURL(remoteURL)
+		redactedURL := RedactURL(remoteURL)
 		msg := strings.TrimSpace(strings.ReplaceAll(string(output), remoteURL, redactedURL))
 		if msg != "" {
 			return fmt.Errorf("fetch v2 /main from %s failed: %s: %w", redactedURL, msg, err)
