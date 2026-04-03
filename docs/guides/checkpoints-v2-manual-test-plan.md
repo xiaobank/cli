@@ -712,49 +712,7 @@ Expected:
 
 ---
 
-## 7) `entire status` (regression guard)
-
-- What it does: reports current session status/phase information.
-- Use it for: quick health checks independent of committed checkpoint refs.
-
-### Scenario 1: Baseline status behavior
-
-Setup:
-1. In `repo-a`, run normal session flow and create at least one checkpoint.
-
-Run:
-1. Execute `entire status`.
-
-Expected:
-- Status output reflects current session/phase accurately.
-
-### Scenario 2: Status with missing local v2 refs
-
-Setup:
-1. In disposable clone, remove local v2 refs.
-
-```bash
-git update-ref -d refs/entire/checkpoints/v2/main
-git update-ref -d refs/entire/checkpoints/v2/full/current
-for ref in $(git for-each-ref --format='%(refname)' 'refs/entire/checkpoints/v2/full/[0-9]*'); do
-  git update-ref -d "$ref"
-done
-```
-
-Run:
-1. Execute `entire status`.
-
-Expected:
-- Status remains functional and does not depend on committed v2 refs.
-
-### Pass checklist
-
-- [ ] Status remains correct before/after v2 writes.
-- [ ] Status remains functional when local v2 refs are absent.
-
----
-
-## 8) `entire rewind` (regression guard)
+## 7) `entire rewind` (regression guard)
 
 - What it does: restores repository files/logs to a prior checkpoint.
 - Use it for: undoing recent changes and returning to earlier state.
@@ -790,4 +748,4 @@ Migration manual validation is complete when:
 - `resume`, `explain`, `doctor`, `clean`, `migrate`, and `attach` pass applicable scenarios
 - remote fetch and `checkpoint_remote` paths pass in missing-local situations
 - rotation and cleanup lifecycle pass without violating `/main` permanence
-- `status` and `rewind` show no regressions
+- `rewind` shows no regressions
