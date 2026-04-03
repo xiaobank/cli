@@ -3,11 +3,13 @@ package strategy
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
@@ -153,12 +155,17 @@ func (s *ManualCommitStrategy) findSessionsForWorktree(ctx context.Context, work
 // cherry-pick) from user-initiated ones. Agent-initiated operations should be
 // checkpointed; user-initiated ones should be skipped.
 func (s *ManualCommitStrategy) hasActiveSessionInWorktree(ctx context.Context) bool {
+	logCtx := logging.WithComponent(ctx, "checkpoint")
 	worktreePath, err := paths.WorktreeRoot(ctx)
 	if err != nil {
+		logging.Debug(logCtx, "hasActiveSessionInWorktree: failed to get worktree root",
+			slog.String("error", err.Error()))
 		return false
 	}
 	sessions, err := s.findSessionsForWorktree(ctx, worktreePath)
 	if err != nil {
+		logging.Debug(logCtx, "hasActiveSessionInWorktree: failed to find sessions",
+			slog.String("error", err.Error()))
 		return false
 	}
 	for _, state := range sessions {
