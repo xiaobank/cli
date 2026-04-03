@@ -603,7 +603,81 @@ Expected:
 
 ---
 
-## 6) `entire status` (regression guard)
+## 6) `entire attach`
+
+- What it does: attaches an existing agent transcript/session to checkpoint metadata when hooks did not capture it.
+- Use it for: recovering missed checkpoints or linking research sessions to the latest commit.
+
+### Scenario 1: Attach creates a new checkpoint and trailer
+
+Setup:
+1. Ensure repository has at least one commit.
+2. Ensure target session transcript exists on disk for the selected agent.
+3. Ensure latest commit does not already contain `Entire-Checkpoint` trailer.
+
+Run:
+1. Execute `entire attach <session-id> --agent <agent-name>`.
+2. When prompted, allow trailer amendment (or rerun with `--force`).
+
+Checks:
+
+```bash
+# Verify latest commit includes Entire-Checkpoint trailer
+git log -1 --pretty=%B
+# Verify checkpoint metadata exists on v1 branch
+git show-ref --verify -- refs/heads/entire/checkpoints/v1
+```
+
+Expected:
+- Attach reports a created checkpoint ID.
+- Latest commit includes `Entire-Checkpoint: <id>` trailer (when amendment accepted/forced).
+- Session metadata is written to `entire/checkpoints/v1`.
+
+### Scenario 2: Attach adds session to existing checkpoint
+
+Setup:
+1. Ensure latest commit already has `Entire-Checkpoint` trailer.
+2. Ensure a second transcript/session exists to attach.
+
+Run:
+1. Execute `entire attach <session-id> --agent <agent-name>`.
+
+Checks:
+
+```bash
+# Capture checkpoint ID from latest commit
+git log -1 --pretty=%B
+# Inspect checkpoint files on v1 branch for multiple session folders
+checkpoint_id="<id-from-commit-trailer>"
+shard_path="$(scripts/checkpoint-shard-path "$checkpoint_id")"
+git ls-tree --name-only entire/checkpoints/v1 "$shard_path"
+```
+
+Expected:
+- Attach reports that it added to existing checkpoint.
+- Checkpoint now contains additional session data.
+
+### Scenario 3: Session already attached
+
+Setup:
+1. Use a session ID that already has `LastCheckpointID` in session state.
+
+Run:
+1. Execute `entire attach <existing-session-id> --agent <agent-name>`.
+
+Expected:
+- Command reports session already has checkpoint.
+- Command offers to amend latest commit with existing checkpoint trailer.
+
+### Pass checklist
+
+- [ ] New-checkpoint attach flow validated.
+- [ ] Existing-checkpoint attach flow validated.
+- [ ] Already-attached flow validated.
+
+---
+
+## 7) `entire status` (regression guard)
 
 - What it does: reports current session status/phase information.
 - Use it for: quick health checks independent of committed checkpoint refs.
@@ -645,7 +719,7 @@ Expected:
 
 ---
 
-## 7) `entire rewind` (regression guard)
+## 8) `entire rewind` (regression guard)
 
 - What it does: restores repository files/logs to a prior checkpoint.
 - Use it for: undoing recent changes and returning to earlier state.
@@ -678,7 +752,7 @@ Capture:
 ## Exit Criteria
 
 Migration manual validation is complete when:
-- `resume`, `explain`, `doctor`, `clean`, and `migrate` pass applicable scenarios
+- `resume`, `explain`, `doctor`, `clean`, `migrate`, and `attach` pass applicable scenarios
 - remote fetch and `checkpoint_remote` paths pass in missing-local situations
 - rotation and cleanup lifecycle pass without violating `/main` permanence
 - `status` and `rewind` show no regressions
