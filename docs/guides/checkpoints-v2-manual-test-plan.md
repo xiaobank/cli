@@ -45,37 +45,40 @@ Set strategy options in `.entire/settings.json`:
 ### Baseline checks (run before each command section)
 
 ```bash
-# Verify v2 metadata ref exists locally (or not, for fallback scenarios)
-git show-ref --verify -- refs/entire/checkpoints/v2/main || echo "v2 main ref not found"
+# Verify v2 metadata ref exists locally
+git show-ref --verify -- refs/entire/checkpoints/v2/main
 # Verify v2 raw current-generation ref exists locally
-git show-ref --verify -- refs/entire/checkpoints/v2/full/current || echo "v2 full/current ref not found"
+git show-ref --verify -- refs/entire/checkpoints/v2/full/current
 # List all local v2 raw refs (current + archived generations)
 git for-each-ref --format='%(refname)' 'refs/entire/checkpoints/v2/full/*'
-# Verify legacy v1 branch presence for fallback tests
-git show-ref --verify -- refs/heads/entire/checkpoints/v1 || echo "v1 checkpoints branch not found"
+# Verify legacy v1 branch exists for fallback tests
+git show-ref --verify -- refs/heads/entire/checkpoints/v1
 ```
 
 ## Shared Inspection Toolkit
 
 ### Ref checks
 
+Use this block to inspect local and remote v2 ref state.
+
 ```bash
-# Local v2 metadata ref hash (if present)
-git show-ref -- refs/entire/checkpoints/v2/main || echo "v2 main ref not found"
-# Local v2 raw current ref hash (if present)
-git show-ref -- refs/entire/checkpoints/v2/full/current || echo "v2 full/current ref not found"
+# Local v2 metadata ref hash
+git show-ref -- refs/entire/checkpoints/v2/main
+# Local v2 raw current ref hash
+git show-ref -- refs/entire/checkpoints/v2/full/current
 # All local v2 raw refs with object IDs
 git for-each-ref --format='%(refname:short) %(objectname)' 'refs/entire/checkpoints/v2/full/*'
-# Remote view of all v2 refs (origin)
+# Remote view of all v2 refs on origin
 git ls-remote origin 'refs/entire/checkpoints/v2/*'
 ```
 
 ### Checkpoint shard helper
 
+Use this helper to derive `<shard_path>` from a checkpoint ID.
+
 Use the reusable executable script to determine the shard path.
 
 ```bash
-# Create helper script
 cat > scripts/checkpoint-shard-path <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -89,10 +92,8 @@ fi
 echo "${checkpoint_id:0:2}/${checkpoint_id:2}"
 EOF
 
-# Make executable
 chmod +x scripts/checkpoint-shard-path
 
-# Usage
 checkpoint_id="a3b2c4d5e6f7"
 shard_path="$(scripts/checkpoint-shard-path "$checkpoint_id")"
 echo "$shard_path"
@@ -100,41 +101,47 @@ echo "$shard_path"
 
 ### Tree/file checks
 
+Use this block to inspect checkpoint files on v2 refs.
+
 ```bash
-# Show checkpoint directory in v2 permanent ref
-git ls-tree --name-only refs/entire/checkpoints/v2/main "$shard_path" || echo "checkpoint path not found on v2 main"
-# Show checkpoint directory in v2 raw current generation
-git ls-tree --name-only refs/entire/checkpoints/v2/full/current "$shard_path" || echo "checkpoint path not found on v2 full/current"
+# List checkpoint subtree in v2 permanent ref
+git ls-tree --name-only refs/entire/checkpoints/v2/main "$shard_path"
+# List checkpoint subtree in v2 raw current ref
+git ls-tree --name-only refs/entire/checkpoints/v2/full/current "$shard_path"
 # Read checkpoint summary metadata
-git show "refs/entire/checkpoints/v2/main:${shard_path}/metadata.json" || echo "metadata.json not found on v2 main"
-# Read compact transcript (if compaction is available)
-git show "refs/entire/checkpoints/v2/main:${shard_path}/0/transcript.jsonl" || echo "transcript.jsonl not found on v2 main"
-# Read raw transcript used by resume
-git show "refs/entire/checkpoints/v2/full/current:${shard_path}/0/full.jsonl" || echo "full.jsonl not found on v2 full/current"
-# Read hash for raw transcript integrity
-git show "refs/entire/checkpoints/v2/full/current:${shard_path}/0/content_hash.txt" || echo "content_hash.txt not found on v2 full/current"
+git show "refs/entire/checkpoints/v2/main:${shard_path}/metadata.json"
+# Read compact transcript (when available)
+git show "refs/entire/checkpoints/v2/main:${shard_path}/0/transcript.jsonl"
+# Read raw transcript
+git show "refs/entire/checkpoints/v2/full/current:${shard_path}/0/full.jsonl"
+# Read raw transcript content hash
+git show "refs/entire/checkpoints/v2/full/current:${shard_path}/0/content_hash.txt"
 ```
 
 ### Archived generation checks
 
+Use this block to inspect archived v2 raw generations.
+
 ```bash
-# List archived raw generations
+# List archived v2 raw generation refs
 git for-each-ref --format='%(refname)' 'refs/entire/checkpoints/v2/full/[0-9]*'
-# Inspect generation retention timestamps
-git show refs/entire/checkpoints/v2/full/0000000000001:generation.json || echo "generation.json not found for archived generation"
-# Check whether checkpoint exists in a specific archived generation
-git ls-tree --name-only refs/entire/checkpoints/v2/full/0000000000001 "$shard_path" || echo "checkpoint path not found in archived generation"
+# Read generation metadata for retention validation
+git show refs/entire/checkpoints/v2/full/0000000000001:generation.json
+# Check if a checkpoint exists in a specific archived generation
+git ls-tree --name-only refs/entire/checkpoints/v2/full/0000000000001 "$shard_path"
 ```
 
 ### v1 fallback checks
 
+Use this block to inspect legacy v1 fallback data.
+
 ```bash
-# Verify legacy v1 metadata branch exists (for fallback)
-git show-ref --verify -- refs/heads/entire/checkpoints/v1 || echo "v1 checkpoints branch not found"
-# Check checkpoint path on v1 branch
-git ls-tree --name-only entire/checkpoints/v1 "$shard_path" || echo "checkpoint path not found on v1"
-# Read raw transcript from v1
-git show "entire/checkpoints/v1:${shard_path}/0/full.jsonl" || echo "full.jsonl not found on v1"
+# Verify v1 checkpoint branch exists
+git show-ref --verify -- refs/heads/entire/checkpoints/v1
+# Check checkpoint shard path on v1
+git ls-tree --name-only entire/checkpoints/v1 "$shard_path"
+# Read raw transcript from v1 fallback
+git show "entire/checkpoints/v1:${shard_path}/0/full.jsonl"
 ```
 
 ## Custom Ref Primer (for this guide)
@@ -198,16 +205,14 @@ Run:
 Checks:
 
 ```bash
-# Confirm local v2 metadata ref state before/after resume
-git show-ref -- refs/entire/checkpoints/v2/main || echo "v2 main ref not found"
-# Confirm local v2 raw current ref state before/after resume
-git show-ref -- refs/entire/checkpoints/v2/full/current || echo "v2 full/current ref not found"
-# List all local raw refs to verify archived generation visibility
-git for-each-ref --format='%(refname:short)' 'refs/entire/checkpoints/v2/full/*'
-# Check remote metadata ref availability
-git ls-remote origin 'refs/entire/checkpoints/v2/main'
-# Check remote raw refs availability
-git ls-remote origin 'refs/entire/checkpoints/v2/full/*'
+# Local v2 metadata ref hash
+git show-ref -- refs/entire/checkpoints/v2/main
+# Local v2 raw current ref hash
+git show-ref -- refs/entire/checkpoints/v2/full/current
+# All local v2 raw refs with object IDs
+git for-each-ref --format='%(refname:short) %(objectname)' 'refs/entire/checkpoints/v2/full/*'
+# Remote view of all v2 refs on origin
+git ls-remote origin 'refs/entire/checkpoints/v2/*'
 ```
 
 Expected:
@@ -297,12 +302,12 @@ Run:
 Checks:
 
 ```bash
-# Compact transcript on /main (preferred explain source)
-git show "refs/entire/checkpoints/v2/main:${shard_path}/0/transcript.jsonl" || echo "transcript.jsonl not found on v2 main"
-# Raw transcript on v2 (fallback source)
-git show "refs/entire/checkpoints/v2/full/current:${shard_path}/0/full.jsonl" || echo "full.jsonl not found on v2 full/current"
-# Raw transcript on v1 (legacy fallback source)
-git show "entire/checkpoints/v1:${shard_path}/0/full.jsonl" || echo "full.jsonl not found on v1"
+# Read compact transcript (when available)
+git show "refs/entire/checkpoints/v2/main:${shard_path}/0/transcript.jsonl"
+# Read raw transcript
+git show "refs/entire/checkpoints/v2/full/current:${shard_path}/0/full.jsonl"
+# Read raw transcript from v1 fallback
+git show "entire/checkpoints/v1:${shard_path}/0/full.jsonl"
 ```
 
 Expected:
@@ -318,10 +323,8 @@ Setup:
 3. Verify setup before running explain:
 
 ```bash
-# compact transcript should be absent for this checkpoint
-git show "refs/entire/checkpoints/v2/main:${shard_path}/0/transcript.jsonl" || echo "transcript.jsonl not found on v2 main"
-# raw transcript should exist
-git show "refs/entire/checkpoints/v2/full/current:${shard_path}/0/full.jsonl" || echo "full.jsonl not found on v2 full/current"
+git show "refs/entire/checkpoints/v2/main:${shard_path}/0/transcript.jsonl"
+git show "refs/entire/checkpoints/v2/full/current:${shard_path}/0/full.jsonl"
 ```
 
 Run:
@@ -376,14 +379,16 @@ Run:
 Checks:
 
 ```bash
-# Validate presence/absence of v2 metadata ref
-git show-ref -- refs/entire/checkpoints/v2/main || echo "v2 main ref not found"
-# Validate presence/absence of v2 raw current ref
-git show-ref -- refs/entire/checkpoints/v2/full/current || echo "v2 full/current ref not found"
-# Enumerate all raw refs checked by doctor
-git for-each-ref --format='%(refname:short)' 'refs/entire/checkpoints/v2/full/*'
-# Inspect archived generation metadata health
-git show refs/entire/checkpoints/v2/full/0000000000001:generation.json || echo "generation.json not found for archived generation"
+# Local v2 metadata ref hash
+git show-ref -- refs/entire/checkpoints/v2/main
+# Local v2 raw current ref hash
+git show-ref -- refs/entire/checkpoints/v2/full/current
+# All local v2 raw refs with object IDs
+git for-each-ref --format='%(refname:short) %(objectname)' 'refs/entire/checkpoints/v2/full/*'
+# List archived v2 raw generation refs
+git for-each-ref --format='%(refname)' 'refs/entire/checkpoints/v2/full/[0-9]*'
+# Read generation metadata for retention validation
+git show refs/entire/checkpoints/v2/full/0000000000001:generation.json
 ```
 
 Expected:
@@ -395,13 +400,11 @@ Setup:
 1. In disposable clone, delete `/main` and/or `/full/current` ref.
 
 ```bash
-# Delete local v2 refs to simulate missing-ref state
 git update-ref -d refs/entire/checkpoints/v2/main
 git update-ref -d refs/entire/checkpoints/v2/full/current
 
-# Confirm they are missing locally
-git show-ref --verify -- refs/entire/checkpoints/v2/main || echo "v2 main ref not found"
-git show-ref --verify -- refs/entire/checkpoints/v2/full/current || echo "v2 full/current ref not found"
+git show-ref --verify -- refs/entire/checkpoints/v2/main
+git show-ref --verify -- refs/entire/checkpoints/v2/full/current
 ```
 
 Run:
@@ -431,18 +434,21 @@ Run:
 1. Execute `entire clean`.
 
 Checks:
+Run this block before and after `entire clean`:
 
 ```bash
-# Ensure permanent ref is unchanged by clean
-git show-ref -- refs/entire/checkpoints/v2/main || echo "v2 main ref not found"
-# Ensure active raw ref is unchanged by clean
-git show-ref -- refs/entire/checkpoints/v2/full/current || echo "v2 full/current ref not found"
-# Compare archived generation refs before/after clean
-git for-each-ref --format='%(refname:short) %(objectname)' 'refs/entire/checkpoints/v2/full/[0-9]*'
-# Compare remote archived refs before/after clean
+# Local v2 metadata ref hash
+git show-ref -- refs/entire/checkpoints/v2/main
+# Local v2 raw current ref hash
+git show-ref -- refs/entire/checkpoints/v2/full/current
+# All local v2 raw refs with object IDs
+git for-each-ref --format='%(refname:short) %(objectname)' 'refs/entire/checkpoints/v2/full/*'
+# Remote view of archived v2 refs on origin
 git ls-remote origin 'refs/entire/checkpoints/v2/full/*'
-# Read retention timestamps used for deletion eligibility
-git show refs/entire/checkpoints/v2/full/0000000000001:generation.json || echo "generation.json not found for archived generation"
+# List archived v2 raw generation refs
+git for-each-ref --format='%(refname)' 'refs/entire/checkpoints/v2/full/[0-9]*'
+# Read generation metadata for retention validation
+git show refs/entire/checkpoints/v2/full/0000000000001:generation.json
 ```
 
 Expected:
@@ -503,26 +509,34 @@ Run:
 1. Execute `entire migrate`.
 
 Checks:
+Run this block before migration:
 
 ```bash
-# Verify legacy v1 source branch exists prior to migration
-git show-ref --verify -- refs/heads/entire/checkpoints/v1 || echo "v1 checkpoints branch not found"
-# Verify v2 metadata ref after migration
-git show-ref -- refs/entire/checkpoints/v2/main || echo "v2 main ref not found"
-# Verify v2 raw current ref after migration
-git show-ref -- refs/entire/checkpoints/v2/full/current || echo "v2 full/current ref not found"
-# Confirm checkpoint path exists on /main
-git ls-tree --name-only refs/entire/checkpoints/v2/main "$shard_path" || echo "checkpoint path not found on v2 main"
-# Confirm checkpoint path exists on /full/current
-git ls-tree --name-only refs/entire/checkpoints/v2/full/current "$shard_path" || echo "checkpoint path not found on v2 full/current"
-# Validate migrated checkpoint summary metadata
-git show "refs/entire/checkpoints/v2/main:${shard_path}/metadata.json" || echo "metadata.json not found on v2 main"
-# Validate migrated prompt artifact
-git show "refs/entire/checkpoints/v2/main:${shard_path}/0/prompt.txt" || echo "prompt.txt not found on v2 main"
-# Validate migrated compact transcript (if available)
-git show "refs/entire/checkpoints/v2/main:${shard_path}/0/transcript.jsonl" || echo "transcript.jsonl not found on v2 main"
-# Validate migrated raw transcript
-git show "refs/entire/checkpoints/v2/full/current:${shard_path}/0/full.jsonl" || echo "full.jsonl not found on v2 full/current"
+# Verify v1 checkpoint branch exists
+git show-ref --verify -- refs/heads/entire/checkpoints/v1
+# Check checkpoint shard path on v1
+git ls-tree --name-only entire/checkpoints/v1 "$shard_path"
+# Read raw transcript from v1 fallback
+git show "entire/checkpoints/v1:${shard_path}/0/full.jsonl"
+```
+
+Run this block after migration:
+
+```bash
+# Local v2 metadata ref hash
+git show-ref -- refs/entire/checkpoints/v2/main
+# Local v2 raw current ref hash
+git show-ref -- refs/entire/checkpoints/v2/full/current
+# List checkpoint subtree in v2 permanent ref
+git ls-tree --name-only refs/entire/checkpoints/v2/main "$shard_path"
+# List checkpoint subtree in v2 raw current ref
+git ls-tree --name-only refs/entire/checkpoints/v2/full/current "$shard_path"
+# Read checkpoint summary metadata
+git show "refs/entire/checkpoints/v2/main:${shard_path}/metadata.json"
+# Read compact transcript (when available)
+git show "refs/entire/checkpoints/v2/main:${shard_path}/0/transcript.jsonl"
+# Read raw transcript
+git show "refs/entire/checkpoints/v2/full/current:${shard_path}/0/full.jsonl"
 ```
 
 Expected:
@@ -580,7 +594,6 @@ Setup:
 1. In disposable clone, remove local v2 refs.
 
 ```bash
-# Remove local v2 refs to prove status does not depend on them
 git update-ref -d refs/entire/checkpoints/v2/main
 git update-ref -d refs/entire/checkpoints/v2/full/current
 for ref in $(git for-each-ref --format='%(refname)' 'refs/entire/checkpoints/v2/full/[0-9]*'); do
