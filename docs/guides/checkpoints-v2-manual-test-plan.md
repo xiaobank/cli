@@ -672,11 +672,43 @@ Expected:
 - Command reports session already has checkpoint.
 - Command offers to amend latest commit with existing checkpoint trailer.
 
+### Scenario 4: Attached session appears correctly in v2 refs
+
+Setup:
+1. Enable v2 mode in test settings (`checkpoints_v2=true`).
+2. Start from a commit with an `Entire-Checkpoint` trailer.
+3. Attach a new session to that checkpoint.
+
+Run:
+1. Execute `entire attach <session-id> --agent <agent-name>`.
+
+Checks:
+
+```bash
+# Read checkpoint ID from latest commit trailer
+git log -1 --pretty=%B
+# Set checkpoint id manually from trailer output
+checkpoint_id="<id-from-commit-trailer>"
+shard_path="$(scripts/checkpoint-shard-path "$checkpoint_id")"
+
+# Validate checkpoint metadata/session content on v2 main
+git ls-tree --name-only refs/entire/checkpoints/v2/main "$shard_path"
+git show "refs/entire/checkpoints/v2/main:${shard_path}/metadata.json"
+
+# Validate resumable transcript artifacts on v2 full/current
+git ls-tree --name-only refs/entire/checkpoints/v2/full/current "$shard_path"
+```
+
+Expected:
+- Attached session is represented in v2 checkpoint metadata.
+- Required transcript artifacts are present in v2 refs for follow-up commands (`resume`/`explain`).
+
 ### Pass checklist
 
 - [ ] New-checkpoint attach flow validated.
 - [ ] Existing-checkpoint attach flow validated.
 - [ ] Already-attached flow validated.
+- [ ] v2 ref representation for attached sessions validated.
 
 ---
 
