@@ -365,13 +365,15 @@ Expected:
 
 ## 3) `entire doctor`
 
-- What it does: validates checkpoint refs and metadata consistency.
-- Use it for: troubleshooting missing/corrupt checkpoint state.
+- What it does: diagnoses and fixes disconnected `entire/checkpoints/v1` metadata branches and stuck sessions.
+- Use it for: recovering from session-state/shadow-branch issues and metadata-branch divergence.
 
-### Scenario 1: Healthy repository
+### Scenario 1: No issues detected
 
 Setup:
-1. Ensure v2 refs exist and are readable.
+1. Ensure no stale sessions are stuck in `ACTIVE` for >1h.
+2. Ensure no `ENDED` sessions have uncondensed checkpoint data.
+3. Ensure local and remote `entire/checkpoints/v1` are connected.
 
 Run:
 1. Execute `entire doctor`.
@@ -379,44 +381,59 @@ Run:
 Checks:
 
 ```bash
-# Local v2 metadata ref hash
-git show-ref -- refs/entire/checkpoints/v2/main
-# Local v2 raw current ref hash
-git show-ref -- refs/entire/checkpoints/v2/full/current
-# All local v2 raw refs with object IDs
-git for-each-ref --format='%(refname:short) %(objectname)' 'refs/entire/checkpoints/v2/full/*'
-# List archived v2 raw generation refs
-git for-each-ref --format='%(refname)' 'refs/entire/checkpoints/v2/full/[0-9]*'
-# Read generation metadata for retention validation
-git show refs/entire/checkpoints/v2/full/0000000000001:generation.json
+# List current session states
+ls .git/entire-sessions
+# List shadow branches
+git branch --list 'entire/*'
+# Inspect local metadata branch tip
+git log --oneline -1 entire/checkpoints/v1
+# Inspect remote metadata branch tip
+git ls-remote origin refs/heads/entire/checkpoints/v1
 ```
 
 Expected:
-- Doctor reports healthy checkpoint/ref state.
+- Doctor reports no disconnected metadata issue and no stuck sessions.
 
-### Scenario 2: Missing refs
+### Scenario 2: Stuck session handling
 
 Setup:
-1. In disposable clone, delete `/main` and/or `/full/current` ref.
+1. Create a session in `ACTIVE` and make it stale (or create an `ENDED` session with uncondensed data).
+2. Confirm session state file and shadow branch exist.
 
 ```bash
-git update-ref -d refs/entire/checkpoints/v2/main
-git update-ref -d refs/entire/checkpoints/v2/full/current
-
-git show-ref --verify -- refs/entire/checkpoints/v2/main
-git show-ref --verify -- refs/entire/checkpoints/v2/full/current
+# Session states present
+ls .git/entire-sessions
+# Shadow branches present
+git branch --list 'entire/*'
 ```
 
 Run:
 1. Execute `entire doctor`.
+2. Choose `Condense`, `Discard`, or `Skip` at the prompt (or use `--force` for auto-fix).
 
 Expected:
-- Doctor reports missing refs with actionable guidance.
+- Doctor detects stuck sessions and applies selected remediation.
+- After condense/discard, corresponding session state/shadow-branch data is reduced or removed.
+
+### Scenario 3: Disconnected metadata branch repair
+
+Setup:
+1. Create local/remote `entire/checkpoints/v1` branches with no common ancestor (use disposable repo).
+
+Run:
+1. Execute `entire doctor`.
+2. Approve metadata repair when prompted (or run with `--force`).
+
+Expected:
+- Doctor detects disconnected metadata branch state.
+- Doctor repairs by reconciling local checkpoints onto remote tip.
+- Local and remote metadata branches become connected.
 
 ### Pass checklist
 
-- [ ] Healthy case passes with no false positives.
-- [ ] Missing-ref diagnostics are detected with actionable guidance.
+- [ ] No-issue case reports clean status.
+- [ ] Stuck-session detection and remediation validated.
+- [ ] Disconnected metadata-branch repair validated.
 
 ---
 
