@@ -297,7 +297,6 @@ func isOutdated(current, latest string) bool {
 		return false
 	}
 
-
 	// semver.Compare returns -1 if current < latest
 	return semver.Compare(current, latest) < 0
 }
