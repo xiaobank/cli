@@ -37,7 +37,7 @@ jobs:
           fi
 
           DATE=$(date -u +%Y%m%d)
-          TAG="${LATEST_STABLE}-nightly.${DATE}"
+          TAG="${LATEST_STABLE}-nightly.${DATE}.${SHORT_COMMIT_ID}"
 
           if git rev-parse "${TAG}" >/dev/null 2>&1; then
             echo "Tag ${TAG} already exists, skipping."
