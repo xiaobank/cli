@@ -7,7 +7,7 @@ This is the command-first manual QA plan for the checkpoints v2 migration. It is
 Goals:
 - Validate v2 split-ref read/write behavior.
 - Validate local-missing/remote-present fetch behavior.
-- Validate rotation, cleanup, and migration lifecycle behavior.
+- Validate core cleanup and migration-readiness flows (with edge/corruption lifecycle cases covered by automated tests).
 - Provide copy-paste test steps and evidence collection.
 
 ## v2 Invariants
@@ -21,7 +21,7 @@ Goals:
 
 To reduce confusion during rollout:
 - `entire resume`: supported now for checkpoints v2 read-path validation.
-- `entire explain`: v2 behavior is not fully supported yet; this command will be updated soon.
+- `entire explain`: supported for compact transcript path validation.
 - `entire attach`: v2 representation checks are forward-looking; full v2 behavior will be updated soon.
 - `entire migrate`: command not implemented yet; validation is deferred until it lands.
 - `entire doctor`, `entire clean`, `entire rewind`: included as practical sanity/regression checks, not deep v2 feature validation.
@@ -50,6 +50,8 @@ Set strategy options in `.entire/settings.json`:
   }
 }
 ```
+
+Note: some strategy option keys are rollout-dependent and may become effective as command support lands.
 
 ### Baseline checks (run before each command section)
 
@@ -204,7 +206,7 @@ This guide is intentionally command-first and focused on common, high-signal man
 - What it does: restores the session transcript and prints the resume command.
 - Use it for: continuing work from a checkpointed branch/session.
 
-### Scenario 1: Baseline v2 resume
+### Scenario 1: Baseline v2 resume (Core)
 
 Setup:
 1. In `repo-a`, enable `checkpoints_v2=true` and `push_v2_refs=true`.
@@ -231,7 +233,7 @@ Expected:
 - Session restored and resume command printed.
 - Checkpoint data resolves from v2 (`/full/current`).
 
-### Scenario 2: Local missing, remote present
+### Scenario 2: Local missing, remote present (Core)
 
 Setup:
 1. Use `repo-fresh` clone (preferred), or delete local v2 refs in disposable clone.
@@ -252,7 +254,7 @@ Run:
 Expected:
 - Resume fetches required data and succeeds when remote data exists.
 
-### Scenario 3: v1 fallback
+### Scenario 3: v1 fallback (Optional)
 
 Setup:
 1. Create checkpoint with `checkpoints_v2=false`.
@@ -277,29 +279,25 @@ Expected:
 - What it does: reads checkpoint transcript data and explains context.
 - Use it for: understanding what changed and why at a checkpoint.
 
-Note: full checkpoints v2 behavior for `entire explain` is not implemented yet. This section is a short forward-looking validation target for upcoming updates.
+Note: compact transcript behavior is supported for `entire explain`; broader v2 behavior continues to evolve.
 
-### Scenario 1: Preferred compact transcript path (future behavior)
+### Scenario 1: Compact transcript path (Core)
 
 Setup:
-1. Create or identify a checkpoint where compact transcript is intentionally unavailable.
-2. Recommended setup path:
-   - Use an external agent/plugin that does **not** advertise `compact_transcript` capability.
-   - Create one checkpoint with `checkpoints_v2=true`.
-3. Verify setup before running explain:
+1. Create or identify a checkpoint where compact transcript exists on v2 `/main`.
+2. Verify setup before running explain:
 
 ```bash
 git show "refs/entire/checkpoints/v2/main:${shard_path}/0/transcript.jsonl"
-git show "refs/entire/checkpoints/v2/full/current:${shard_path}/0/full.jsonl"
 ```
 
 Run:
 1. Execute `entire explain <checkpoint-id-or-target>`.
 
 Expected:
-- Explain falls back to raw transcript in `/full/*`.
+- Explain uses compact transcript from v2 `/main`.
 
-### Scenario 2: v1 fallback (current compatibility)
+### Scenario 2: v1 fallback (current compatibility, Optional)
 
 Setup:
 1. Use branch/checkpoint where data exists only in v1.
@@ -312,7 +310,7 @@ Expected:
 
 ### Pass checklist
 
-- [ ] Future compact-transcript path documented and validated when shipped.
+- [ ] Compact transcript path validated.
 - [ ] v1 fallback validated.
 
 ---
@@ -322,7 +320,7 @@ Expected:
 - What it does: diagnoses and fixes disconnected `entire/checkpoints/v1` metadata branches and stuck sessions.
 - Use it for: recovering from session-state/shadow-branch issues and metadata-branch divergence.
 
-### Scenario 1: No issues detected
+### Scenario 1: No issues detected (Core)
 
 Setup:
 1. Ensure no stale sessions are stuck in `ACTIVE` for >1h.
@@ -348,7 +346,7 @@ git ls-remote origin refs/heads/entire/checkpoints/v1
 Expected:
 - Doctor reports no disconnected metadata issue and no stuck sessions.
 
-### Scenario 2: Stuck session handling
+### Scenario 2: Stuck session handling (Optional)
 
 Setup:
 1. Create a session in `ACTIVE` and make it stale (or create an `ENDED` session with uncondensed data).
@@ -381,7 +379,7 @@ Expected:
 - What it does: cleans session state and shadow branch data for current HEAD, or orphaned Entire data with `--all`.
 - Use it for: removing stale session metadata and orphaned Entire artifacts.
 
-### Scenario 1: Current HEAD cleanup
+### Scenario 1: Current HEAD cleanup (Core)
 
 Setup:
 1. In `repo-a`, create a session on the current HEAD so there is session state and shadow-branch data.
@@ -403,7 +401,7 @@ Expected:
 - `--dry-run` lists items without deleting.
 - `entire clean` removes current-HEAD session state and shadow branch data.
 
-### Scenario 2: Active-session guard and `--force`
+### Scenario 2: Active-session guard and `--force` (Optional)
 
 Setup:
 1. Start an active session on current HEAD.
@@ -416,7 +414,7 @@ Expected:
 - Without `--force`, command warns and refuses to clean active session data.
 - With `--force`, command proceeds.
 
-### Scenario 3: Repository-wide orphan cleanup (`--all`)
+### Scenario 3: Repository-wide orphan cleanup (`--all`, Optional)
 
 Setup:
 1. Create orphaned data (for example: old shadow branches or orphaned session-state files).
@@ -445,7 +443,7 @@ Expected:
 
 Note: `entire migrate` is not implemented yet. Treat this section as a forward-looking validation plan and run it only after the command becomes available.
 
-### Scenario 1: First migration run
+### Scenario 1: First migration run (Core, when command is available)
 
 Setup:
 1. Prepare repository with v1-only checkpoint history.
@@ -501,7 +499,7 @@ Expected:
 
 Note: full checkpoints v2 behavior for `entire attach` is still in progress and will be updated soon.
 
-### Scenario 1: Attach creates a new checkpoint and trailer
+### Scenario 1: Attach creates a new checkpoint and trailer (Core)
 
 Setup:
 1. Ensure repository has at least one commit.
@@ -526,7 +524,7 @@ Expected:
 - Latest commit includes `Entire-Checkpoint: <id>` trailer (when amendment accepted/forced).
 - Session metadata is written to `entire/checkpoints/v1`.
 
-### Scenario 2: Attach adds session to existing checkpoint
+### Scenario 2: Attach adds session to existing checkpoint (Optional)
 
 Setup:
 1. Ensure latest commit already has `Entire-Checkpoint` trailer (this reuses that checkpoint; it does not block attaching additional sessions).
@@ -550,7 +548,7 @@ Expected:
 - Attach reports that it added to existing checkpoint.
 - Checkpoint now contains additional session data.
 
-### Scenario 3: Attached session appears correctly in v2 refs (future behavior)
+### Scenario 3: Attached session appears correctly in v2 refs (future behavior, Optional)
 
 Setup:
 1. Enable v2 mode in test settings (`checkpoints_v2=true`).
@@ -594,7 +592,7 @@ Expected:
 - What it does: restores repository files/logs to a prior checkpoint.
 - Use it for: undoing recent changes and returning to earlier state.
 
-### Scenario 1: Rewind normal flow
+### Scenario 1: Rewind normal flow (Core)
 
 Setup:
 1. Create at least two temporary checkpoints in one session.
@@ -621,8 +619,16 @@ Capture:
 
 ## Exit Criteria
 
-Migration manual validation is complete when:
-- `resume`, `explain`, `doctor`, `clean`, `migrate`, and `attach` pass applicable scenarios
-- remote fetch and `checkpoint_remote` paths pass in missing-local situations
+### Current rollout gate
+
+Current manual validation is complete when:
+- `resume`, `doctor`, `clean`, and `rewind` pass applicable scenarios
+- `explain` compact transcript scenario passes
+- remote fetch paths pass in missing-local situations
+
+### Future rollout gate
+
+Future manual validation is complete when:
+- `attach` v2 representation scenario passes with fully shipped v2 behavior
+- `migrate` scenario passes after the command is implemented
 - expanded edge-case/corruption checks remain covered by automated tests
-- `rewind` shows no regressions
