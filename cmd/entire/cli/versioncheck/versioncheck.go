@@ -42,8 +42,15 @@ func CheckAndNotify(ctx context.Context, w io.Writer, currentVersion string) {
 		return
 	}
 
-	// Fetch the latest version from GitHub API
-	latestVersion, err := fetchLatestVersion(ctx)
+	// Fetch the latest version from the appropriate channel
+	var latestVersion string
+	var fetchErr error
+	if isNightly(currentVersion) {
+		latestVersion, fetchErr = fetchLatestNightlyVersion(ctx)
+	} else {
+		latestVersion, fetchErr = fetchLatestVersion(ctx)
+	}
+	err = fetchErr
 
 	// Always update cache to avoid retrying on every CLI invocation
 	cache.LastCheckTime = time.Now()
@@ -200,6 +207,57 @@ func fetchLatestVersion(ctx context.Context) (string, error) {
 	return version, nil
 }
 
+// isNightly returns true if the version string is a nightly build.
+func isNightly(version string) bool {
+	if !strings.HasPrefix(version, "v") {
+		version = "v" + version
+	}
+	return strings.Contains(semver.Prerelease(version), "nightly")
+}
+
+// fetchLatestNightlyVersion fetches the latest nightly version from the GitHub releases list.
+func fetchLatestNightlyVersion(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, httpTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, githubReleasesURL+"?per_page=20", nil)
+	if err != nil {
+		return "", fmt.Errorf("creating request: %w", err)
+	}
+
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "entire-cli")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("fetching releases: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", fmt.Errorf("reading response: %w", err)
+	}
+
+	var releases []GitHubRelease
+	if err := json.Unmarshal(body, &releases); err != nil {
+		return "", fmt.Errorf("parsing JSON: %w", err)
+	}
+
+	for _, r := range releases {
+		if r.Prerelease && strings.Contains(r.TagName, "-nightly.") {
+			return r.TagName, nil
+		}
+	}
+
+	return "", errors.New("no nightly release found")
+}
+
 // parseGitHubRelease parses the GitHub API response and extracts the latest stable version.
 // Filters out prerelease versions.
 func parseGitHubRelease(body []byte) (string, error) {
@@ -238,6 +296,7 @@ func isOutdated(current, latest string) bool {
 	if strings.Contains(semver.Prerelease(current), "dev") {
 		return false
 	}
+
 
 	// semver.Compare returns -1 if current < latest
 	return semver.Compare(current, latest) < 0
