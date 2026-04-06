@@ -77,7 +77,7 @@ scoops:
     homepage: "https://github.com/entireio/cli"
     description: "CLI for Entire"
     license: MIT
-    skip_upload: "{{ if .Prerelease }}true{{ end }}"
+    skip_upload: auto
 
 homebrew_casks:
   - name: entire
@@ -96,7 +96,7 @@ homebrew_casks:
       fish: "completions/entire.fish"
     conflicts:
       - cask: entire@nightly
-    skip_upload: "{{ if .Prerelease }}true{{ end }}"
+    skip_upload: auto
 
   - name: entire@nightly
     repository:
