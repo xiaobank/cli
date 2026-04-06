@@ -66,6 +66,9 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
+release:
+  prerelease: auto
+
 
 scoops:
   - repository:
@@ -76,16 +79,6 @@ scoops:
     description: "CLI for Entire"
     license: MIT
     skip_upload: '{{ if .Prerelease }}true{{ end }}'
-
-  - name: entire-nightly
-    repository:
-      owner: entireio
-      name: scoop-bucket
-      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
-    homepage: "https://github.com/entireio/cli"
-    description: "CLI for Entire (nightly build)"
-    license: MIT
-    skip_upload: '{{ if not .Prerelease }}true{{ end }}'
 
 homebrew_casks:
   - name: entire
@@ -102,9 +95,11 @@ homebrew_casks:
       bash: "completions/entire.bash"
       zsh: "completions/entire.zsh"
       fish: "completions/entire.fish"
+    conflicts:
+      - cask: entire@nightly
     skip_upload: '{{ if .Prerelease }}true{{ end }}'
 
-  - name: entire-nightly
+  - name: entire@nightly
     repository:
       owner: entireio
       name: homebrew-tap
@@ -118,6 +113,8 @@ homebrew_casks:
       bash: "completions/entire.bash"
       zsh: "completions/entire.zsh"
       fish: "completions/entire.fish"
+    conflicts:
+      - cask: entire
     skip_upload: '{{ if not .Prerelease }}true{{ end }}'
 
 announce:
