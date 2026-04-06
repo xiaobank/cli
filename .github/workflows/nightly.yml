@@ -19,38 +19,15 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Create nightly tag if new commits exist
+      - name: Create nightly tag
         run: |
-          LAST_NIGHTLY=$(git tag -l 'v*-nightly.*' --sort=-v:refname | head -1)
-          if [ -n "$LAST_NIGHTLY" ]; then
-            COMMITS=$(git rev-list "${LAST_NIGHTLY}..HEAD" --count)
-            if [ "$COMMITS" -eq 0 ]; then
-              echo "No new commits since ${LAST_NIGHTLY}, skipping."
-              exit 0
-            fi
-          fi
-
-          LATEST_STABLE=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*' 2>/dev/null)
-          if [ -z "$LATEST_STABLE" ]; then
-            echo "::error::No stable version tag found"
+          TAG=$(scripts/create-nightly-tag.sh) || EXIT_CODE=$?
+          if [ "${EXIT_CODE:-0}" -eq 2 ]; then
+            echo "Skipping — no new nightly needed."
+            exit 0
+          elif [ "${EXIT_CODE:-0}" -ne 0 ] || [ -z "$TAG" ]; then
+            echo "::error::Failed to generate nightly tag"
             exit 1
           fi
-
-          # Bump patch version: v0.5.4 → v0.5.5
-          MAJOR=$(echo "$LATEST_STABLE" | sed 's/^v//' | cut -d. -f1)
-          MINOR=$(echo "$LATEST_STABLE" | sed 's/^v//' | cut -d. -f2)
-          PATCH=$(echo "$LATEST_STABLE" | sed 's/^v//' | cut -d. -f3)
-          NEXT_PATCH=$((PATCH + 1))
-          NIGHTLY_VERSION="v${MAJOR}.${MINOR}.${NEXT_PATCH}"
-
-          DATE=$(date -u +%Y%m%d)
-          TAG="${NIGHTLY_VERSION}-nightly.${DATE}.${SHORT_COMMIT_ID}"
-
-          if git rev-parse "${TAG}" >/dev/null 2>&1; then
-            echo "Tag ${TAG} already exists, skipping."
-            exit 0
-          fi
-
-          echo "Creating nightly tag: ${TAG}"
-          git tag "${TAG}"
-          git push origin "${TAG}"
+          git tag "$TAG"
+          git push origin "$TAG"
