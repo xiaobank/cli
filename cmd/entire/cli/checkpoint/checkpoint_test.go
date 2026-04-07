@@ -3624,6 +3624,87 @@ func TestWriteCommitted_SubagentTranscript_JSONLFallback(t *testing.T) {
 	}
 }
 
+func TestWriteCommitted_IncludesLinkage(t *testing.T) {
+	t.Parallel()
+	repo, _ := setupBranchTestRepo(t)
+	store := NewGitStore(repo)
+	checkpointID := id.MustCheckpointID("a1b2c3d4e5f6")
+
+	linkage := &LinkageMetadata{
+		TreeHash:         "abc123def456abc123def456abc123def456abc1",
+		PatchID:          "def456abc123def456abc123def456abc123def4",
+		FilesChangedHash: "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069",
+		SessionFilesHash: "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+	}
+
+	err := store.WriteCommitted(context.Background(), WriteCommittedOptions{
+		CheckpointID:     checkpointID,
+		SessionID:        "linkage-test-session",
+		Strategy:         "manual-commit",
+		Agent:            agent.AgentTypeClaudeCode,
+		Linkage:          linkage,
+		Transcript:       []byte(`{"type":"human","message":{"content":"test"}}` + "\n"),
+		FilesTouched:     []string{"file.go"},
+		CheckpointsCount: 1,
+		AuthorName:       "Test Author",
+		AuthorEmail:      "test@example.com",
+	})
+	if err != nil {
+		t.Fatalf("WriteCommitted() error = %v", err)
+	}
+
+	// Read back the CheckpointSummary
+	summary, err := store.ReadCommitted(context.Background(), checkpointID)
+	if err != nil {
+		t.Fatalf("ReadCommitted() error = %v", err)
+	}
+	if summary.Linkage == nil {
+		t.Fatal("Linkage should be present in CheckpointSummary")
+	}
+	if summary.Linkage.TreeHash != linkage.TreeHash {
+		t.Errorf("TreeHash = %q, want %q", summary.Linkage.TreeHash, linkage.TreeHash)
+	}
+	if summary.Linkage.PatchID != linkage.PatchID {
+		t.Errorf("PatchID = %q, want %q", summary.Linkage.PatchID, linkage.PatchID)
+	}
+	if summary.Linkage.FilesChangedHash != linkage.FilesChangedHash {
+		t.Errorf("FilesChangedHash = %q, want %q", summary.Linkage.FilesChangedHash, linkage.FilesChangedHash)
+	}
+	if summary.Linkage.SessionFilesHash != linkage.SessionFilesHash {
+		t.Errorf("SessionFilesHash = %q, want %q", summary.Linkage.SessionFilesHash, linkage.SessionFilesHash)
+	}
+}
+
+func TestWriteCommitted_NilLinkageOmitted(t *testing.T) {
+	t.Parallel()
+	repo, _ := setupBranchTestRepo(t)
+	store := NewGitStore(repo)
+	checkpointID := id.MustCheckpointID("a0b1c2d3e4f5")
+
+	err := store.WriteCommitted(context.Background(), WriteCommittedOptions{
+		CheckpointID:     checkpointID,
+		SessionID:        "no-linkage-session",
+		Strategy:         "manual-commit",
+		Agent:            agent.AgentTypeClaudeCode,
+		Transcript:       []byte(`{"type":"human","message":{"content":"test"}}` + "\n"),
+		FilesTouched:     []string{"file.go"},
+		CheckpointsCount: 1,
+		AuthorName:       "Test Author",
+		AuthorEmail:      "test@example.com",
+	})
+	if err != nil {
+		t.Fatalf("WriteCommitted() error = %v", err)
+	}
+
+	summary, err := store.ReadCommitted(context.Background(), checkpointID)
+	if err != nil {
+		t.Fatalf("ReadCommitted() error = %v", err)
+	}
+	if summary.Linkage != nil {
+		t.Errorf("Linkage should be nil when not provided, got %+v", summary.Linkage)
+	}
+}
+
 func TestWriteTemporaryTask_SubagentTranscript_RedactsSecrets(t *testing.T) {
 	// Cannot use t.Parallel() because t.Chdir is required for paths.WorktreeRoot()
 	tempDir := t.TempDir()
