@@ -302,6 +302,10 @@ type WriteCommittedOptions struct {
 	//   - the checkpoint predates the summarization feature
 	Summary *Summary
 
+	// Linkage contains content-based signals for re-linking after history rewrites.
+	// Written to the root-level CheckpointSummary, not per-session metadata.
+	Linkage *LinkageMetadata
+
 	// CompactTranscript is the Entire Transcript Format (transcript.jsonl) bytes.
 	// Written to v2 /main ref alongside metadata. May be nil if compaction
 	// was not performed (unknown agent, compaction error, empty transcript).
@@ -455,6 +459,33 @@ type SessionFilePaths struct {
 	Prompt      string `json:"prompt"`
 }
 
+// LinkageMetadata contains content-based signals for re-linking checkpoints
+// after git history rewrites (rebase, reword, amend, filter-branch).
+// Stored at the checkpoint level (root metadata.json), not per-session.
+//
+// The web uses a fallback chain when a commit arrives without an Entire-Checkpoint trailer:
+//  1. TreeHash match     - covers: reword, amend (msg-only), filter-branch (msg-only)
+//  2. PatchID match      - covers: clean rebase, cherry-pick to other branch
+//  3. FilesChangedHash   - covers: rebase with conflicts in non-agent files
+//  4. SessionFilesHash   - covers: local squash merge (cumulative agent files)
+type LinkageMetadata struct {
+	// TreeHash is the git tree hash of the commit (full repo snapshot).
+	// Survives rewrites that don't change code (reword, msg-only amend).
+	TreeHash string `json:"tree_hash"`
+
+	// PatchID is the git patch-id of the commit's diff (parent->HEAD).
+	// Survives rebase (same diff replayed on different base).
+	PatchID string `json:"patch_id"`
+
+	// FilesChangedHash is SHA256 of sorted file:blob pairs for files changed in this commit.
+	// Survives rebase even with conflicts in other files (only agent-file blobs matter).
+	FilesChangedHash string `json:"files_changed_hash"`
+
+	// SessionFilesHash is SHA256 of sorted file:blob pairs for ALL files touched across the session.
+	// Survives local squash merges where individual patch IDs don't match the combined diff.
+	SessionFilesHash string `json:"session_files_hash,omitempty"`
+}
+
 // CheckpointSummary is the root-level metadata.json for a checkpoint.
 // It contains aggregated statistics from all sessions and a map of session IDs
 // to their file paths. Session-specific data (including initial_attribution)
@@ -483,6 +514,7 @@ type CheckpointSummary struct {
 	Sessions            []SessionFilePaths  `json:"sessions"`
 	TokenUsage          *agent.TokenUsage   `json:"token_usage,omitempty"`
 	CombinedAttribution *InitialAttribution `json:"combined_attribution,omitempty"`
+	Linkage             *LinkageMetadata    `json:"linkage,omitempty"`
 }
 
 // SessionMetrics contains hook-provided session metrics from agents that report
