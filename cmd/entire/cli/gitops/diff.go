@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os/exec"
 	"sort"
@@ -238,5 +239,5 @@ func ComputeFilesChangedHash(ctx context.Context, repoDir, commitHash string, fi
 	}
 
 	h := sha256.Sum256([]byte(strings.Join(pairs, "\n")))
-	return fmt.Sprintf("%x", h), nil
+	return hex.EncodeToString(h[:]), nil
 }
