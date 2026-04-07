@@ -3,8 +3,10 @@ package gitops
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
 )
 
@@ -124,4 +126,117 @@ func extractStatus(statusLine string) byte {
 		return 0
 	}
 	return statusField[0]
+}
+
+// ComputePatchID computes the git patch-id for the diff between two commits.
+// Patch IDs are content hashes of the diff itself, independent of commit metadata
+// and parent position. This means the same code change produces the same patch ID
+// even after rebase (which changes the parent/base but not the diff content).
+//
+// For initial commits (parentHash is empty), uses --root mode.
+// Returns a 40-char hex SHA1 string, or empty string for empty diffs.
+func ComputePatchID(ctx context.Context, repoDir, parentHash, commitHash string) (string, error) {
+	var diffCmd *exec.Cmd
+	if parentHash == "" {
+		diffCmd = exec.CommandContext(ctx, "git", "diff-tree", "--root", "-p", commitHash)
+	} else {
+		diffCmd = exec.CommandContext(ctx, "git", "diff-tree", "-p", parentHash, commitHash)
+	}
+	diffCmd.Dir = repoDir
+
+	var diffOut, diffErr bytes.Buffer
+	diffCmd.Stdout = &diffOut
+	diffCmd.Stderr = &diffErr
+
+	if err := diffCmd.Run(); err != nil {
+		return "", fmt.Errorf("git diff-tree failed: %w: %s", err, strings.TrimSpace(diffErr.String()))
+	}
+
+	if diffOut.Len() == 0 {
+		return "", nil
+	}
+
+	patchIDCmd := exec.CommandContext(ctx, "git", "patch-id", "--stable")
+	patchIDCmd.Dir = repoDir
+	patchIDCmd.Stdin = &diffOut
+
+	var patchOut, patchErr bytes.Buffer
+	patchIDCmd.Stdout = &patchOut
+	patchIDCmd.Stderr = &patchErr
+
+	if err := patchIDCmd.Run(); err != nil {
+		return "", fmt.Errorf("git patch-id failed: %w: %s", err, strings.TrimSpace(patchErr.String()))
+	}
+
+	output := strings.TrimSpace(patchOut.String())
+	if output == "" {
+		return "", nil
+	}
+	fields := strings.Fields(output)
+	if len(fields) < 1 {
+		return "", fmt.Errorf("unexpected git patch-id output: %q", output)
+	}
+	return fields[0], nil
+}
+
+// ComputeFilesChangedHash computes a SHA256 hash of the given files' blob hashes
+// at the specified commit. The hash is computed from sorted "filepath:blobhash" pairs,
+// making it independent of input order and stable across rebases.
+//
+// Uses a single git ls-tree call for all files (O(1) subprocess, not O(N)).
+// Returns a 64-char hex SHA256 string, or empty string if no files.
+func ComputeFilesChangedHash(ctx context.Context, repoDir, commitHash string, filePaths []string) (string, error) {
+	if len(filePaths) == 0 {
+		return "", nil
+	}
+
+	args := []string{"ls-tree", commitHash, "--"}
+	args = append(args, filePaths...)
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = repoDir
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("git ls-tree failed: %w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+
+	// Parse ls-tree output: "<mode> <type> <hash>\t<path>" per line
+	blobMap := make(map[string]string)
+	for _, line := range strings.Split(strings.TrimSpace(stdout.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		tabIdx := strings.IndexByte(line, '\t')
+		if tabIdx == -1 {
+			continue
+		}
+		meta := line[:tabIdx]
+		path := line[tabIdx+1:]
+		fields := strings.Fields(meta)
+		if len(fields) < 3 {
+			continue
+		}
+		blobMap[path] = fields[2]
+	}
+
+	sorted := make([]string, len(filePaths))
+	copy(sorted, filePaths)
+	sort.Strings(sorted)
+
+	var pairs []string
+	for _, fp := range sorted {
+		if blobHash, ok := blobMap[fp]; ok {
+			pairs = append(pairs, fp+":"+blobHash)
+		}
+	}
+
+	if len(pairs) == 0 {
+		return "", nil
+	}
+
+	h := sha256.Sum256([]byte(strings.Join(pairs, "\n")))
+	return fmt.Sprintf("%x", h), nil
 }

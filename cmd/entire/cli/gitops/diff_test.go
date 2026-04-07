@@ -84,6 +84,44 @@ func gitCommit(t *testing.T, dir, msg string) {
 	}
 }
 
+func revParse(t *testing.T, dir, ref string) string {
+	t.Helper()
+	cmd := exec.CommandContext(context.Background(), "git", "rev-parse", ref)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git rev-parse %s failed: %v", ref, err)
+	}
+	return string(out[:len(out)-1])
+}
+
+func gitCheckoutBranch(t *testing.T, dir, branchName string) {
+	t.Helper()
+	cmd := exec.CommandContext(context.Background(), "git", "checkout", "-b", branchName)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git checkout -b %s failed: %v\n%s", branchName, err, out)
+	}
+}
+
+func gitCheckout(t *testing.T, dir, ref string) {
+	t.Helper()
+	cmd := exec.CommandContext(context.Background(), "git", "checkout", ref)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git checkout %s failed: %v\n%s", ref, err, out)
+	}
+}
+
+func gitRebase(t *testing.T, dir, onto string) {
+	t.Helper()
+	cmd := exec.CommandContext(context.Background(), "git", "rebase", onto)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git rebase %s failed: %v\n%s", onto, err, out)
+	}
+}
+
 func TestDiffTreeFiles_NormalCommit(t *testing.T) {
 	t.Parallel()
 	dir := initTestRepo(t)
@@ -403,5 +441,178 @@ func TestExtractStatus(t *testing.T) {
 				t.Errorf("extractStatus(%q) = %c (%d), want %c (%d)", tt.input, got, got, tt.expected, tt.expected)
 			}
 		})
+	}
+}
+
+func TestComputePatchID(t *testing.T) {
+	t.Parallel()
+	dir := initTestRepo(t)
+
+	writeFile(t, dir, "file.txt", "initial")
+	gitAdd(t, dir, "file.txt")
+	gitCommit(t, dir, "initial")
+
+	writeFile(t, dir, "file.txt", "modified")
+	gitAdd(t, dir, "file.txt")
+	gitCommit(t, dir, "modify file")
+
+	head := revParse(t, dir, "HEAD")
+	parent := revParse(t, dir, "HEAD~1")
+
+	patchID, err := ComputePatchID(context.Background(), dir, parent, head)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if patchID == "" {
+		t.Fatal("expected non-empty patch ID")
+	}
+	if len(patchID) != 40 {
+		t.Fatalf("expected 40-char hex, got %d chars: %s", len(patchID), patchID)
+	}
+}
+
+func TestComputePatchID_StableAcrossRebase(t *testing.T) {
+	t.Parallel()
+	dir := initTestRepo(t)
+
+	writeFile(t, dir, "base.txt", "base")
+	gitAdd(t, dir, "base.txt")
+	gitCommit(t, dir, "base")
+
+	gitCheckoutBranch(t, dir, "feature")
+	writeFile(t, dir, "feature.txt", "feature work")
+	gitAdd(t, dir, "feature.txt")
+	gitCommit(t, dir, "add feature")
+
+	featureHead := revParse(t, dir, "HEAD")
+	featureParent := revParse(t, dir, "HEAD~1")
+
+	patchIDBefore, err := ComputePatchID(context.Background(), dir, featureParent, featureHead)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gitCheckout(t, dir, "main")
+	writeFile(t, dir, "other.txt", "other work")
+	gitAdd(t, dir, "other.txt")
+	gitCommit(t, dir, "unrelated work on main")
+
+	gitCheckout(t, dir, "feature")
+	gitRebase(t, dir, "main")
+
+	rebasedHead := revParse(t, dir, "HEAD")
+	rebasedParent := revParse(t, dir, "HEAD~1")
+
+	patchIDAfter, err := ComputePatchID(context.Background(), dir, rebasedParent, rebasedHead)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if patchIDBefore != patchIDAfter {
+		t.Errorf("patch ID should survive clean rebase: before=%s, after=%s", patchIDBefore, patchIDAfter)
+	}
+}
+
+func TestComputePatchID_InitialCommit(t *testing.T) {
+	t.Parallel()
+	dir := initTestRepo(t)
+
+	writeFile(t, dir, "file.txt", "initial")
+	gitAdd(t, dir, "file.txt")
+	gitCommit(t, dir, "initial")
+
+	head := revParse(t, dir, "HEAD")
+
+	patchID, err := ComputePatchID(context.Background(), dir, "", head)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if patchID == "" {
+		t.Fatal("expected non-empty patch ID for initial commit")
+	}
+}
+
+func TestComputeFilesChangedHash(t *testing.T) {
+	t.Parallel()
+	dir := initTestRepo(t)
+
+	writeFile(t, dir, "file.txt", "initial")
+	gitAdd(t, dir, "file.txt")
+	gitCommit(t, dir, "initial")
+
+	writeFile(t, dir, "file.txt", "modified")
+	writeFile(t, dir, "new.txt", "new file")
+	gitAdd(t, dir, "file.txt", "new.txt")
+	gitCommit(t, dir, "changes")
+
+	head := revParse(t, dir, "HEAD")
+
+	hash, err := ComputeFilesChangedHash(context.Background(), dir, head, []string{"file.txt", "new.txt"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if hash == "" {
+		t.Fatal("expected non-empty hash")
+	}
+	if len(hash) != 64 {
+		t.Fatalf("expected 64-char SHA256 hex, got %d chars: %s", len(hash), hash)
+	}
+
+	// Same inputs in different order produce same hash
+	hash2, err := ComputeFilesChangedHash(context.Background(), dir, head, []string{"new.txt", "file.txt"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if hash != hash2 {
+		t.Errorf("hash should be stable regardless of input order: %s != %s", hash, hash2)
+	}
+}
+
+func TestComputeFilesChangedHash_StableAcrossRebase(t *testing.T) {
+	t.Parallel()
+	dir := initTestRepo(t)
+
+	writeFile(t, dir, "base.txt", "base")
+	gitAdd(t, dir, "base.txt")
+	gitCommit(t, dir, "base")
+
+	gitCheckoutBranch(t, dir, "feature")
+	writeFile(t, dir, "feature.txt", "feature work")
+	gitAdd(t, dir, "feature.txt")
+	gitCommit(t, dir, "add feature")
+
+	headBefore := revParse(t, dir, "HEAD")
+	hashBefore, err := ComputeFilesChangedHash(context.Background(), dir, headBefore, []string{"feature.txt"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gitCheckout(t, dir, "main")
+	writeFile(t, dir, "other.txt", "other")
+	gitAdd(t, dir, "other.txt")
+	gitCommit(t, dir, "other work")
+
+	gitCheckout(t, dir, "feature")
+	gitRebase(t, dir, "main")
+
+	headAfter := revParse(t, dir, "HEAD")
+	hashAfter, err := ComputeFilesChangedHash(context.Background(), dir, headAfter, []string{"feature.txt"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if hashBefore != hashAfter {
+		t.Errorf("files-changed hash should survive clean rebase: before=%s, after=%s", hashBefore, hashAfter)
+	}
+}
+
+func TestComputeFilesChangedHash_EmptyFiles(t *testing.T) {
+	t.Parallel()
+	hash, err := ComputeFilesChangedHash(context.Background(), "/tmp", "HEAD", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if hash != "" {
+		t.Errorf("expected empty hash for nil files, got %s", hash)
 	}
 }
