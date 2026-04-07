@@ -212,13 +212,13 @@ func ComputeFilesChangedHash(ctx context.Context, repoDir, commitHash string, fi
 		}
 		tabIdx := strings.IndexByte(line, '\t')
 		if tabIdx == -1 {
-			continue
+			return "", fmt.Errorf("unexpected ls-tree output (no tab separator): %q", line)
 		}
 		meta := line[:tabIdx]
 		path := line[tabIdx+1:]
 		fields := strings.Fields(meta)
 		if len(fields) < 3 {
-			continue
+			return "", fmt.Errorf("unexpected ls-tree output (incomplete metadata): %q", line)
 		}
 		blobMap[path] = fields[2]
 	}

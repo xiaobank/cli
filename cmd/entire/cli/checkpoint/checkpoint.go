@@ -461,15 +461,15 @@ type SessionFilePaths struct {
 type LinkageMetadata struct {
 	// TreeHash is the git tree hash of the commit (full repo snapshot).
 	// Survives rewrites that don't change code (reword, msg-only amend).
-	TreeHash string `json:"tree_hash"`
+	TreeHash string `json:"tree_hash,omitempty"`
 
 	// PatchID is the git patch-id of the commit's diff (parent->HEAD).
 	// Survives rebase (same diff replayed on different base).
-	PatchID string `json:"patch_id"`
+	PatchID string `json:"patch_id,omitempty"`
 
 	// FilesChangedHash is SHA256 of sorted file:blob pairs for files changed in this commit.
 	// Survives rebase even with conflicts in other files (only agent-file blobs matter).
-	FilesChangedHash string `json:"files_changed_hash"`
+	FilesChangedHash string `json:"files_changed_hash,omitempty"`
 
 	// SessionFilesHash is SHA256 of sorted file:blob pairs for ALL files touched across the session.
 	// Survives local squash merges where individual patch IDs don't match the combined diff.

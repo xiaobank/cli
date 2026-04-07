@@ -313,6 +313,12 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 	// session is ACTIVE. When an agent runs git revert/cherry-pick as part of
 	// its work, the commit should be checkpointed. When the user does it
 	// manually (no active session), skip as before.
+	//
+	// Note: The trailer is added here, but condensation is deferred. PostCommit's
+	// state machine skips ActionCondense when IsRebaseInProgress=true (sequence
+	// operation files like REVERT_HEAD still exist during post-commit). The
+	// checkpoint data is preserved on the shadow branch and will be condensed
+	// on the next normal commit or when the session ends (TurnEnd/Stop).
 	if isGitSequenceOperation(ctx) {
 		if !s.hasActiveSessionInWorktree(ctx) {
 			logging.Debug(logCtx, "prepare-commit-msg: skipped during git sequence operation (no active session)",
@@ -627,11 +633,12 @@ type postCommitActionHandler struct {
 	// Cached git objects — resolved once per PostCommit invocation to avoid
 	// redundant reads across filesOverlapWithContent, filesWithRemainingAgentChanges,
 	// CondenseSession, and calculateSessionAttributions.
-	headTree      *object.Tree        // HEAD commit tree (shared across all sessions)
-	parentTree    *object.Tree        // HEAD's first parent tree (shared, nil for initial commits)
-	shadowRef     *plumbing.Reference // Per-session shadow branch ref (nil if branch doesn't exist)
-	shadowTree    *object.Tree        // Per-session shadow commit tree (nil if branch doesn't exist)
-	allAgentFiles map[string]struct{} // Union of all sessions' FilesTouched for cross-session attribution
+	headTree      *object.Tree                // HEAD commit tree (shared across all sessions)
+	parentTree    *object.Tree                // HEAD's first parent tree (shared, nil for initial commits)
+	shadowRef     *plumbing.Reference         // Per-session shadow branch ref (nil if branch doesn't exist)
+	shadowTree    *object.Tree                // Per-session shadow commit tree (nil if branch doesn't exist)
+	allAgentFiles map[string]struct{}         // Union of all sessions' FilesTouched for cross-session attribution
+	baseLinkage   *checkpoint.LinkageMetadata // Commit-level linkage signals (computed once, shared across sessions)
 
 	// Output: set by handler methods, read by caller after TransitionAndLog.
 	condensed bool
@@ -645,12 +652,13 @@ func (h *postCommitActionHandler) parentCommitHash() string {
 	return ""
 }
 
-// computeLinkage computes content-based linkage signals for re-linking
-// checkpoints after git history rewrites. Called at PostCommit time when
-// all commit data is available.
-func (h *postCommitActionHandler) computeLinkage(ctx context.Context, sessionFilesTouched []string) *checkpoint.LinkageMetadata {
+// computeBaseLinkage computes commit-level linkage signals (tree hash, patch ID,
+// files-changed hash). These are identical across sessions since they depend on
+// the commit, not the session. Called once per PostCommit invocation and cached
+// on the handler's baseLinkage field.
+func (h *postCommitActionHandler) computeBaseLinkage(ctx context.Context) {
 	logCtx := logging.WithComponent(ctx, "checkpoint")
-	linkage := &checkpoint.LinkageMetadata{
+	h.baseLinkage = &checkpoint.LinkageMetadata{
 		TreeHash: h.commit.TreeHash.String(),
 	}
 
@@ -662,7 +670,7 @@ func (h *postCommitActionHandler) computeLinkage(ctx context.Context, sessionFil
 			slog.String("error", err.Error()),
 		)
 	} else {
-		linkage.PatchID = patchID
+		h.baseLinkage.PatchID = patchID
 	}
 
 	// Compute files-changed hash (committed files' blob hashes — survives rebase + other-file conflicts)
@@ -677,14 +685,23 @@ func (h *postCommitActionHandler) computeLinkage(ctx context.Context, sessionFil
 			slog.String("error", err.Error()),
 		)
 	} else {
-		linkage.FilesChangedHash = fch
+		h.baseLinkage.FilesChangedHash = fch
+	}
+}
+
+// linkageForSession returns linkage metadata for a specific session by copying
+// the commit-level base linkage and adding the session-specific SessionFilesHash.
+func (h *postCommitActionHandler) linkageForSession(ctx context.Context, sessionFilesTouched []string) *checkpoint.LinkageMetadata {
+	if h.baseLinkage == nil {
+		h.computeBaseLinkage(ctx)
 	}
 
-	// Compute session files hash (all files touched across session — survives squash merge)
+	// Copy base linkage so each session gets its own SessionFilesHash
+	linkage := *h.baseLinkage
 	if len(sessionFilesTouched) > 0 {
 		sfh, err := gitops.ComputeFilesChangedHash(ctx, h.repoDir, h.newHead, sessionFilesTouched)
 		if err != nil {
-			logging.Warn(logCtx, "failed to compute session files hash for linkage",
+			logging.Warn(logging.WithComponent(ctx, "checkpoint"), "failed to compute session files hash for linkage",
 				slog.String("commit", h.newHead),
 				slog.String("error", err.Error()),
 			)
@@ -692,8 +709,7 @@ func (h *postCommitActionHandler) computeLinkage(ctx context.Context, sessionFil
 			linkage.SessionFilesHash = sfh
 		}
 	}
-
-	return linkage
+	return &linkage
 }
 
 func (h *postCommitActionHandler) HandleCondense(state *session.State) error {
@@ -717,7 +733,7 @@ func (h *postCommitActionHandler) HandleCondense(state *session.State) error {
 			parentCommitHash: h.parentCommitHash(),
 			headCommitHash:   h.newHead,
 			allAgentFiles:    h.allAgentFiles,
-			linkage:          h.computeLinkage(h.ctx, state.FilesTouched),
+			linkage:          h.linkageForSession(h.ctx, state.FilesTouched),
 		})
 	} else {
 		h.s.updateBaseCommitIfChanged(h.ctx, state, h.newHead)
@@ -747,7 +763,7 @@ func (h *postCommitActionHandler) HandleCondenseIfFilesTouched(state *session.St
 			parentCommitHash: h.parentCommitHash(),
 			headCommitHash:   h.newHead,
 			allAgentFiles:    h.allAgentFiles,
-			linkage:          h.computeLinkage(h.ctx, state.FilesTouched),
+			linkage:          h.linkageForSession(h.ctx, state.FilesTouched),
 		})
 	} else {
 		h.s.updateBaseCommitIfChanged(h.ctx, state, h.newHead)

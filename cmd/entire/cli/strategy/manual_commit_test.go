@@ -4286,6 +4286,60 @@ func TestMarshalPromptAttributionsIncludingPending_OnlyPending(t *testing.T) {
 	require.Equal(t, 7, result[0].UserLinesAdded)
 }
 
+// TestShadowStrategy_PostCommit_LinkagePopulated verifies the full linkage pipeline:
+// PostCommit computes linkage signals, passes them through condensation, and the
+// committed checkpoint has all four LinkageMetadata fields populated with correct
+// hash lengths (tree_hash=40 hex, patch_id=40 hex, files_changed_hash=64 hex,
+// session_files_hash=64 hex).
+func TestShadowStrategy_PostCommit_LinkagePopulated(t *testing.T) {
+	dir := setupGitRepo(t)
+	t.Chdir(dir)
+
+	repo, err := git.PlainOpen(dir)
+	require.NoError(t, err)
+
+	s := &ManualCommitStrategy{}
+	sessionID := "linkage-pipeline-session"
+
+	// Initialize session and save a checkpoint so the shadow branch has content.
+	// setupGitRepo creates one initial commit; commitWithCheckpointTrailer will
+	// create a second, giving us a parent for patch-id computation.
+	setupSessionWithCheckpoint(t, s, repo, dir, sessionID)
+
+	// Create a commit WITH the Entire-Checkpoint trailer on the main branch.
+	// The checkpoint ID here will be used by PostCommit for condensation.
+	checkpointIDStr := "f1e2d3c4b5a6"
+	commitWithCheckpointTrailer(t, repo, dir, checkpointIDStr)
+
+	// Trigger PostCommit — this should condense with linkage signals
+	err = s.PostCommit(context.Background())
+	require.NoError(t, err)
+
+	// Re-open the repo to pick up any ref changes from condensation
+	repo, err = git.PlainOpen(dir)
+	require.NoError(t, err)
+
+	// Read back the committed checkpoint from the metadata branch
+	store := checkpoint.NewGitStore(repo)
+	cpID := id.MustCheckpointID(checkpointIDStr)
+	summary, err := store.ReadCommitted(context.Background(), cpID)
+	require.NoError(t, err)
+	require.NotNil(t, summary, "checkpoint should exist on metadata branch after PostCommit")
+
+	// Verify linkage is populated with all four signals
+	require.NotNil(t, summary.Linkage, "Linkage should be populated after condensation")
+	assert.NotEmpty(t, summary.Linkage.TreeHash, "TreeHash should be set")
+	assert.NotEmpty(t, summary.Linkage.PatchID, "PatchID should be set")
+	assert.NotEmpty(t, summary.Linkage.FilesChangedHash, "FilesChangedHash should be set")
+	assert.NotEmpty(t, summary.Linkage.SessionFilesHash, "SessionFilesHash should be set")
+
+	// Verify hash format and lengths
+	assert.Len(t, summary.Linkage.TreeHash, 40, "TreeHash should be 40-char hex (git tree hash)")
+	assert.Len(t, summary.Linkage.PatchID, 40, "PatchID should be 40-char hex (git patch-id)")
+	assert.Len(t, summary.Linkage.FilesChangedHash, 64, "FilesChangedHash should be 64-char hex (SHA256)")
+	assert.Len(t, summary.Linkage.SessionFilesHash, 64, "SessionFilesHash should be 64-char hex (SHA256)")
+}
+
 func TestCommittedFilesExcludingMetadata_AllMetadata(t *testing.T) {
 	t.Parallel()
 
