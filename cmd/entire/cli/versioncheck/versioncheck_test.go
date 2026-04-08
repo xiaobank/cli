@@ -42,9 +42,9 @@ func TestIsOutdated(t *testing.T) {
 		{"1.0.0-dev-xxx", "1.0.1", false, "dev build skips version check"},
 
 		// Nightly-vs-nightly comparisons (same channel)
-		{"0.5.3-nightly.20260405.abc1234", "0.5.3-nightly.20260406.def5678", true, "older nightly is outdated by newer nightly"},
-		{"0.5.3-nightly.20260406.def5678", "0.5.3-nightly.20260405.abc1234", false, "newer nightly is not outdated by older nightly"},
-		{"0.5.3-nightly.20260406.abc1234", "0.5.3-nightly.20260406.abc1234", false, "same nightly is not outdated"},
+		{"0.5.3-nightly.202604051159.abc1234", "0.5.3-nightly.202604061200.def5678", true, "older nightly is outdated by newer nightly"},
+		{"0.5.3-nightly.202604061200.def5678", "0.5.3-nightly.202604051159.abc1234", false, "newer nightly is not outdated by older nightly"},
+		{"0.5.3-nightly.202604061200.abc1234", "0.5.3-nightly.202604061200.abc1234", false, "same nightly is not outdated"},
 	}
 
 	for _, tt := range tests {
@@ -63,8 +63,8 @@ func TestIsNightly(t *testing.T) {
 		version string
 		want    bool
 	}{
-		{"0.5.3-nightly.20260406.abc1234", true},
-		{"v0.5.3-nightly.20260406.abc1234", true},
+		{"0.5.3-nightly.202604061200.abc1234", true},
+		{"v0.5.3-nightly.202604061200.abc1234", true},
 		{"1.0.0", false},
 		{"v1.0.0", false},
 		{"1.0.0-rc1", false},
@@ -85,8 +85,8 @@ func TestFetchLatestNightlyVersion(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		releases := []GitHubRelease{
 			{TagName: "v0.5.4", Prerelease: false},
-			{TagName: "v0.5.4-nightly.20260406.abc1234", Prerelease: true},
-			{TagName: "v0.5.4-nightly.20260405.def5678", Prerelease: true},
+			{TagName: "v0.5.4-nightly.202604061200.abc1234", Prerelease: true},
+			{TagName: "v0.5.4-nightly.202604051159.def5678", Prerelease: true},
 		}
 		w.Header().Set("Content-Type", "application/json")
 		//nolint:errcheck // test helper
@@ -102,8 +102,8 @@ func TestFetchLatestNightlyVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fetchLatestNightlyVersion() error = %v", err)
 	}
-	if version != "v0.5.4-nightly.20260406.abc1234" {
-		t.Errorf("fetchLatestNightlyVersion() = %q, want v0.5.4-nightly.20260406.abc1234", version)
+	if version != "v0.5.4-nightly.202604061200.abc1234" {
+		t.Errorf("fetchLatestNightlyVersion() = %q, want v0.5.4-nightly.202604061200.abc1234", version)
 	}
 }
 
