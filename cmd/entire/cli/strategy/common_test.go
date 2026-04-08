@@ -103,6 +103,32 @@ func TestOpenRepositoryError(t *testing.T) {
 	}
 }
 
+func TestOpenRepository_WithNegativeRefspec(t *testing.T) {
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+
+	cmd := exec.CommandContext(context.Background(), "git", "remote", "add", "origin", "git@github.com:example/example.git")
+	cmd.Dir = tmpDir
+	cmd.Env = testutil.GitIsolatedEnv()
+	require.NoError(t, cmd.Run())
+
+	cmd = exec.CommandContext(context.Background(), "git", "config", "--add", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*")
+	cmd.Dir = tmpDir
+	cmd.Env = testutil.GitIsolatedEnv()
+	require.NoError(t, cmd.Run())
+
+	cmd = exec.CommandContext(context.Background(), "git", "config", "--add", "remote.origin.fetch", "^refs/heads/excluded")
+	cmd.Dir = tmpDir
+	cmd.Env = testutil.GitIsolatedEnv()
+	require.NoError(t, cmd.Run())
+
+	t.Chdir(tmpDir)
+
+	repo, err := OpenRepository(context.Background())
+	require.NoError(t, err, "negative refspecs supported by git should not prevent repository access")
+	require.NotNil(t, repo)
+}
+
 func TestWorktreeRoot_Cache(t *testing.T) {
 	// Uses t.Chdir + t.Setenv so cannot be parallel.
 	tmpDir := t.TempDir()
