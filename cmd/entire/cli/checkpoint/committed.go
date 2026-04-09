@@ -1139,8 +1139,9 @@ func (s *GitStore) GetSessionLog(ctx context.Context, cpID id.CheckpointID) ([]b
 }
 
 // LookupSessionLog is a convenience function that opens the repository and retrieves
-// a session log by checkpoint ID. This is the primary entry point for callers that
-// don't already have a GitStore instance.
+// a session log by checkpoint ID. Tries v1 first, then falls back to gmeta if
+// available. This is the primary entry point for callers that don't already have
+// a store instance.
 // Returns ErrCheckpointNotFound if the checkpoint doesn't exist.
 // Returns ErrNoTranscript if the checkpoint exists but has no transcript.
 func LookupSessionLog(ctx context.Context, cpID id.CheckpointID) ([]byte, string, error) {
@@ -1148,8 +1149,23 @@ func LookupSessionLog(ctx context.Context, cpID id.CheckpointID) ([]byte, string
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to open git repository: %w", err)
 	}
+
+	// Try v1 first
 	store := NewGitStore(repo)
-	return store.GetSessionLog(ctx, cpID)
+	transcript, sessionID, v1Err := store.GetSessionLog(ctx, cpID)
+	if v1Err == nil {
+		return transcript, sessionID, nil
+	}
+
+	// Fall back to gmeta (best-effort — only if the ref exists)
+	gmetaStore := NewGmetaStore(repo)
+	gTranscript, gSessionID, gErr := gmetaStore.GetSessionLog(ctx, cpID)
+	if gErr == nil {
+		return gTranscript, gSessionID, nil
+	}
+
+	// Return original v1 error
+	return nil, "", v1Err
 }
 
 // UpdateSummary updates the summary field in the latest session's metadata.
