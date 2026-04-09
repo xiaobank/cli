@@ -540,6 +540,16 @@ func IsCheckpointsV2Enabled(ctx context.Context) bool {
 	return settings.IsCheckpointsV2Enabled()
 }
 
+// IsGmetaEnabled checks if gmeta exchange format writes are enabled in settings.
+// Returns false by default if settings cannot be loaded or the key is missing.
+func IsGmetaEnabled(ctx context.Context) bool {
+	settings, err := Load(ctx)
+	if err != nil {
+		return false
+	}
+	return settings.IsGmetaEnabled()
+}
+
 // IsPushV2RefsEnabled checks if pushing v2 refs is enabled in settings.
 // Returns false by default if settings cannot be loaded or flags are missing.
 func IsPushV2RefsEnabled(ctx context.Context) bool {
@@ -638,6 +648,16 @@ func (s *EntireSettings) IsCheckpointsV2Enabled() bool {
 		return false
 	}
 	val, ok := s.StrategyOptions["checkpoints_v2"].(bool)
+	return ok && val
+}
+
+// IsGmetaEnabled checks if gmeta exchange format writes are enabled.
+// Returns false by default if the key is missing or not a bool.
+func (s *EntireSettings) IsGmetaEnabled() bool {
+	if s.StrategyOptions == nil {
+		return false
+	}
+	val, ok := s.StrategyOptions["gmeta"].(bool)
 	return ok && val
 }
 
