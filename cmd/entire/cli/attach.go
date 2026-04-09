@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -175,6 +176,17 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 	}
 	if settings.IsCheckpointsV2Enabled(logCtx) {
 		writeAttachCheckpointV2(logCtx, repo, writeOpts)
+	}
+
+	// Gmeta dual-write (best-effort)
+	if settings.IsGmetaEnabled(logCtx) {
+		gmetaStore := cpkg.NewGmetaStore(repo)
+		if err := gmetaStore.WriteCommitted(ctx, writeOpts); err != nil {
+			logging.Warn(logCtx, "gmeta write failed",
+				slog.String("checkpoint_id", checkpointID.String()),
+				slog.String("error", err.Error()),
+			)
+		}
 	}
 
 	// Create or update session state.

@@ -85,7 +85,7 @@ func TestMigrateCheckpointsV2_Basic(t *testing.T) {
 
 	var stdout bytes.Buffer
 
-	result, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout, false)
+	result, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, nil, &stdout, false)
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.migrated)
 	assert.Equal(t, 0, result.skipped)
@@ -112,14 +112,14 @@ func TestMigrateCheckpointsV2_Idempotent(t *testing.T) {
 	var stdout bytes.Buffer
 
 	// First run: should migrate
-	result1, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout, false)
+	result1, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, nil, &stdout, false)
 	require.NoError(t, err)
 	assert.Equal(t, 1, result1.migrated)
 	assert.Equal(t, 0, result1.skipped)
 
 	// Second run: should skip (no agent type means backfill also can't produce compact transcript)
 	stdout.Reset()
-	result2, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout, false)
+	result2, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, nil, &stdout, false)
 	require.NoError(t, err)
 	assert.Equal(t, 0, result2.migrated)
 	assert.Equal(t, 1, result2.skipped)
@@ -139,20 +139,20 @@ func TestMigrateCheckpointsV2_ForceOverwritesExisting(t *testing.T) {
 	var stdout bytes.Buffer
 
 	// First run: normal migration
-	result1, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout, false)
+	result1, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, nil, &stdout, false)
 	require.NoError(t, err)
 	assert.Equal(t, 1, result1.migrated)
 
 	// Second run without force: should skip
 	stdout.Reset()
-	result2, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout, false)
+	result2, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, nil, &stdout, false)
 	require.NoError(t, err)
 	assert.Equal(t, 0, result2.migrated)
 	assert.Equal(t, 1, result2.skipped)
 
 	// Third run with force: should re-migrate
 	stdout.Reset()
-	result3, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout, true)
+	result3, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, nil, &stdout, true)
 	require.NoError(t, err)
 	assert.Equal(t, 1, result3.migrated)
 	assert.Equal(t, 0, result3.skipped)
@@ -183,13 +183,13 @@ func TestMigrateCheckpointsV2_ForceMultipleCheckpoints(t *testing.T) {
 
 	// First run: migrates both
 	var discard bytes.Buffer
-	result1, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &discard, false)
+	result1, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, nil, &discard, false)
 	require.NoError(t, err)
 	assert.Equal(t, 2, result1.migrated)
 
 	// Force re-migrate: should re-migrate both (0 skipped)
 	var stdout bytes.Buffer
-	result2, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout, true)
+	result2, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, nil, &stdout, true)
 	require.NoError(t, err)
 	assert.Equal(t, 2, result2.migrated)
 	assert.Equal(t, 0, result2.skipped)
@@ -226,7 +226,7 @@ func TestMigrateCheckpointsV2_MultiSession(t *testing.T) {
 
 	var stdout bytes.Buffer
 
-	result, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout, false)
+	result, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, nil, &stdout, false)
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.migrated)
 
@@ -244,7 +244,7 @@ func TestMigrateCheckpointsV2_NoV1Branch(t *testing.T) {
 	var stdout bytes.Buffer
 
 	// No v1 data written — ListCommitted returns empty
-	result, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout, false)
+	result, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, nil, &stdout, false)
 	require.NoError(t, err)
 	assert.Equal(t, 0, result.migrated)
 	assert.Contains(t, stdout.String(), "Nothing to migrate")
@@ -280,7 +280,7 @@ func TestMigrateCheckpointsV2_CompactionSkipped(t *testing.T) {
 
 	var stdout bytes.Buffer
 
-	result, migrateErr := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout, false)
+	result, migrateErr := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, nil, &stdout, false)
 	require.NoError(t, migrateErr)
 	assert.Equal(t, 1, result.migrated)
 	assert.Contains(t, stdout.String(), "compact transcript not generated")
@@ -307,7 +307,7 @@ func TestMigrateCheckpointsV2_TaskCheckpoint(t *testing.T) {
 
 	var stdout bytes.Buffer
 
-	result, migrateErr := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout, false)
+	result, migrateErr := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, nil, &stdout, false)
 	require.NoError(t, migrateErr)
 	assert.Equal(t, 1, result.migrated)
 
@@ -344,13 +344,13 @@ func TestMigrateCheckpointsV2_AllSkippedOnRerun(t *testing.T) {
 
 	// First run: migrates both
 	var discard bytes.Buffer
-	result1, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &discard, false)
+	result1, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, nil, &discard, false)
 	require.NoError(t, err)
 	assert.Equal(t, 2, result1.migrated)
 
 	// Second run: skips both
 	var stdout bytes.Buffer
-	result2, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout, false)
+	result2, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, nil, &stdout, false)
 	require.NoError(t, err)
 	assert.Equal(t, 0, result2.migrated)
 	assert.Equal(t, 2, result2.skipped)
@@ -398,7 +398,7 @@ func TestMigrateCheckpointsV2_BackfillCompactTranscript(t *testing.T) {
 
 	// Run migration — should backfill the compact transcript
 	var stdout bytes.Buffer
-	result, migrateErr := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &stdout, false)
+	result, migrateErr := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, nil, &stdout, false)
 	require.NoError(t, migrateErr)
 	assert.Equal(t, 1, result.migrated, "backfill should count as migrated")
 	assert.Equal(t, 0, result.skipped)
@@ -453,7 +453,7 @@ func TestMigrateCheckpointsV2_UsesComputedCompactTranscriptStart(t *testing.T) {
 	require.Positive(t, expectedOffset, "expected non-zero compact transcript start")
 
 	var stdout bytes.Buffer
-	result, migrateErr := migrateCheckpointsV2(ctx, repo, v1Store, v2Store, &stdout, false)
+	result, migrateErr := migrateCheckpointsV2(ctx, repo, v1Store, v2Store, nil, &stdout, false)
 	require.NoError(t, migrateErr)
 	assert.Equal(t, 1, result.migrated)
 
@@ -491,7 +491,7 @@ func TestMigrateCheckpointsV2_RepairsMissingFullTranscriptBeforeBackfill(t *test
 
 	// Initial migration to create v2 state.
 	var initialRun bytes.Buffer
-	result1, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &initialRun, false)
+	result1, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, nil, &initialRun, false)
 	require.NoError(t, err)
 	assert.Equal(t, 1, result1.migrated)
 
@@ -500,7 +500,7 @@ func TestMigrateCheckpointsV2_RepairsMissingFullTranscriptBeforeBackfill(t *test
 
 	// Re-run migration: should repair /full/current and count as migrated (not skipped).
 	var rerun bytes.Buffer
-	result2, rerunErr := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &rerun, false)
+	result2, rerunErr := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, nil, &rerun, false)
 	require.NoError(t, rerunErr)
 	assert.Equal(t, 1, result2.migrated)
 	assert.Equal(t, 0, result2.failed)
@@ -524,7 +524,7 @@ func TestMigrateCheckpointsV2_RepairsCurrentFullEvenWhenArchiveExists(t *testing
 
 	// Initial migration to seed v2.
 	var initialRun bytes.Buffer
-	result1, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &initialRun, false)
+	result1, err := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, nil, &initialRun, false)
 	require.NoError(t, err)
 	assert.Equal(t, 1, result1.migrated)
 
@@ -544,7 +544,7 @@ func TestMigrateCheckpointsV2_RepairsCurrentFullEvenWhenArchiveExists(t *testing
 
 	// Re-run migration: should still repair /full/current.
 	var rerun bytes.Buffer
-	result2, rerunErr := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, &rerun, false)
+	result2, rerunErr := migrateCheckpointsV2(context.Background(), repo, v1Store, v2Store, nil, &rerun, false)
 	require.NoError(t, rerunErr)
 	assert.Equal(t, 1, result2.migrated)
 	assert.Contains(t, rerun.String(), "repaired partial v2 checkpoint state")

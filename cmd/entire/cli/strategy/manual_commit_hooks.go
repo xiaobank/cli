@@ -2668,6 +2668,12 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 		v2Store = checkpoint.NewV2GitStore(repo, ResolveCheckpointURL(logCtx, "origin"))
 	}
 
+	// Evaluate gmeta flag once before the loop
+	var gmetaStore *checkpoint.GmetaStore
+	if settings.IsGmetaEnabled(logCtx) {
+		gmetaStore = checkpoint.NewGmetaStore(repo)
+	}
+
 	// Update each checkpoint with the full transcript
 	for _, cpIDStr := range state.TurnCheckpointIDs {
 		cpID, parseErr := id.NewCheckpointID(cpIDStr)
@@ -2724,6 +2730,16 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 				logging.Warn(logCtx, "v2 dual-write update failed",
 					slog.String("checkpoint_id", cpIDStr),
 					slog.String("error", v2Err.Error()),
+				)
+			}
+		}
+
+		// Dual-write: update gmeta ref when enabled
+		if gmetaStore != nil {
+			if gmetaErr := gmetaStore.UpdateCommitted(logCtx, updateOpts); gmetaErr != nil {
+				logging.Warn(logCtx, "gmeta update failed",
+					slog.String("checkpoint_id", cpIDStr),
+					slog.String("error", gmetaErr.Error()),
 				)
 			}
 		}
