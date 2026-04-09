@@ -610,6 +610,66 @@ func TestGmetaStore_InitialAttribution_RoundTrip(t *testing.T) {
 	assert.Equal(t, 2, content.Metadata.InitialAttribution.MetricVersion)
 }
 
+func TestGmetaStore_UpdateCheckpointSummary_CombinedAttribution(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewGmetaStore(repo)
+	ctx := context.Background()
+
+	cpID := id.MustCheckpointID("a3b2c4d5e6f7")
+
+	err := store.WriteCommitted(ctx, WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-001",
+		Strategy:     "manual-commit",
+		Transcript:   []byte(`{"type":"text","content":"hello"}`),
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	})
+	require.NoError(t, err)
+
+	combined := &InitialAttribution{
+		CalculatedAt:      time.Date(2026, time.January, 13, 13, 0, 0, 0, time.UTC),
+		AgentLines:        20,
+		AgentRemoved:      5,
+		HumanAdded:        3,
+		HumanModified:     1,
+		HumanRemoved:      2,
+		TotalCommitted:    23,
+		TotalLinesChanged: 31,
+		AgentPercentage:   80.6,
+		MetricVersion:     2,
+	}
+
+	require.NoError(t, store.UpdateCheckpointSummary(ctx, cpID, combined))
+
+	summary, err := store.ReadCommitted(ctx, cpID)
+	require.NoError(t, err)
+	require.NotNil(t, summary)
+	require.NotNil(t, summary.CombinedAttribution)
+	assert.Equal(t, combined.CalculatedAt, summary.CombinedAttribution.CalculatedAt)
+	assert.Equal(t, combined.AgentLines, summary.CombinedAttribution.AgentLines)
+	assert.Equal(t, combined.AgentRemoved, summary.CombinedAttribution.AgentRemoved)
+	assert.Equal(t, combined.HumanAdded, summary.CombinedAttribution.HumanAdded)
+	assert.Equal(t, combined.HumanModified, summary.CombinedAttribution.HumanModified)
+	assert.Equal(t, combined.HumanRemoved, summary.CombinedAttribution.HumanRemoved)
+	assert.Equal(t, combined.TotalCommitted, summary.CombinedAttribution.TotalCommitted)
+	assert.Equal(t, combined.TotalLinesChanged, summary.CombinedAttribution.TotalLinesChanged)
+	assert.Equal(t, combined.AgentPercentage, summary.CombinedAttribution.AgentPercentage)
+	assert.Equal(t, combined.MetricVersion, summary.CombinedAttribution.MetricVersion)
+}
+
+func TestGmetaStore_UpdateCheckpointSummary_NotFound(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewGmetaStore(repo)
+
+	err := store.UpdateCheckpointSummary(context.Background(), id.MustCheckpointID("a3b2c4d5e6f7"), &InitialAttribution{
+		AgentLines: 1,
+	})
+	assert.ErrorIs(t, err, ErrCheckpointNotFound)
+}
+
 func TestGmetaStore_TokenUsage_MultiSession_Aggregated(t *testing.T) {
 	t.Parallel()
 	repo := initTestRepo(t)

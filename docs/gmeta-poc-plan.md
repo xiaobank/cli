@@ -41,6 +41,17 @@ change-id/<fanout>/<checkpoint-id>/
 │   ├── cli-version/__value                        # CLI version
 │   ├── branch/__value                             # branch name
 │   ├── checkpoints-count/__value                  # total across all sessions
+│   ├── combined-attribution/
+│   │   ├── calculated-at/__value
+│   │   ├── agent-lines/__value
+│   │   ├── agent-removed/__value
+│   │   ├── human-added/__value
+│   │   ├── human-modified/__value
+│   │   ├── human-removed/__value
+│   │   ├── total-committed/__value
+│   │   ├── total-lines-changed/__value
+│   │   ├── agent-percentage/__value
+│   │   └── metric-version/__value
 │   └── files-touched/__set/                       # merged from all sessions
 │       ├── <sha1(value)[:10]>                     # "src/foo.go"
 │       └── <sha1(value)[:10]>                     # "src/bar.go"
@@ -186,11 +197,15 @@ session/<session-id>/entire/attribution/
 
 These map directly to `checkpoint.InitialAttribution`.
 
+**Checkpoint-level combined attribution** is stored at `entire/combined-attribution/`
+using the same scalar field names as session attribution. This maps directly to
+`checkpoint.CheckpointSummary.CombinedAttribution` and is updated after the full
+set of sessions for a checkpoint is known.
+
 Decision for the POC:
 - Token usage is written and read at the session level
 - Attribution is written and read at the session level
-- Checkpoint-level `CombinedAttribution` remains deferred until we decide on a
-  stable aggregation rule across multi-session checkpoints
+- Combined attribution is written and read at the checkpoint level
 
 ### Write API
 
@@ -262,9 +277,6 @@ Verify data round-trips correctly.
 
 ## Open Questions
 
-- **Checkpoint-level combined attribution**: `CombinedAttribution` exists in v1/v2
-  root metadata, but gmeta currently only stores session-scoped attribution.
-  Need a stable aggregation rule before adding `entire/combined-attribution/...`.
 - **Push/fetch**: gmeta uses `refs/meta/local/main` for push, `refs/meta/remotes/main` for fetch. Need to decide if this coexists with or replaces v2's push mechanism. Likely coexists for now.
 - **Read-side**: Not needed for POC. Future work to have `entire session list/show` read from gmeta format.
 - **Task checkpoints**: Included. Final tasks write `agent-id`, `checkpoint-uuid`, `transcript` under `session/<id>/task/<tool-use-id>/`. Incremental tasks append to `incremental/__list/`. Open question: should the gmeta Rust CLI understand these Entire-specific task keys, or are they opaque vendor-namespaced data?

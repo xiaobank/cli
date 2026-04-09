@@ -1190,6 +1190,15 @@ func (s *ManualCommitStrategy) updateCombinedAttributionForCheckpoint(
 	if err := store.UpdateCheckpointSummary(ctx, checkpointID, combined); err != nil {
 		return fmt.Errorf("persisting combined attribution: %w", err)
 	}
+	if settings.IsGmetaEnabled(logCtx) {
+		gmetaStore := checkpoint.NewGmetaStore(repo)
+		if err := gmetaStore.UpdateCheckpointSummary(ctx, checkpointID, combined); err != nil {
+			logging.Warn(logCtx, "gmeta combined attribution update failed",
+				slog.String("checkpoint_id", checkpointID.String()),
+				slog.String("error", err.Error()),
+			)
+		}
+	}
 
 	return nil
 }

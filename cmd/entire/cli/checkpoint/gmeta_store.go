@@ -344,7 +344,11 @@ func writeInitialAttributionEntries(s *GmetaStore, prefix string, attr *InitialA
 }
 
 func readInitialAttributionFromTree(repo *git.Repository, sessionTree *object.Tree) *InitialAttribution {
-	attrTree, err := sessionTree.Tree("entire/attribution")
+	return readInitialAttributionFromSubtree(repo, sessionTree, "entire/attribution")
+}
+
+func readInitialAttributionFromSubtree(repo *git.Repository, tree *object.Tree, path string) *InitialAttribution {
+	attrTree, err := tree.Tree(path)
 	if err != nil {
 		return nil
 	}
@@ -721,6 +725,7 @@ func (s *GmetaStore) ReadCommitted(ctx context.Context, checkpointID id.Checkpoi
 			}
 		}
 		summary.FilesTouched = readGmetaSetValues(s.repo, entireTree, "files-touched")
+		summary.CombinedAttribution = readInitialAttributionFromSubtree(s.repo, entireTree, "combined-attribution")
 	}
 
 	// Read session IDs from session/ids/__list/
@@ -911,6 +916,47 @@ func readTreeFirstAvailable(tree *object.Tree, paths ...string) (*object.Tree, b
 		}
 	}
 	return nil, false
+}
+
+// UpdateCheckpointSummary updates checkpoint-level gmeta fields derived from the
+// full set of sessions already written to the checkpoint.
+func (s *GmetaStore) UpdateCheckpointSummary(ctx context.Context, checkpointID id.CheckpointID, combinedAttribution *InitialAttribution) error {
+	if err := ctx.Err(); err != nil {
+		return err //nolint:wrapcheck // Propagating context cancellation
+	}
+	if checkpointID.IsEmpty() {
+		return ErrCheckpointNotFound
+	}
+
+	refName := plumbing.ReferenceName(GmetaRefName)
+	parentHash, rootTreeHash, err := s.getRefState(refName)
+	if err != nil {
+		return ErrCheckpointNotFound
+	}
+
+	targetPath := gmetaTargetPath(checkpointID)
+	basePath := targetPath + "/"
+	entries, err := s.flattenTargetEntries(rootTreeHash, targetPath)
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return ErrCheckpointNotFound
+	}
+
+	attrPrefix := basePath + "entire/combined-attribution/"
+	for key := range entries {
+		if strings.HasPrefix(key, attrPrefix) {
+			delete(entries, key)
+		}
+	}
+	if err := writeInitialAttributionEntries(s, attrPrefix, combinedAttribution, entries); err != nil {
+		return err
+	}
+
+	authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
+	return s.commitEntries(refName, parentHash, rootTreeHash, targetPath, basePath, entries,
+		gmetaCommitMessage(len(entries)), authorName, authorEmail)
 }
 
 // readGmetaSetValues reads all values from <key>/__set/ in a tree.
