@@ -537,3 +537,304 @@ func (s *GmetaStore) commitEntries(refName plumbing.ReferenceName, parentHash, r
 	}
 	return nil
 }
+
+// --- Read methods ---
+
+// ReadCommitted reads a checkpoint summary from the gmeta tree.
+// Returns nil, nil if the checkpoint doesn't exist.
+func (s *GmetaStore) ReadCommitted(ctx context.Context, checkpointID id.CheckpointID) (*CheckpointSummary, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err //nolint:wrapcheck // Propagating context cancellation
+	}
+	if checkpointID.IsEmpty() {
+		return nil, nil //nolint:nilnil // Empty ID means no checkpoint
+	}
+
+	refName := plumbing.ReferenceName(GmetaRefName)
+	ref, err := s.repo.Reference(refName, true)
+	if err != nil {
+		return nil, nil //nolint:nilnil,nilerr // Ref doesn't exist means no checkpoint
+	}
+
+	commit, err := s.repo.CommitObject(ref.Hash())
+	if err != nil {
+		return nil, nil //nolint:nilnil,nilerr // Invalid ref
+	}
+
+	tree, err := commit.Tree()
+	if err != nil {
+		return nil, nil //nolint:nilnil,nilerr // Invalid tree
+	}
+
+	targetPath := gmetaTargetPath(checkpointID)
+	targetTree, err := tree.Tree(targetPath)
+	if err != nil {
+		return nil, nil //nolint:nilnil,nilerr // Checkpoint doesn't exist
+	}
+
+	summary := &CheckpointSummary{
+		CheckpointID: checkpointID,
+	}
+
+	// Read checkpoint-level fields from entire/
+	if entireTree, treeErr := targetTree.Tree("entire"); treeErr == nil {
+		summary.Strategy = readGmetaStringValue(s.repo, entireTree, "strategy")
+		summary.CLIVersion = readGmetaStringValue(s.repo, entireTree, "cli-version")
+		summary.Branch = readGmetaStringValue(s.repo, entireTree, "branch")
+		if countStr := readGmetaStringValue(s.repo, entireTree, "checkpoints-count"); countStr != "" {
+			if n, parseErr := strconv.Atoi(countStr); parseErr == nil {
+				summary.CheckpointsCount = n
+			}
+		}
+		summary.FilesTouched = readGmetaSetValues(s.repo, entireTree, "files-touched")
+	}
+
+	// Read session IDs from session/ids/__list/
+	sessionIDs := s.readSessionIDList(targetTree)
+
+	// Build sessions array
+	summary.Sessions = make([]SessionFilePaths, len(sessionIDs))
+	for i, sid := range sessionIDs {
+		summary.Sessions[i] = SessionFilePaths{
+			Metadata: "/" + targetPath + "/session/" + sid + "/",
+		}
+	}
+
+	return summary, nil
+}
+
+// ReadSessionContent reads a session's transcript, prompt, and metadata from gmeta.
+// sessionID is the session identifier (not an index).
+// Returns ErrCheckpointNotFound if the checkpoint doesn't exist.
+// Returns ErrNoTranscript if the session exists but has no transcript.
+func (s *GmetaStore) ReadSessionContent(_ context.Context, checkpointID id.CheckpointID, sessionID string) (*SessionContent, error) {
+	if checkpointID.IsEmpty() {
+		return nil, ErrCheckpointNotFound
+	}
+
+	refName := plumbing.ReferenceName(GmetaRefName)
+	ref, err := s.repo.Reference(refName, true)
+	if err != nil {
+		return nil, ErrCheckpointNotFound
+	}
+
+	commit, err := s.repo.CommitObject(ref.Hash())
+	if err != nil {
+		return nil, ErrCheckpointNotFound
+	}
+
+	rootTree, err := commit.Tree()
+	if err != nil {
+		return nil, ErrCheckpointNotFound
+	}
+
+	targetPath := gmetaTargetPath(checkpointID)
+	targetTree, err := rootTree.Tree(targetPath)
+	if err != nil {
+		return nil, ErrCheckpointNotFound
+	}
+
+	sessionPath := "session/" + sessionID
+	sessionTree, err := targetTree.Tree(sessionPath)
+	if err != nil {
+		return nil, ErrCheckpointNotFound
+	}
+
+	result := &SessionContent{}
+
+	// Read agent info
+	result.Metadata.CheckpointID = checkpointID
+	result.Metadata.SessionID = sessionID
+	if agentTree, treeErr := sessionTree.Tree("agent"); treeErr == nil {
+		agentName := readGmetaStringValue(s.repo, agentTree, "name")
+		result.Metadata.Agent = types.AgentType(agentName)
+		result.Metadata.Model = readGmetaStringValue(s.repo, agentTree, "model")
+	}
+
+	// Read checkpoint-level fields into metadata
+	if entireTree, treeErr := targetTree.Tree("entire"); treeErr == nil {
+		result.Metadata.Strategy = readGmetaStringValue(s.repo, entireTree, "strategy")
+		result.Metadata.Branch = readGmetaStringValue(s.repo, entireTree, "branch")
+		result.Metadata.FilesTouched = readGmetaSetValues(s.repo, entireTree, "files-touched")
+		if countStr := readGmetaStringValue(s.repo, entireTree, "checkpoints-count"); countStr != "" {
+			if n, parseErr := strconv.Atoi(countStr); parseErr == nil {
+				result.Metadata.CheckpointsCount = n
+			}
+		}
+	}
+
+	// Read prompt
+	if promptValue := readGmetaStringValue(s.repo, sessionTree, "prompt"); promptValue != "" {
+		result.Prompts = promptValue
+	}
+
+	// Read transcript from transcript/__list/
+	result.Transcript = readGmetaListConcat(s.repo, sessionTree, "transcript")
+
+	if len(result.Transcript) == 0 {
+		return nil, ErrNoTranscript
+	}
+
+	return result, nil
+}
+
+// GetSessionLog retrieves the session transcript and session ID for a checkpoint.
+// Reads the latest (last) session from the gmeta tree.
+// Returns ErrCheckpointNotFound if the checkpoint doesn't exist.
+// Returns ErrNoTranscript if the checkpoint exists but has no transcript.
+func (s *GmetaStore) GetSessionLog(ctx context.Context, cpID id.CheckpointID) ([]byte, string, error) {
+	summary, err := s.ReadCommitted(ctx, cpID)
+	if err != nil {
+		return nil, "", err
+	}
+	if summary == nil {
+		return nil, "", ErrCheckpointNotFound
+	}
+
+	// Get session IDs to find the latest
+	refName := plumbing.ReferenceName(GmetaRefName)
+	ref, refErr := s.repo.Reference(refName, true)
+	if refErr != nil {
+		return nil, "", ErrCheckpointNotFound
+	}
+	commit, commitErr := s.repo.CommitObject(ref.Hash())
+	if commitErr != nil {
+		return nil, "", ErrCheckpointNotFound
+	}
+	rootTree, treeErr := commit.Tree()
+	if treeErr != nil {
+		return nil, "", ErrCheckpointNotFound
+	}
+	targetTree, targetErr := rootTree.Tree(gmetaTargetPath(cpID))
+	if targetErr != nil {
+		return nil, "", ErrCheckpointNotFound
+	}
+
+	sessionIDs := s.readSessionIDList(targetTree)
+	if len(sessionIDs) == 0 {
+		return nil, "", ErrCheckpointNotFound
+	}
+
+	latestSessionID := sessionIDs[len(sessionIDs)-1]
+	content, err := s.ReadSessionContent(ctx, cpID, latestSessionID)
+	if err != nil {
+		return nil, "", err
+	}
+	return content.Transcript, latestSessionID, nil
+}
+
+// readSessionIDList reads ordered session IDs from session/ids/__list/.
+func (s *GmetaStore) readSessionIDList(targetTree *object.Tree) []string {
+	sessionTree, err := targetTree.Tree("session")
+	if err != nil {
+		return nil
+	}
+	return readGmetaListValues(s.repo, sessionTree, "ids")
+}
+
+// readGmetaStringValue reads a string value from <key>/__value in a tree.
+func readGmetaStringValue(_ *git.Repository, tree *object.Tree, key string) string {
+	valuePath := key + "/__value"
+	file, err := tree.File(valuePath)
+	if err != nil {
+		return ""
+	}
+	content, err := file.Contents()
+	if err != nil {
+		return ""
+	}
+	return content
+}
+
+// readGmetaSetValues reads all values from <key>/__set/ in a tree.
+func readGmetaSetValues(repo *git.Repository, tree *object.Tree, key string) []string {
+	setPath := key + "/__set"
+	setTree, err := tree.Tree(setPath)
+	if err != nil {
+		return nil
+	}
+
+	var values []string
+	for _, entry := range setTree.Entries {
+		if !entry.Mode.IsFile() {
+			continue
+		}
+		blob, blobErr := repo.BlobObject(entry.Hash)
+		if blobErr != nil {
+			continue
+		}
+		reader, readerErr := blob.Reader()
+		if readerErr != nil {
+			continue
+		}
+		content := make([]byte, blob.Size)
+		if _, readErr := reader.Read(content); readErr == nil {
+			values = append(values, string(content))
+		}
+		_ = reader.Close()
+	}
+	return values
+}
+
+// readGmetaListValues reads all string values from <key>/__list/ in a tree, sorted by entry ID.
+func readGmetaListValues(repo *git.Repository, tree *object.Tree, key string) []string {
+	listPath := key + "/__list"
+	listTree, err := tree.Tree(listPath)
+	if err != nil {
+		return nil
+	}
+
+	// Entries are already sorted by name (git tree convention), which for gmeta
+	// list entry IDs (<timestamp-ms>-<hash>) gives chronological order.
+	var values []string
+	for _, entry := range listTree.Entries {
+		if !entry.Mode.IsFile() {
+			continue
+		}
+		blob, blobErr := repo.BlobObject(entry.Hash)
+		if blobErr != nil {
+			continue
+		}
+		reader, readerErr := blob.Reader()
+		if readerErr != nil {
+			continue
+		}
+		content := make([]byte, blob.Size)
+		if _, readErr := reader.Read(content); readErr == nil {
+			values = append(values, string(content))
+		}
+		_ = reader.Close()
+	}
+	return values
+}
+
+// readGmetaListConcat reads all blobs from <key>/__list/ and concatenates them.
+// Used for transcript chunks that should be reassembled into a single byte slice.
+func readGmetaListConcat(repo *git.Repository, tree *object.Tree, key string) []byte {
+	listPath := key + "/__list"
+	listTree, err := tree.Tree(listPath)
+	if err != nil {
+		return nil
+	}
+
+	var result []byte
+	for _, entry := range listTree.Entries {
+		if !entry.Mode.IsFile() {
+			continue
+		}
+		blob, blobErr := repo.BlobObject(entry.Hash)
+		if blobErr != nil {
+			continue
+		}
+		reader, readerErr := blob.Reader()
+		if readerErr != nil {
+			continue
+		}
+		content := make([]byte, blob.Size)
+		if _, readErr := reader.Read(content); readErr == nil {
+			result = append(result, content...)
+		}
+		_ = reader.Close()
+	}
+	return result
+}

@@ -405,6 +405,213 @@ func TestGmetaStore_MultipleCheckpoints_Preserved(t *testing.T) {
 	require.NoError(t, err, "second checkpoint should exist")
 }
 
+// --- Read method tests ---
+
+func TestGmetaStore_ReadCommitted_RoundTrip(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewGmetaStore(repo)
+	ctx := context.Background()
+
+	cpID := id.MustCheckpointID("a3b2c4d5e6f7")
+
+	// Write
+	err := store.WriteCommitted(ctx, WriteCommittedOptions{
+		CheckpointID:     cpID,
+		SessionID:        "session-001",
+		Strategy:         "manual-commit",
+		Branch:           "main",
+		Transcript:       []byte(`{"type":"text","content":"hello"}`),
+		Prompts:          []string{"build a feature"},
+		FilesTouched:     []string{"src/foo.go", "src/bar.go"},
+		CheckpointsCount: 3,
+		AuthorName:       "Test",
+		AuthorEmail:      "test@test.com",
+		Agent:            agent.AgentTypeClaudeCode,
+		Model:            "claude-opus-4-6",
+	})
+	require.NoError(t, err)
+
+	// Read back
+	summary, err := store.ReadCommitted(ctx, cpID)
+	require.NoError(t, err)
+	require.NotNil(t, summary)
+
+	assert.Equal(t, cpID, summary.CheckpointID)
+	assert.Equal(t, "manual-commit", summary.Strategy)
+	assert.Equal(t, "main", summary.Branch)
+	assert.Equal(t, 3, summary.CheckpointsCount)
+	assert.Len(t, summary.FilesTouched, 2)
+	assert.Contains(t, summary.FilesTouched, "src/foo.go")
+	assert.Contains(t, summary.FilesTouched, "src/bar.go")
+	assert.Len(t, summary.Sessions, 1)
+}
+
+func TestGmetaStore_ReadCommitted_NotFound(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewGmetaStore(repo)
+	ctx := context.Background()
+
+	cpID := id.MustCheckpointID("a3b2c4d5e6f7")
+	summary, err := store.ReadCommitted(ctx, cpID)
+	require.NoError(t, err)
+	assert.Nil(t, summary)
+}
+
+func TestGmetaStore_ReadSessionContent_RoundTrip(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewGmetaStore(repo)
+	ctx := context.Background()
+
+	cpID := id.MustCheckpointID("a3b2c4d5e6f7")
+	transcript := []byte(`{"type":"text","content":"hello world"}`)
+
+	err := store.WriteCommitted(ctx, WriteCommittedOptions{
+		CheckpointID:     cpID,
+		SessionID:        "session-001",
+		Strategy:         "manual-commit",
+		Branch:           "feature",
+		Transcript:       transcript,
+		Prompts:          []string{"fix the bug"},
+		FilesTouched:     []string{"main.go"},
+		CheckpointsCount: 1,
+		AuthorName:       "Test",
+		AuthorEmail:      "test@test.com",
+		Agent:            agent.AgentTypeClaudeCode,
+		Model:            "claude-opus-4-6",
+	})
+	require.NoError(t, err)
+
+	// Read session content
+	content, err := store.ReadSessionContent(ctx, cpID, "session-001")
+	require.NoError(t, err)
+	require.NotNil(t, content)
+
+	assert.Equal(t, cpID, content.Metadata.CheckpointID)
+	assert.Equal(t, "session-001", content.Metadata.SessionID)
+	assert.Equal(t, agent.AgentTypeClaudeCode, content.Metadata.Agent)
+	assert.Equal(t, "claude-opus-4-6", content.Metadata.Model)
+	assert.Equal(t, "manual-commit", content.Metadata.Strategy)
+	assert.Equal(t, "feature", content.Metadata.Branch)
+	assert.Equal(t, 1, content.Metadata.CheckpointsCount)
+	assert.Contains(t, content.Metadata.FilesTouched, "main.go")
+	assert.Equal(t, "fix the bug", content.Prompts)
+	assert.NotEmpty(t, content.Transcript, "transcript should be non-empty")
+}
+
+func TestGmetaStore_ReadSessionContent_NotFound(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewGmetaStore(repo)
+	ctx := context.Background()
+
+	cpID := id.MustCheckpointID("a3b2c4d5e6f7")
+
+	// Write one session
+	err := store.WriteCommitted(ctx, WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-001",
+		Strategy:     "manual-commit",
+		Transcript:   []byte(`{"type":"text"}`),
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	})
+	require.NoError(t, err)
+
+	// Read non-existent session
+	_, err = store.ReadSessionContent(ctx, cpID, "session-999")
+	assert.ErrorIs(t, err, ErrCheckpointNotFound)
+}
+
+func TestGmetaStore_GetSessionLog_RoundTrip(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewGmetaStore(repo)
+	ctx := context.Background()
+
+	cpID := id.MustCheckpointID("a3b2c4d5e6f7")
+
+	err := store.WriteCommitted(ctx, WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-001",
+		Strategy:     "manual-commit",
+		Transcript:   []byte(`{"type":"text","content":"log content"}`),
+		Prompts:      []string{"do something"},
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+		Agent:        agent.AgentTypeClaudeCode,
+	})
+	require.NoError(t, err)
+
+	transcript, sessionID, err := store.GetSessionLog(ctx, cpID)
+	require.NoError(t, err)
+	assert.Equal(t, "session-001", sessionID)
+	assert.NotEmpty(t, transcript)
+}
+
+func TestGmetaStore_GetSessionLog_MultiSession_ReturnsLatest(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewGmetaStore(repo)
+	ctx := context.Background()
+
+	cpID := id.MustCheckpointID("a3b2c4d5e6f7")
+
+	// Write two sessions
+	err := store.WriteCommitted(ctx, WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-001",
+		Strategy:     "manual-commit",
+		Transcript:   []byte(`{"type":"text","content":"first"}`),
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	})
+	require.NoError(t, err)
+
+	err = store.WriteCommitted(ctx, WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-002",
+		Strategy:     "manual-commit",
+		Transcript:   []byte(`{"type":"text","content":"second"}`),
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	})
+	require.NoError(t, err)
+
+	_, sessionID, err := store.GetSessionLog(ctx, cpID)
+	require.NoError(t, err)
+	assert.Equal(t, "session-002", sessionID, "should return latest session")
+}
+
+func TestGmetaStore_ReadCommitted_MultiSession(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewGmetaStore(repo)
+	ctx := context.Background()
+
+	cpID := id.MustCheckpointID("a3b2c4d5e6f7")
+
+	// Write two sessions
+	for _, sid := range []string{"session-001", "session-002"} {
+		err := store.WriteCommitted(ctx, WriteCommittedOptions{
+			CheckpointID: cpID,
+			SessionID:    sid,
+			Strategy:     "manual-commit",
+			Transcript:   []byte(`{"type":"text"}`),
+			AuthorName:   "Test",
+			AuthorEmail:  "test@test.com",
+		})
+		require.NoError(t, err)
+	}
+
+	summary, err := store.ReadCommitted(ctx, cpID)
+	require.NoError(t, err)
+	require.NotNil(t, summary)
+	assert.Len(t, summary.Sessions, 2, "should have 2 sessions")
+}
+
 // flattenTreeToStrings recursively flattens a tree into a map of path -> blob content.
 func flattenTreeToStrings(t *testing.T, repo interface {
 	BlobObject(hash plumbing.Hash) (*object.Blob, error)
