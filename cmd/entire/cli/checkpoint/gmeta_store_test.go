@@ -231,9 +231,6 @@ func TestGmetaStore_UpdateCommitted_NotFound(t *testing.T) {
 	store := NewGmetaStore(repo)
 	ctx := context.Background()
 
-	// Ensure ref exists but no checkpoints
-	require.NoError(t, store.ensureRef(plumbing.ReferenceName(GmetaRefName)))
-
 	cpID := id.MustCheckpointID("a3b2c4d5e6f7")
 	err := store.UpdateCommitted(ctx, UpdateCommittedOptions{
 		CheckpointID: cpID,
@@ -359,6 +356,12 @@ func TestGmetaFanout(t *testing.T) {
 	assert.Len(t, fanout, 2)
 	// Should NOT be "a3" (that would be prefix-based)
 	assert.NotEqual(t, "a3", fanout, "fanout should be SHA-1 hash, not checkpoint ID prefix")
+}
+
+func TestGmetaSetEntryName_UsesFullSHA1(t *testing.T) {
+	t.Parallel()
+	name := gmetaSetEntryName("src/foo.go")
+	assert.Len(t, name, 40)
 }
 
 func TestGmetaTargetPath(t *testing.T) {

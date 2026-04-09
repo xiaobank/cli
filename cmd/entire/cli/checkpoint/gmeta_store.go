@@ -64,11 +64,7 @@ func (s *GmetaStore) WriteCommitted(ctx context.Context, opts WriteCommittedOpti
 	}
 
 	refName := plumbing.ReferenceName(GmetaRefName)
-	if err := s.ensureRef(refName); err != nil {
-		return fmt.Errorf("failed to ensure gmeta ref: %w", err)
-	}
-
-	parentHash, rootTreeHash, err := s.getRefState(refName)
+	parentHash, rootTreeHash, err := s.getRefStateOrEmpty(refName)
 	if err != nil {
 		return err
 	}
@@ -104,7 +100,7 @@ func (s *GmetaStore) WriteCommitted(ctx context.Context, opts WriteCommittedOpti
 
 	// Build tree and commit
 	return s.commitEntries(refName, parentHash, rootTreeHash, targetPath, basePath, entries,
-		fmt.Sprintf("Checkpoint: %s", opts.CheckpointID), opts.AuthorName, opts.AuthorEmail)
+		gmetaCommitMessage(len(entries)), opts.AuthorName, opts.AuthorEmail)
 }
 
 // UpdateCommitted replaces transcript and prompts for an existing session.
@@ -164,7 +160,7 @@ func (s *GmetaStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOp
 
 	authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
 	return s.commitEntries(refName, parentHash, rootTreeHash, targetPath, basePath, entries,
-		fmt.Sprintf("Finalize checkpoint: %s", opts.CheckpointID), authorName, authorEmail)
+		gmetaCommitMessage(len(entries)), authorName, authorEmail)
 }
 
 // gmetaTargetPath returns the gmeta tree base path for a checkpoint ID.
@@ -186,13 +182,14 @@ func gmetaFanout(value string) string {
 func gmetaListEntryID(content []byte, offsetMs int) string {
 	ts := time.Now().UnixMilli() + int64(offsetMs)
 	h := sha1.Sum(content) //nolint:gosec // gmeta spec uses SHA-1 for content hash prefix
-	return fmt.Sprintf("%d-%05x", ts, h[:3])
+	hashPrefix := fmt.Sprintf("%x", h[:])
+	return fmt.Sprintf("%d-%s", ts, hashPrefix[:5])
 }
 
-// gmetaSetEntryName returns the set entry filename: sha1(value)[:10].
+// gmetaSetEntryName returns the set entry filename: sha1(value).
 func gmetaSetEntryName(value string) string {
 	h := sha1.Sum([]byte(value)) //nolint:gosec // gmeta spec uses SHA-1 for set keys
-	return fmt.Sprintf("%010x", h[:5])
+	return fmt.Sprintf("%x", h[:])
 }
 
 // writeCheckpointFields writes checkpoint-level gmeta entries (strategy, cli-version, branch, etc.).
@@ -499,31 +496,6 @@ func (s *GmetaStore) writeStringValue(path, value string, entries map[string]obj
 	}
 }
 
-// ensureRef ensures that a ref exists, creating an orphan commit with empty tree if not.
-func (s *GmetaStore) ensureRef(refName plumbing.ReferenceName) error {
-	_, err := s.repo.Reference(refName, true)
-	if err == nil {
-		return nil
-	}
-
-	emptyTreeHash, err := BuildTreeFromEntries(s.repo, make(map[string]object.TreeEntry))
-	if err != nil {
-		return fmt.Errorf("failed to build empty tree: %w", err)
-	}
-
-	authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
-	commitHash, err := CreateCommit(s.repo, emptyTreeHash, plumbing.ZeroHash, "Initialize gmeta ref", authorName, authorEmail)
-	if err != nil {
-		return fmt.Errorf("failed to create initial commit: %w", err)
-	}
-
-	ref := plumbing.NewHashReference(refName, commitHash)
-	if err := s.repo.Storer.SetReference(ref); err != nil {
-		return fmt.Errorf("failed to set gmeta ref: %w", err)
-	}
-	return nil
-}
-
 // getRefState returns the parent commit hash and root tree hash for a ref.
 func (s *GmetaStore) getRefState(refName plumbing.ReferenceName) (parentHash, treeHash plumbing.Hash, err error) {
 	ref, err := s.repo.Reference(refName, true)
@@ -537,6 +509,19 @@ func (s *GmetaStore) getRefState(refName plumbing.ReferenceName) (parentHash, tr
 	}
 
 	return ref.Hash(), commit.TreeHash, nil
+}
+
+// getRefStateOrEmpty returns the current ref state, or zero hashes when the ref does not exist yet.
+func (s *GmetaStore) getRefStateOrEmpty(refName plumbing.ReferenceName) (parentHash, treeHash plumbing.Hash, err error) {
+	parentHash, treeHash, err = s.getRefState(refName)
+	if err == nil {
+		return parentHash, treeHash, nil
+	}
+
+	if errors.Is(err, plumbing.ErrReferenceNotFound) || strings.Contains(err.Error(), "reference not found") {
+		return plumbing.ZeroHash, plumbing.ZeroHash, nil
+	}
+	return plumbing.ZeroHash, plumbing.ZeroHash, err
 }
 
 // flattenTargetEntries reads entries under a gmeta target path from the root tree.
@@ -975,6 +960,13 @@ func extractGmetaListTimestamp(entryName string) int64 {
 		return 0
 	}
 	return ts
+}
+
+func gmetaCommitMessage(changeCount int) string {
+	if changeCount < 0 {
+		changeCount = 0
+	}
+	return fmt.Sprintf("gmeta: serialize (%d changes)", changeCount)
 }
 
 // readGmetaListConcat reads all blobs from <key>/__list/ and concatenates them.

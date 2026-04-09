@@ -108,17 +108,17 @@ func TestGmetaInterop_TreeLayout(t *testing.T) {
 	setEntries := filterPrefix(pathContent, "entire/files-touched/__set/")
 	assert.Len(t, setEntries, 2, "files-touched should have 2 set entries")
 
-	// Validate set entry names are SHA-1 based
+	// Validate set entry names are full SHA-1 values
 	setValues := make(map[string]string) // filename -> content
 	for path, content := range setEntries {
 		filename := strings.TrimPrefix(path, "entire/files-touched/__set/")
 		setValues[filename] = content
 
-		// Verify filename = sha1(content)[:10]
+		// Verify filename = sha1(content)
 		h := sha1.Sum([]byte(content))
-		expectedName := fmt.Sprintf("%010x", h[:5])
+		expectedName := fmt.Sprintf("%x", h[:])
 		assert.Equal(t, expectedName, filename,
-			"set entry name should be sha1(%q)[:10]", content)
+			"set entry name should be sha1(%q)", content)
 	}
 
 	// Verify actual file paths are in the set
@@ -141,8 +141,8 @@ func TestGmetaInterop_TreeLayout(t *testing.T) {
 	transcriptEntries := filterPrefix(pathContent, "session/"+sessionID+"/transcript/__list/")
 	assert.NotEmpty(t, transcriptEntries, "transcript should have list entries")
 
-	// Validate list entry ID format: <timestamp-ms>-<5-hex-chars>
-	listEntryPattern := regexp.MustCompile(`^\d+-[0-9a-f]{5,6}$`)
+		// Validate list entry ID format: <timestamp-ms>-<5-hex-chars>
+		listEntryPattern := regexp.MustCompile(`^\d+-[0-9a-f]{5}$`)
 	for path := range transcriptEntries {
 		entryID := strings.TrimPrefix(path, "session/"+sessionID+"/transcript/__list/")
 		assert.Regexp(t, listEntryPattern, entryID,
@@ -275,10 +275,10 @@ func TestGmetaInterop_RustCLI(t *testing.T) {
 		t.Skip("gmeta CLI not found on PATH — skipping Rust interop test")
 	}
 
-	dir := t.TempDir()
-	gitInit(t, dir)
+	srcDir := t.TempDir()
+	gitInit(t, srcDir)
 
-	repo, err := gogit.PlainOpen(dir)
+	repo, err := gogit.PlainOpen(srcDir)
 	require.NoError(t, err)
 	store := NewGmetaStore(repo)
 	ctx := context.Background()
@@ -299,14 +299,22 @@ func TestGmetaInterop_RustCLI(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Initialize gmeta and materialize
-	runCmd(t, dir, gmetaBin, "init")
-	runCmd(t, dir, gmetaBin, "materialize")
+	remoteDir := t.TempDir()
+	runCmd(t, ".", "git", "init", "--bare", remoteDir)
+	runCmd(t, srcDir, "git", "push", remoteDir, GmetaRefName+":"+GmetaRemoteRefName)
 
-	// Query via gmeta get
-	output := runCmdOutput(t, dir, gmetaBin, "get", "change-id:a3b2c4d5e6f7", "--json")
-	assert.Contains(t, output, "manual-commit", "gmeta get should return strategy")
-	assert.Contains(t, output, "claude-opus-4-6", "gmeta get should return model")
+	dstDir := t.TempDir()
+	gitInit(t, dstDir)
+
+	runCmd(t, dstDir, gmetaBin, "remote", "add", "--name", "meta", remoteDir)
+
+	modelOutput := runCmdOutput(t, dstDir, gmetaBin, "get",
+		"change-id:a3b2c4d5e6f7", "session:"+sessionID+":agent:model", "--json")
+	assert.Contains(t, modelOutput, "claude-opus-4-6", "gmeta get should return model")
+
+	promptOutput := runCmdOutput(t, dstDir, gmetaBin, "get",
+		"change-id:a3b2c4d5e6f7", "session:"+sessionID+":prompt", "--json")
+	assert.Contains(t, promptOutput, "Test prompt", "gmeta get should return prompt")
 }
 
 // --- Git CLI helpers ---
