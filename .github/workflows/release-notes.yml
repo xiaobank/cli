@@ -1,0 +1,575 @@
+# Centralized Release Notes Generator
+#
+# Monitors multiple repos for new releases/deployments, generates AI-powered
+# release notes using goose, and posts them to Slack.
+#
+# Repos tracked:
+#   - entireio/cli          (semver tags, public)
+#   - go-git/go-git         (semver tags, public)
+#   - entirehq/entire.io    (push to main, private)
+#   - entirehq/entiredb     (push to main, private)
+
+name: Release Notes
+
+on:
+  schedule:
+    # Daily at 09:00 UTC
+    - cron: "0 9 * * *"
+
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: "Repo to generate notes for (e.g. entireio/cli)"
+        required: true
+        type: choice
+        options:
+          - entireio/cli
+          - go-git/go-git
+          - entirehq/entire.io
+          - entirehq/entiredb
+      ref:
+        description: "Tag or commit SHA (leave empty for latest)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: release-notes
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Detect which repos have new releases since last run
+  # ---------------------------------------------------------------------------
+  detect:
+    name: Detect new releases
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+      has_releases: ${{ steps.build-matrix.outputs.has_releases }}
+
+    steps:
+      - name: Download previous state
+        id: prev-state
+        uses: dawidd6/action-download-artifact@80620a5d27ce0ae443f0ee67f708b7f96eeef85e # v8
+        with:
+          name: release-notes-state
+          path: /tmp/state
+          if_no_artifact_found: warn
+          workflow: release-notes.yml
+        continue-on-error: true
+
+      - name: Initialize state
+        run: |
+          if [ ! -f /tmp/state/state.json ]; then
+            mkdir -p /tmp/state
+            echo '{}' > /tmp/state/state.json
+          fi
+          cat /tmp/state/state.json
+
+      - name: Detect new releases
+        id: build-matrix
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_ORG_PAT || secrets.GITHUB_TOKEN }}
+          MANUAL_REPO: ${{ inputs.repo }}
+          MANUAL_REF: ${{ inputs.ref }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          STATE_FILE="/tmp/state/state.json"
+          MATRIX_ENTRIES="[]"
+
+          check_tag_repo() {
+            local repo="$1"
+            local api_token="$2"
+
+            # Get latest release tag
+            local latest_tag
+            latest_tag=$(curl -sf -H "Authorization: token ${api_token}" \
+              "https://api.github.com/repos/${repo}/releases?per_page=1" \
+              | jq -r '.[0].tag_name // empty')
+
+            if [ -z "$latest_tag" ]; then
+              # Fallback: check latest semver tag via git ls-remote
+              latest_tag=$(curl -sf -H "Authorization: token ${api_token}" \
+                "https://api.github.com/repos/${repo}/tags?per_page=1" \
+                | jq -r '.[0].name // empty')
+            fi
+
+            [ -z "$latest_tag" ] && return
+
+            local prev_tag
+            prev_tag=$(jq -r --arg repo "$repo" '.[$repo].last_ref // empty' "$STATE_FILE")
+
+            if [ "$latest_tag" != "$prev_tag" ]; then
+              echo "$latest_tag"
+            fi
+          }
+
+          check_commit_repo() {
+            local repo="$1"
+            local api_token="$2"
+
+            # Get latest commit on default branch
+            local latest_sha
+            latest_sha=$(curl -sf -H "Authorization: token ${api_token}" \
+              "https://api.github.com/repos/${repo}/commits?per_page=1" \
+              | jq -r '.[0].sha // empty')
+
+            [ -z "$latest_sha" ] && return
+
+            local prev_sha
+            prev_sha=$(jq -r --arg repo "$repo" '.[$repo].last_ref // empty' "$STATE_FILE")
+
+            if [ "$latest_sha" != "$prev_sha" ]; then
+              echo "$latest_sha"
+            fi
+          }
+
+          add_entry() {
+            local repo="$1" ref="$2" mode="$3"
+            MATRIX_ENTRIES=$(echo "$MATRIX_ENTRIES" | jq -c \
+              --arg repo "$repo" --arg ref "$ref" --arg mode "$mode" \
+              '. + [{"repo": $repo, "ref": $ref, "mode": $mode}]')
+          }
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ -n "$MANUAL_REPO" ]; then
+            # Manual trigger — single repo
+            case "$MANUAL_REPO" in
+              entireio/cli|go-git/go-git)
+                REF="$MANUAL_REF"
+                if [ -z "$REF" ]; then
+                  REF=$(check_tag_repo "$MANUAL_REPO" "$GH_TOKEN")
+                  [ -z "$REF" ] && REF=$(curl -sf -H "Authorization: token ${GH_TOKEN}" \
+                    "https://api.github.com/repos/${MANUAL_REPO}/releases?per_page=1" \
+                    | jq -r '.[0].tag_name // empty')
+                fi
+                [ -n "$REF" ] && add_entry "$MANUAL_REPO" "$REF" "tag"
+                ;;
+              entirehq/entire.io|entirehq/entiredb)
+                REF="$MANUAL_REF"
+                if [ -z "$REF" ]; then
+                  REF=$(curl -sf -H "Authorization: token ${GH_TOKEN}" \
+                    "https://api.github.com/repos/${MANUAL_REPO}/commits?per_page=1" \
+                    | jq -r '.[0].sha // empty')
+                fi
+                [ -n "$REF" ] && add_entry "$MANUAL_REPO" "$REF" "commit"
+                ;;
+            esac
+          else
+            # Scheduled — check all repos
+            for repo in entireio/cli go-git/go-git; do
+              NEW_TAG=$(check_tag_repo "$repo" "$GH_TOKEN")
+              [ -n "$NEW_TAG" ] && add_entry "$repo" "$NEW_TAG" "tag"
+            done
+
+            for repo in entirehq/entire.io entirehq/entiredb; do
+              NEW_SHA=$(check_commit_repo "$repo" "$GH_TOKEN")
+              [ -n "$NEW_SHA" ] && add_entry "$repo" "$NEW_SHA" "commit"
+            done
+          fi
+
+          COUNT=$(echo "$MATRIX_ENTRIES" | jq 'length')
+          echo "Found $COUNT repo(s) with new releases"
+          echo "$MATRIX_ENTRIES" | jq .
+
+          if [ "$COUNT" -gt 0 ]; then
+            echo "has_releases=true" >> "$GITHUB_OUTPUT"
+            echo "matrix={\"include\":$(echo "$MATRIX_ENTRIES" | jq -c .)}" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_releases=false" >> "$GITHUB_OUTPUT"
+            echo "matrix={\"include\":[]}" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ---------------------------------------------------------------------------
+  # 2. Generate release notes for each detected repo
+  # ---------------------------------------------------------------------------
+  generate:
+    name: "Notes: ${{ matrix.repo }}"
+    runs-on: ubuntu-latest
+    needs: detect
+    if: needs.detect.outputs.has_releases == 'true'
+
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.detect.outputs.matrix) }}
+
+    container:
+      image: ghcr.io/block/goose:latest
+      options: --user root
+      env:
+        GOOSE_PROVIDER: ${{ vars.GOOSE_PROVIDER || 'anthropic' }}
+        GOOSE_MODEL: ${{ vars.GOOSE_MODEL || 'claude-sonnet-4-20250514' }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        HOME: /tmp/goose-home
+
+    outputs:
+      # We collect per-repo outputs via artifacts since matrix outputs are tricky
+      notes_ready: "true"
+
+    steps:
+      - name: Install tools
+        run: |
+          apt-get update && apt-get install -y gettext curl ripgrep git jq
+
+      - name: Clone repository
+        env:
+          GH_TOKEN: ${{ secrets.CROSS_ORG_PAT || secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p $HOME/.local/share/goose/sessions
+          mkdir -p $HOME/.config/goose
+          git config --global --add safe.directory /workspace
+          cd /tmp
+          git clone --filter=blob:none "https://x-access-token:${GH_TOKEN}@github.com/${{ matrix.repo }}.git" repo
+          cd repo
+          git fetch --tags
+
+      - name: Determine commit range
+        id: range
+        working-directory: /tmp/repo
+        run: |
+          MODE="${{ matrix.mode }}"
+          REF="${{ matrix.ref }}"
+          REPO="${{ matrix.repo }}"
+
+          if [ "$MODE" = "tag" ]; then
+            # Find previous tag
+            PREV_TAG=$(git describe --tags --abbrev=0 "${REF}^" 2>/dev/null || echo "")
+            if [ -n "$PREV_TAG" ]; then
+              echo "from=$PREV_TAG" >> "$GITHUB_OUTPUT"
+              echo "to=$REF" >> "$GITHUB_OUTPUT"
+              echo "range=${PREV_TAG}..${REF}" >> "$GITHUB_OUTPUT"
+              echo "label=${REF}" >> "$GITHUB_OUTPUT"
+            else
+              # No previous tag — use last 50 commits
+              echo "from=" >> "$GITHUB_OUTPUT"
+              echo "to=$REF" >> "$GITHUB_OUTPUT"
+              echo "range=$REF" >> "$GITHUB_OUTPUT"
+              echo "label=${REF}" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            # Commit mode — get last 24h of commits on default branch
+            SINCE=$(date -u -d "24 hours ago" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-24H +%Y-%m-%dT%H:%M:%SZ)
+            COMMIT_COUNT=$(git log --since="$SINCE" --oneline --no-merges | wc -l)
+            if [ "$COMMIT_COUNT" -eq 0 ]; then
+              echo "No new commits in the last 24h for $REPO"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+            else
+              SHORT_SHA=$(echo "$REF" | cut -c1-7)
+              echo "from=" >> "$GITHUB_OUTPUT"
+              echo "to=$REF" >> "$GITHUB_OUTPUT"
+              echo "range=--since=$SINCE" >> "$GITHUB_OUTPUT"
+              echo "label=main@${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Run goose
+        if: steps.range.outputs.skip != 'true'
+        working-directory: /tmp/repo
+        env:
+          RELEASE_LABEL: ${{ steps.range.outputs.label }}
+          COMMIT_RANGE: ${{ steps.range.outputs.range }}
+          FROM_REF: ${{ steps.range.outputs.from }}
+          TO_REF: ${{ steps.range.outputs.to }}
+          REPO_NAME: ${{ matrix.repo }}
+          RELEASE_MODE: ${{ matrix.mode }}
+        run: |
+          cat > /tmp/recipe.yaml << 'RECIPE'
+          version: "1.0.0"
+          title: "Release Notes Generator"
+          description: "Generate release notes"
+
+          extensions:
+            - type: builtin
+              name: developer
+
+          instructions: |
+            Generate release notes for a repository. You are already in the repo directory.
+
+            Repository: ${REPO_NAME}
+            Release: ${RELEASE_LABEL}
+            Mode: ${RELEASE_MODE}
+
+            ## Getting commits
+            If mode is "tag" and FROM_REF is set:
+              Run: git log ${FROM_REF}..${TO_REF} --oneline --no-merges
+            If mode is "tag" and FROM_REF is empty:
+              Run: git log ${TO_REF} --oneline --no-merges -50
+            If mode is "commit":
+              Run: git log ${COMMIT_RANGE} --oneline --no-merges
+
+            ## Output Format
+            Start with a header line: **${REPO_NAME}** — ${RELEASE_LABEL}
+
+            Then categorize changes into these sections (skip empty sections):
+            - ✨ **Features** — New functionality
+            - 🐛 **Bug Fixes** — Bug fixes
+            - 🔧 **Improvements** — Enhancements to existing features
+            - 📚 **Documentation** — Documentation updates
+
+            Format each item as:
+            - Concise description (#XXXX)
+
+            Rules:
+            - Extract PR numbers from commit messages (look for (#XXXX) pattern)
+            - Keep descriptions concise and user-friendly
+            - The category headers convey intent, so don't repeat words like "Added", "Fixed"
+            - Skip merge commits and CI-only changes
+            - If there are very few changes, still categorize them
+
+            ## Final Step
+            Write ONLY the release notes to /tmp/release_notes.md — no extra commentary.
+
+          prompt: |
+            Generate release notes for ${REPO_NAME} release ${RELEASE_LABEL}.
+          RECIPE
+
+          # Substitute env vars into recipe
+          envsubst '$REPO_NAME $RELEASE_LABEL $COMMIT_RANGE $FROM_REF $TO_REF $RELEASE_MODE' < /tmp/recipe.yaml > /tmp/recipe_final.yaml
+
+          goose run --recipe /tmp/recipe_final.yaml
+
+      - name: Prepare artifact
+        if: steps.range.outputs.skip != 'true'
+        run: |
+          mkdir -p /tmp/notes-output
+          SAFE_NAME=$(echo "${{ matrix.repo }}" | tr '/' '_')
+
+          if [ -f /tmp/release_notes.md ]; then
+            cp /tmp/release_notes.md "/tmp/notes-output/${SAFE_NAME}.md"
+
+            # Also save metadata
+            jq -n \
+              --arg repo "${{ matrix.repo }}" \
+              --arg ref "${{ matrix.ref }}" \
+              --arg label "${{ steps.range.outputs.label }}" \
+              --arg mode "${{ matrix.mode }}" \
+              '{repo: $repo, ref: $ref, label: $label, mode: $mode}' \
+              > "/tmp/notes-output/${SAFE_NAME}.json"
+          else
+            echo "::warning::No release notes generated for ${{ matrix.repo }}"
+            echo "No notable changes detected." > "/tmp/notes-output/${SAFE_NAME}.md"
+          fi
+
+      - name: Upload notes
+        if: steps.range.outputs.skip != 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: notes-${{ strategy.job-index }}
+          path: /tmp/notes-output/
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # 3. Post to Slack
+  # ---------------------------------------------------------------------------
+  post-to-slack:
+    name: Post to Slack
+    runs-on: ubuntu-latest
+    needs: [detect, generate]
+    if: needs.detect.outputs.has_releases == 'true'
+
+    steps:
+      - name: Download all notes
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: notes-*
+          path: /tmp/all-notes
+          merge-multiple: true
+
+      - name: Build Slack message
+        id: slack-msg
+        run: |
+          # Combine all notes into a thread-friendly format
+          HEADER=":rocket: *Release Notes — $(date -u +%Y-%m-%d)*"
+
+          # Build the main message
+          echo "$HEADER" > /tmp/slack_main.txt
+          echo "" >> /tmp/slack_main.txt
+
+          # List which repos have updates
+          for meta in /tmp/all-notes/*.json; do
+            [ -f "$meta" ] || continue
+            REPO=$(jq -r '.repo' "$meta")
+            LABEL=$(jq -r '.label' "$meta")
+            echo "• *${REPO}* — \`${LABEL}\`" >> /tmp/slack_main.txt
+          done
+
+          # Each repo's notes become a thread reply
+          THREAD_MESSAGES="[]"
+          for md in /tmp/all-notes/*.md; do
+            [ -f "$md" ] || continue
+            CONTENT=$(cat "$md")
+            THREAD_MESSAGES=$(echo "$THREAD_MESSAGES" | jq -c \
+              --arg content "$CONTENT" \
+              '. + [$content]')
+          done
+
+          # Output
+          DELIMITER="EOF_$(openssl rand -hex 8)"
+          echo "main_msg<<$DELIMITER" >> "$GITHUB_OUTPUT"
+          cat /tmp/slack_main.txt >> "$GITHUB_OUTPUT"
+          echo "$DELIMITER" >> "$GITHUB_OUTPUT"
+
+          echo "thread_messages<<$DELIMITER" >> "$GITHUB_OUTPUT"
+          echo "$THREAD_MESSAGES" >> "$GITHUB_OUTPUT"
+          echo "$DELIMITER" >> "$GITHUB_OUTPUT"
+
+      - name: Post main message to Slack
+        id: slack-post
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+          MAIN_MSG: ${{ steps.slack-msg.outputs.main_msg }}
+        run: |
+          if [ -z "$SLACK_BOT_TOKEN" ] || [ -z "$SLACK_CHANNEL_ID" ]; then
+            echo "::notice::Slack not configured — printing notes to log instead"
+            echo "---"
+            echo "$MAIN_MSG"
+            echo "---"
+            for md in /tmp/all-notes/*.md; do
+              [ -f "$md" ] || continue
+              echo "=== $(basename "$md") ==="
+              cat "$md"
+              echo ""
+            done
+            exit 0
+          fi
+
+          # Post main message
+          RESPONSE=$(curl -sf -X POST "https://slack.com/api/chat.postMessage" \
+            -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n \
+              --arg channel "$SLACK_CHANNEL_ID" \
+              --arg text "$MAIN_MSG" \
+              '{channel: $channel, text: $text, unfurl_links: false}')")
+
+          OK=$(echo "$RESPONSE" | jq -r '.ok')
+          if [ "$OK" != "true" ]; then
+            echo "::error::Slack API error: $(echo "$RESPONSE" | jq -c '.error')"
+            exit 1
+          fi
+
+          TS=$(echo "$RESPONSE" | jq -r '.ts')
+          echo "thread_ts=$TS" >> "$GITHUB_OUTPUT"
+          echo "Posted main message (ts=$TS)"
+
+      - name: Post thread replies
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+          THREAD_TS: ${{ steps.slack-post.outputs.thread_ts }}
+        if: steps.slack-post.outputs.thread_ts != ''
+        run: |
+          SLACK_LIMIT=3900  # Slack message limit is 4000, leave buffer
+
+          for md in /tmp/all-notes/*.md; do
+            [ -f "$md" ] || continue
+
+            CONTENT=$(cat "$md")
+            [ -z "$CONTENT" ] && continue
+
+            # Split into chunks if needed
+            if [ ${#CONTENT} -le $SLACK_LIMIT ]; then
+              curl -sf -X POST "https://slack.com/api/chat.postMessage" \
+                -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d "$(jq -n \
+                  --arg channel "$SLACK_CHANNEL_ID" \
+                  --arg text "$CONTENT" \
+                  --arg ts "$THREAD_TS" \
+                  '{channel: $channel, text: $text, thread_ts: $ts, unfurl_links: false}')" > /dev/null
+            else
+              # Split by lines into chunks
+              CHUNK=""
+              while IFS= read -r line || [ -n "$line" ]; do
+                if [ $(( ${#CHUNK} + ${#line} + 1 )) -gt $SLACK_LIMIT ] && [ -n "$CHUNK" ]; then
+                  curl -sf -X POST "https://slack.com/api/chat.postMessage" \
+                    -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+                    -H "Content-Type: application/json" \
+                    -d "$(jq -n \
+                      --arg channel "$SLACK_CHANNEL_ID" \
+                      --arg text "$CHUNK" \
+                      --arg ts "$THREAD_TS" \
+                      '{channel: $channel, text: $text, thread_ts: $ts, unfurl_links: false}')" > /dev/null
+                  sleep 1
+                  CHUNK=""
+                fi
+                CHUNK="${CHUNK}${line}\n"
+              done < "$md"
+
+              # Send remaining chunk
+              if [ -n "$CHUNK" ]; then
+                curl -sf -X POST "https://slack.com/api/chat.postMessage" \
+                  -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+                  -H "Content-Type: application/json" \
+                  -d "$(jq -n \
+                    --arg channel "$SLACK_CHANNEL_ID" \
+                    --arg text "$CHUNK" \
+                    --arg ts "$THREAD_TS" \
+                    '{channel: $channel, text: $text, thread_ts: $ts, unfurl_links: false}')" > /dev/null
+                sleep 1
+              fi
+            fi
+
+            sleep 1
+          done
+
+          echo "::notice::Thread replies posted"
+
+  # ---------------------------------------------------------------------------
+  # 4. Update state so we don't re-process the same releases
+  # ---------------------------------------------------------------------------
+  update-state:
+    name: Update state
+    runs-on: ubuntu-latest
+    needs: [detect, generate, post-to-slack]
+    if: always() && needs.generate.result == 'success'
+
+    steps:
+      - name: Download previous state
+        uses: dawidd6/action-download-artifact@80620a5d27ce0ae443f0ee67f708b7f96eeef85e # v8
+        with:
+          name: release-notes-state
+          path: /tmp/state
+          if_no_artifact_found: warn
+          workflow: release-notes.yml
+        continue-on-error: true
+
+      - name: Download notes metadata
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: notes-*
+          path: /tmp/all-notes
+          merge-multiple: true
+
+      - name: Update state file
+        run: |
+          STATE_FILE="/tmp/state/state.json"
+          [ -f "$STATE_FILE" ] || echo '{}' > "$STATE_FILE"
+
+          for meta in /tmp/all-notes/*.json; do
+            [ -f "$meta" ] || continue
+            REPO=$(jq -r '.repo' "$meta")
+            REF=$(jq -r '.ref' "$meta")
+            TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+            jq --arg repo "$REPO" --arg ref "$REF" --arg ts "$TIMESTAMP" \
+              '.[$repo] = {last_ref: $ref, last_updated: $ts}' \
+              "$STATE_FILE" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "$STATE_FILE"
+          done
+
+          echo "Updated state:"
+          cat "$STATE_FILE"
+
+      - name: Upload state
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-notes-state
+          path: /tmp/state/
+          retention-days: 90
+          overwrite: true

@@ -11,6 +11,11 @@
 name: Dispatch Notes to Slack
 
 on:
+  # TEMPORARY: trigger on push to test branch (remove before merging to main)
+  push:
+    branches:
+      - test-dispatch-workflow
+
   workflow_dispatch:
     inputs:
       repos:
@@ -88,7 +93,7 @@ jobs:
           ALL_REPOS="entireio/cli entirehq/entiredb go-git/go-git"
           REPOS=()
 
-          if [ "$EVENT_NAME" = "schedule" ] || [ "$INPUT_REPOS" = "all" ]; then
+          if [ "$EVENT_NAME" = "schedule" ] || [ "$EVENT_NAME" = "push" ] || [ "$INPUT_REPOS" = "all" ]; then
             for repo in $ALL_REPOS; do
               REPOS+=("{\"repo\":\"${repo}\"}")
             done
