@@ -3,10 +3,12 @@ package checkpoint
 import (
 	"context"
 	"crypto/sha1" //nolint:gosec // SHA-1 used per gmeta spec for fanout/set keys, not for security
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -339,16 +341,26 @@ func (s *GmetaStore) writeTaskEntries(ctx context.Context, opts WriteCommittedOp
 	taskPath := sessionPath + "task/" + opts.ToolUseID + "/"
 
 	if opts.IsIncremental {
-		// Incremental task checkpoint: append to incremental/__list/
-		data := opts.IncrementalData
-		redactedData, err := redact.JSONLBytes(data)
+		// Incremental task checkpoint: append the full checkpoint envelope to incremental/__list/
+		redactedData, err := redact.JSONLBytes(opts.IncrementalData)
 		if err != nil {
-			redactedData = redact.Bytes(data)
+			redactedData = redact.Bytes(opts.IncrementalData)
 		}
 
-		entryID := gmetaListEntryID(redactedData, 0)
+		checkpoint := incrementalCheckpointData{
+			Type:      opts.IncrementalType,
+			ToolUseID: opts.ToolUseID,
+			Timestamp: time.Now().UTC(),
+			Data:      json.RawMessage(redactedData),
+		}
+		checkpointData, err := json.Marshal(checkpoint)
+		if err != nil {
+			return fmt.Errorf("failed to marshal incremental checkpoint: %w", err)
+		}
+
+		entryID := gmetaListEntryID(checkpointData, 0)
 		entryPath := taskPath + "incremental/__list/" + entryID
-		blobHash, err := CreateBlobFromContent(s.repo, redactedData)
+		blobHash, err := CreateBlobFromContent(s.repo, checkpointData)
 		if err != nil {
 			return fmt.Errorf("failed to create incremental blob: %w", err)
 		}
@@ -775,26 +787,10 @@ func (s *GmetaStore) GetSessionLog(ctx context.Context, cpID id.CheckpointID) ([
 		return nil, "", ErrCheckpointNotFound
 	}
 
-	// Get session IDs to find the latest
-	refName := plumbing.ReferenceName(GmetaRefName)
-	ref, refErr := s.repo.Reference(refName, true)
-	if refErr != nil {
-		return nil, "", ErrCheckpointNotFound
+	sessionIDs, err := s.listSessionIDs(cpID)
+	if err != nil {
+		return nil, "", err
 	}
-	commit, commitErr := s.repo.CommitObject(ref.Hash())
-	if commitErr != nil {
-		return nil, "", ErrCheckpointNotFound
-	}
-	rootTree, treeErr := commit.Tree()
-	if treeErr != nil {
-		return nil, "", ErrCheckpointNotFound
-	}
-	targetTree, targetErr := rootTree.Tree(gmetaTargetPath(cpID))
-	if targetErr != nil {
-		return nil, "", ErrCheckpointNotFound
-	}
-
-	sessionIDs := s.readSessionIDList(targetTree)
 	if len(sessionIDs) == 0 {
 		return nil, "", ErrCheckpointNotFound
 	}
@@ -807,13 +803,34 @@ func (s *GmetaStore) GetSessionLog(ctx context.Context, cpID id.CheckpointID) ([
 	return content.Transcript, latestSessionID, nil
 }
 
+func (s *GmetaStore) listSessionIDs(cpID id.CheckpointID) ([]string, error) {
+	refName := plumbing.ReferenceName(GmetaRefName)
+	ref, err := s.repo.Reference(refName, true)
+	if err != nil {
+		return nil, ErrCheckpointNotFound
+	}
+	commit, err := s.repo.CommitObject(ref.Hash())
+	if err != nil {
+		return nil, ErrCheckpointNotFound
+	}
+	rootTree, err := commit.Tree()
+	if err != nil {
+		return nil, ErrCheckpointNotFound
+	}
+	targetTree, err := rootTree.Tree(gmetaTargetPath(cpID))
+	if err != nil {
+		return nil, ErrCheckpointNotFound
+	}
+	return s.readSessionIDList(targetTree), nil
+}
+
 // readSessionIDList reads ordered session IDs from session/ids/__list/.
 func (s *GmetaStore) readSessionIDList(targetTree *object.Tree) []string {
 	sessionTree, err := targetTree.Tree("session")
 	if err != nil {
 		return nil
 	}
-	return readGmetaListValues(s.repo, sessionTree, "ids")
+	return readGmetaListValuesWithOrder(s.repo, sessionTree, "ids")
 }
 
 // readGmetaStringValue reads a string value from <key>/__value in a tree.
@@ -860,17 +877,72 @@ func readGmetaSetValues(repo *git.Repository, tree *object.Tree, key string) []s
 	return values
 }
 
-// readGmetaListValues reads all string values from <key>/__list/ in a tree, sorted by entry ID.
+// readGmetaListValues reads all string values from <key>/__list/ in a tree.
+// Order is tree-entry order, which is sufficient for unordered lists.
 func readGmetaListValues(repo *git.Repository, tree *object.Tree, key string) []string {
+	values, _ := readGmetaListValuesWithEntryNames(repo, tree, key)
+	return values
+}
+
+// readGmetaListValuesWithOrder reads string values from <key>/__list/ in insertion order.
+// It reconstructs append order from the monotonic timestamp prefix and breaks ties by
+// preserving the tree's existing entry order.
+func readGmetaListValuesWithOrder(repo *git.Repository, tree *object.Tree, key string) []string {
+	values, entryNames := readGmetaListValuesWithEntryNames(repo, tree, key)
+	if len(values) < 2 || len(values) != len(entryNames) {
+		return values
+	}
+
+	type listValue struct {
+		value      string
+		entryName  string
+		treeIndex  int
+		timestamp  int64
+	}
+
+	ordered := make([]listValue, 0, len(values))
+	for i, value := range values {
+		entryName := entryNames[i]
+		ts := extractGmetaListTimestamp(entryName)
+		ordered = append(ordered, listValue{
+			value:     value,
+			entryName: entryName,
+			treeIndex: i,
+			timestamp: ts,
+		})
+	}
+
+	slices.SortStableFunc(ordered, func(a, b listValue) int {
+		switch {
+		case a.timestamp < b.timestamp:
+			return -1
+		case a.timestamp > b.timestamp:
+			return 1
+		case a.treeIndex < b.treeIndex:
+			return -1
+		case a.treeIndex > b.treeIndex:
+			return 1
+		default:
+			return strings.Compare(a.entryName, b.entryName)
+		}
+	})
+
+	result := make([]string, 0, len(ordered))
+	for _, item := range ordered {
+		result = append(result, item.value)
+	}
+	return result
+}
+
+func readGmetaListValuesWithEntryNames(repo *git.Repository, tree *object.Tree, key string) ([]string, []string) {
 	listPath := key + "/__list"
 	listTree, err := tree.Tree(listPath)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 
-	// Entries are already sorted by name (git tree convention), which for gmeta
-	// list entry IDs (<timestamp-ms>-<hash>) gives chronological order.
 	var values []string
+	var entryNames []string
 	for _, entry := range listTree.Entries {
 		if !entry.Mode.IsFile() {
 			continue
@@ -886,10 +958,23 @@ func readGmetaListValues(repo *git.Repository, tree *object.Tree, key string) []
 		content := make([]byte, blob.Size)
 		if _, readErr := reader.Read(content); readErr == nil {
 			values = append(values, string(content))
+			entryNames = append(entryNames, entry.Name)
 		}
 		_ = reader.Close()
 	}
-	return values
+	return values, entryNames
+}
+
+func extractGmetaListTimestamp(entryName string) int64 {
+	tsPart, _, ok := strings.Cut(entryName, "-")
+	if !ok {
+		return 0
+	}
+	ts, err := strconv.ParseInt(tsPart, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return ts
 }
 
 // readGmetaListConcat reads all blobs from <key>/__list/ and concatenates them.

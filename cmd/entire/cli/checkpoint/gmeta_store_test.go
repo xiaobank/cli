@@ -2,6 +2,7 @@ package checkpoint
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -328,12 +329,26 @@ func TestGmetaStore_WriteCommitted_IncrementalTask(t *testing.T) {
 
 	// Should have incremental list entry
 	incrementalCount := 0
+	var incrementalPayload string
 	for key := range entries {
 		if strings.HasPrefix(key, "session/session-001/task/toolu_abc123/incremental/__list/") {
 			incrementalCount++
+			incrementalPayload = entries[key]
 		}
 	}
 	assert.Equal(t, 1, incrementalCount, "expected 1 incremental list entry")
+
+	var payload struct {
+		Type      string          `json:"type"`
+		ToolUseID string          `json:"tool_use_id"`
+		Timestamp string          `json:"timestamp"`
+		Data      json.RawMessage `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(incrementalPayload), &payload))
+	assert.Equal(t, "write_file", payload.Type)
+	assert.Equal(t, "toolu_abc123", payload.ToolUseID)
+	assert.NotEmpty(t, payload.Timestamp)
+	assert.JSONEq(t, `{"file":"test.go","content":"package main"}`, string(payload.Data))
 }
 
 func TestGmetaFanout(t *testing.T) {
@@ -690,6 +705,40 @@ func TestGmetaStore_GetSessionLog_MultiSession_ReturnsLatest(t *testing.T) {
 	_, sessionID, err := store.GetSessionLog(ctx, cpID)
 	require.NoError(t, err)
 	assert.Equal(t, "session-002", sessionID, "should return latest session")
+}
+
+func TestGmetaStore_GetSessionLog_MultiSession_SameTimestampKeepsAppendOrder(t *testing.T) {
+	t.Parallel()
+	repo := initTestRepo(t)
+	store := NewGmetaStore(repo)
+	ctx := context.Background()
+
+	cpID := id.MustCheckpointID("a3b2c4d5e6f7")
+
+	require.NoError(t, store.WriteCommitted(ctx, WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-zzz",
+		Strategy:     "manual-commit",
+		Transcript:   []byte(`{"type":"text","content":"first"}`),
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	}))
+	require.NoError(t, store.WriteCommitted(ctx, WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-aaa",
+		Strategy:     "manual-commit",
+		Transcript:   []byte(`{"type":"text","content":"second"}`),
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	}))
+
+	sessionIDs, err := store.listSessionIDs(cpID)
+	require.NoError(t, err)
+	require.Equal(t, []string{"session-zzz", "session-aaa"}, sessionIDs)
+
+	_, sessionID, err := store.GetSessionLog(ctx, cpID)
+	require.NoError(t, err)
+	assert.Equal(t, "session-aaa", sessionID, "should respect append order even when timestamp ties")
 }
 
 func TestGmetaStore_ReadCommitted_MultiSession(t *testing.T) {
