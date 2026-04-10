@@ -99,6 +99,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(newSearchCmd())
 	cmd.AddCommand(newSendAnalyticsCmd())
 	cmd.AddCommand(newAttachCmd())
+	cmd.AddCommand(newCommitCmd())
 	cmd.AddCommand(newCurlBashPostInstallCmd())
 	cmd.AddCommand(newMigrateCmd())
 
