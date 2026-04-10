@@ -21,12 +21,25 @@ const (
 
 // resolveTranscriptPath determines the correct file path for an agent's session transcript.
 // Computes the path dynamically from the current repo location for cross-machine portability.
-// Uses MainRepoRoot (not WorktreeRoot) so that linked worktrees (e.g., Claude Code
-// worktrees under .claude/worktrees/) resolve to the same project directory as the main repo.
 func resolveTranscriptPath(ctx context.Context, sessionID string, agent agentpkg.Agent) (string, error) {
-	repoRoot, err := paths.MainRepoRoot(ctx)
+	repoRoot, err := paths.WorktreeRoot(ctx)
 	if err != nil {
-		return "", fmt.Errorf("failed to get main repo root: %w", err)
+		return "", fmt.Errorf("failed to get worktree root: %w", err)
+	}
+
+	// Claude's built-in --worktree mode creates nested worktrees under
+	// <repo>/.claude/worktrees/<branch>, but session transcripts stay keyed to
+	// the main repo project path. User-created git worktrees live elsewhere and
+	// should continue to use their own worktree path.
+	if agent.Name() == agentpkg.AgentNameClaudeCode {
+		mainRepoRoot, mainErr := paths.MainRepoRoot(ctx)
+		if mainErr != nil {
+			return "", fmt.Errorf("failed to get main repo root: %w", mainErr)
+		}
+		claudeWorktreesDir := filepath.Join(mainRepoRoot, ".claude", "worktrees")
+		if paths.IsSubpath(claudeWorktreesDir, repoRoot) {
+			repoRoot = mainRepoRoot
+		}
 	}
 
 	sessionDir, err := agent.GetSessionDir(repoRoot)

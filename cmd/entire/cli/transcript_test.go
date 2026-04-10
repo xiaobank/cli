@@ -1,9 +1,17 @@
 package cli
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/claudecode"
+	"github.com/entireio/cli/cmd/entire/cli/agent/types"
+	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/testutil"
 )
 
 func createTempTranscript(t *testing.T, content string) string {
@@ -14,6 +22,71 @@ func createTempTranscript(t *testing.T, content string) string {
 		t.Fatalf("failed to create temp file: %v", err)
 	}
 	return tmpFile
+}
+
+type pathSensitiveTestAgent struct{}
+
+var _ agent.Agent = (*pathSensitiveTestAgent)(nil)
+
+func (a *pathSensitiveTestAgent) Name() types.AgentName                          { return "path-sensitive-test" }
+func (a *pathSensitiveTestAgent) Type() types.AgentType                          { return "Path Sensitive Test Agent" }
+func (a *pathSensitiveTestAgent) Description() string                            { return "Test agent whose session dir depends on the exact repo path" }
+func (a *pathSensitiveTestAgent) IsPreview() bool                                { return false }
+func (a *pathSensitiveTestAgent) DetectPresence(_ context.Context) (bool, error) { return true, nil }
+func (a *pathSensitiveTestAgent) ProtectedDirs() []string                        { return nil }
+func (a *pathSensitiveTestAgent) GetSessionID(_ *agent.HookInput) string         { return "" }
+func (a *pathSensitiveTestAgent) ReadTranscript(_ string) ([]byte, error)        { return nil, nil }
+func (a *pathSensitiveTestAgent) ChunkTranscript(_ context.Context, content []byte, _ int) ([][]byte, error) {
+	return [][]byte{content}, nil
+}
+func (a *pathSensitiveTestAgent) ReassembleTranscript(chunks [][]byte) ([]byte, error) {
+	var result []byte
+	for _, c := range chunks {
+		result = append(result, c...)
+	}
+	return result, nil
+}
+func (a *pathSensitiveTestAgent) GetSessionDir(repoPath string) (string, error) {
+	return filepath.Join(repoPath, ".agent-sessions"), nil
+}
+func (a *pathSensitiveTestAgent) ResolveSessionFile(sessionDir, agentSessionID string) string {
+	return filepath.Join(sessionDir, agentSessionID+".jsonl")
+}
+func (a *pathSensitiveTestAgent) ReadSession(_ *agent.HookInput) (*agent.AgentSession, error) {
+	return nil, nil
+}
+func (a *pathSensitiveTestAgent) WriteSession(_ context.Context, _ *agent.AgentSession) error {
+	return nil
+}
+func (a *pathSensitiveTestAgent) FormatResumeCommand(_ string) string { return "" }
+
+func createLinkedWorktreeForTranscriptTest(t *testing.T, worktreeDirFn func(mainRepo string) string) (string, string) {
+	t.Helper()
+
+	mainRepo := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(mainRepo)
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	mainRepo = resolved
+
+	testutil.InitRepo(t, mainRepo)
+	testutil.WriteFile(t, mainRepo, "f.txt", "init")
+	testutil.GitAdd(t, mainRepo, "f.txt")
+	testutil.GitCommit(t, mainRepo, "init")
+	worktreeDir := filepath.Clean(worktreeDirFn(mainRepo))
+
+	cmd := exec.Command("git", "worktree", "add", "-b", "feature-branch", worktreeDir) //nolint:noctx // test code
+	cmd.Dir = mainRepo
+	cmd.Env = testutil.GitIsolatedEnv()
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git worktree add: %v\n%s", err, output)
+	}
+
+	paths.ClearWorktreeRootCache()
+	t.Chdir(worktreeDir)
+
+	return mainRepo, worktreeDir
 }
 
 func TestAgentTranscriptPath(t *testing.T) {
@@ -44,6 +117,105 @@ func TestAgentTranscriptPath(t *testing.T) {
 				t.Errorf("AgentTranscriptPath() = %v, want %v", got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestResolveTranscriptPath_ClaudeNestedWorktreeUsesMainRepoRoot(t *testing.T) {
+	_, worktreeDir := createLinkedWorktreeForTranscriptTest(t, func(mainRepo string) string {
+		return filepath.Join(mainRepo, ".claude", "worktrees", "feature-branch")
+	})
+	mainRepo, err := paths.MainRepoRoot(context.Background())
+	if err != nil {
+		t.Fatalf("MainRepoRoot() error = %v", err)
+	}
+
+	ag := &claudecode.ClaudeCodeAgent{}
+	got, err := resolveTranscriptPath(context.Background(), "session-123", ag)
+	if err != nil {
+		t.Fatalf("resolveTranscriptPath() error = %v", err)
+	}
+
+	sessionDir, err := ag.GetSessionDir(mainRepo)
+	if err != nil {
+		t.Fatalf("GetSessionDir(mainRepo) error = %v", err)
+	}
+	want := ag.ResolveSessionFile(sessionDir, "session-123")
+	if got != want {
+		t.Fatalf("resolveTranscriptPath() = %q, want %q", got, want)
+	}
+
+	// Sanity check: the nested worktree would resolve differently if we keyed off
+	// the worktree path, which is exactly the case we want to avoid here.
+	worktreeSessionDir, err := ag.GetSessionDir(worktreeDir)
+	if err != nil {
+		t.Fatalf("GetSessionDir(worktreeDir) error = %v", err)
+	}
+	if want == ag.ResolveSessionFile(worktreeSessionDir, "session-123") {
+		t.Fatal("expected nested worktree path to differ from main repo path for Claude")
+	}
+}
+
+func TestResolveTranscriptPath_ClaudeRegularLinkedWorktreeUsesWorktreeRoot(t *testing.T) {
+	worktreeBase := t.TempDir()
+	_, _ = createLinkedWorktreeForTranscriptTest(t, func(_ string) string {
+		return filepath.Join(worktreeBase, "cli_worktree1")
+	})
+	mainRepo, err := paths.MainRepoRoot(context.Background())
+	if err != nil {
+		t.Fatalf("MainRepoRoot() error = %v", err)
+	}
+	worktreeDir, err := paths.WorktreeRoot(context.Background())
+	if err != nil {
+		t.Fatalf("WorktreeRoot() error = %v", err)
+	}
+
+	ag := &claudecode.ClaudeCodeAgent{}
+	got, err := resolveTranscriptPath(context.Background(), "session-123", ag)
+	if err != nil {
+		t.Fatalf("resolveTranscriptPath() error = %v", err)
+	}
+
+	sessionDir, err := ag.GetSessionDir(worktreeDir)
+	if err != nil {
+		t.Fatalf("GetSessionDir(worktreeDir) error = %v", err)
+	}
+	want := ag.ResolveSessionFile(sessionDir, "session-123")
+	if got != want {
+		t.Fatalf("resolveTranscriptPath() = %q, want %q", got, want)
+	}
+
+	mainSessionDir, err := ag.GetSessionDir(mainRepo)
+	if err != nil {
+		t.Fatalf("GetSessionDir(mainRepo) error = %v", err)
+	}
+	if want == ag.ResolveSessionFile(mainSessionDir, "session-123") {
+		t.Fatal("expected regular linked worktree path to differ from main repo path for Claude")
+	}
+}
+
+func TestResolveTranscriptPath_PathSensitiveAgentLinkedWorktreeUsesWorktreeRoot(t *testing.T) {
+	worktreeBase := t.TempDir()
+	_, _ = createLinkedWorktreeForTranscriptTest(t, func(_ string) string {
+		return filepath.Join(worktreeBase, "agent_worktree")
+	})
+	worktreeDir, err := paths.WorktreeRoot(context.Background())
+	if err != nil {
+		t.Fatalf("WorktreeRoot() error = %v", err)
+	}
+
+	ag := &pathSensitiveTestAgent{}
+	got, err := resolveTranscriptPath(context.Background(), "session-123", ag)
+	if err != nil {
+		t.Fatalf("resolveTranscriptPath() error = %v", err)
+	}
+
+	sessionDir, err := ag.GetSessionDir(worktreeDir)
+	if err != nil {
+		t.Fatalf("GetSessionDir(worktreeDir) error = %v", err)
+	}
+	want := ag.ResolveSessionFile(sessionDir, "session-123")
+	if got != want {
+		t.Fatalf("resolveTranscriptPath() = %q, want %q", got, want)
 	}
 }
 
