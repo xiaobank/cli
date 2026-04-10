@@ -28,9 +28,11 @@ type pathSensitiveTestAgent struct{}
 
 var _ agent.Agent = (*pathSensitiveTestAgent)(nil)
 
-func (a *pathSensitiveTestAgent) Name() types.AgentName                          { return "path-sensitive-test" }
-func (a *pathSensitiveTestAgent) Type() types.AgentType                          { return "Path Sensitive Test Agent" }
-func (a *pathSensitiveTestAgent) Description() string                            { return "Test agent whose session dir depends on the exact repo path" }
+func (a *pathSensitiveTestAgent) Name() types.AgentName { return "path-sensitive-test" }
+func (a *pathSensitiveTestAgent) Type() types.AgentType { return "Path Sensitive Test Agent" }
+func (a *pathSensitiveTestAgent) Description() string {
+	return "Test agent whose session dir depends on the exact repo path"
+}
 func (a *pathSensitiveTestAgent) IsPreview() bool                                { return false }
 func (a *pathSensitiveTestAgent) DetectPresence(_ context.Context) (bool, error) { return true, nil }
 func (a *pathSensitiveTestAgent) ProtectedDirs() []string                        { return nil }
@@ -53,14 +55,14 @@ func (a *pathSensitiveTestAgent) ResolveSessionFile(sessionDir, agentSessionID s
 	return filepath.Join(sessionDir, agentSessionID+".jsonl")
 }
 func (a *pathSensitiveTestAgent) ReadSession(_ *agent.HookInput) (*agent.AgentSession, error) {
-	return nil, nil
+	return nil, nil //nolint:nilnil // test mock
 }
 func (a *pathSensitiveTestAgent) WriteSession(_ context.Context, _ *agent.AgentSession) error {
 	return nil
 }
 func (a *pathSensitiveTestAgent) FormatResumeCommand(_ string) string { return "" }
 
-func createLinkedWorktreeForTranscriptTest(t *testing.T, worktreeDirFn func(mainRepo string) string) (string, string) {
+func createLinkedWorktreeForTranscriptTest(t *testing.T, worktreeDirFn func(mainRepo string) string) string {
 	t.Helper()
 
 	mainRepo := t.TempDir()
@@ -86,7 +88,7 @@ func createLinkedWorktreeForTranscriptTest(t *testing.T, worktreeDirFn func(main
 	paths.ClearWorktreeRootCache()
 	t.Chdir(worktreeDir)
 
-	return mainRepo, worktreeDir
+	return worktreeDir
 }
 
 func TestAgentTranscriptPath(t *testing.T) {
@@ -121,7 +123,7 @@ func TestAgentTranscriptPath(t *testing.T) {
 }
 
 func TestResolveTranscriptPath_ClaudeNestedWorktreeUsesMainRepoRoot(t *testing.T) {
-	_, worktreeDir := createLinkedWorktreeForTranscriptTest(t, func(mainRepo string) string {
+	worktreeDir := createLinkedWorktreeForTranscriptTest(t, func(mainRepo string) string {
 		return filepath.Join(mainRepo, ".claude", "worktrees", "feature-branch")
 	})
 	mainRepo, err := paths.MainRepoRoot(context.Background())
@@ -157,7 +159,7 @@ func TestResolveTranscriptPath_ClaudeNestedWorktreeUsesMainRepoRoot(t *testing.T
 
 func TestResolveTranscriptPath_ClaudeRegularLinkedWorktreeUsesWorktreeRoot(t *testing.T) {
 	worktreeBase := t.TempDir()
-	_, _ = createLinkedWorktreeForTranscriptTest(t, func(_ string) string {
+	_ = createLinkedWorktreeForTranscriptTest(t, func(_ string) string {
 		return filepath.Join(worktreeBase, "cli_worktree1")
 	})
 	mainRepo, err := paths.MainRepoRoot(context.Background())
@@ -195,7 +197,7 @@ func TestResolveTranscriptPath_ClaudeRegularLinkedWorktreeUsesWorktreeRoot(t *te
 
 func TestResolveTranscriptPath_PathSensitiveAgentLinkedWorktreeUsesWorktreeRoot(t *testing.T) {
 	worktreeBase := t.TempDir()
-	_, _ = createLinkedWorktreeForTranscriptTest(t, func(_ string) string {
+	_ = createLinkedWorktreeForTranscriptTest(t, func(_ string) string {
 		return filepath.Join(worktreeBase, "agent_worktree")
 	})
 	worktreeDir, err := paths.WorktreeRoot(context.Background())
