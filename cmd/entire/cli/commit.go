@@ -8,6 +8,9 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
+	checkpointid "github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 
@@ -53,6 +56,17 @@ func runCommit(ctx context.Context, message string) (plumbing.Hash, error) {
 	if err != nil {
 		return plumbing.ZeroHash, err
 	}
+	checkpointID = resolveCommitCheckpointID(finalMessage, checkpointID)
+	if checkpointID == "" {
+		forcedCheckpointID, forceErr := forceCheckpointIDForActiveSession(ctx)
+		if forceErr != nil {
+			return plumbing.ZeroHash, forceErr
+		}
+		if !forcedCheckpointID.IsEmpty() {
+			checkpointID = forcedCheckpointID.String()
+			finalMessage = trailers.FormatCheckpoint(finalMessage, forcedCheckpointID)
+		}
+	}
 
 	treeHash, err := buildCommitTreeFromIndex(ctx, repo)
 	if err != nil {
@@ -90,7 +104,7 @@ func runCommit(ctx context.Context, message string) (plumbing.Hash, error) {
 
 	if checkpointID != "" {
 		commit.ExtraHeaders = []object.ExtraHeader{
-			{Key: trailers.CheckpointTrailerKey, Value: checkpointID},
+			{Key: trailers.CheckpointHeaderKey, Value: checkpointID},
 		}
 	}
 
@@ -147,6 +161,15 @@ func prepareEntireCommitMessage(ctx context.Context, message string) (string, st
 	cpID, found := trailers.ParseCheckpoint(finalMessage)
 	if found {
 		return finalMessage, cpID.String(), nil
+	}
+
+	forcedCheckpointID, err := forceCheckpointIDForActiveSession(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	if forcedCheckpointID != "" {
+		finalMessage = trailers.FormatCheckpoint(finalMessage, forcedCheckpointID)
+		return finalMessage, forcedCheckpointID.String(), nil
 	}
 
 	return finalMessage, "", nil
@@ -222,4 +245,72 @@ func shortCommitHash(hash plumbing.Hash) string {
 		return s
 	}
 	return s[:7]
+}
+
+func forceCheckpointIDForActiveSession(ctx context.Context) (checkpointid.CheckpointID, error) {
+	worktreeRoot, err := paths.WorktreeRoot(ctx)
+	if err != nil {
+		return checkpointid.EmptyCheckpointID, nil
+	}
+
+	store, err := session.NewStateStore(ctx)
+	if err != nil {
+		return checkpointid.EmptyCheckpointID, fmt.Errorf("failed to open session state store: %w", err)
+	}
+
+	states, err := store.List(ctx)
+	if err != nil {
+		return checkpointid.EmptyCheckpointID, fmt.Errorf("failed to list session states: %w", err)
+	}
+
+	var eligible []*session.State
+	for _, state := range states {
+		if state.BaseCommit == "" {
+			continue
+		}
+		if !shouldLinkSessionState(state) {
+			continue
+		}
+		eligible = append(eligible, state)
+		if state.WorktreePath != "" && state.WorktreePath == worktreeRoot {
+			cpID, genErr := checkpointid.Generate()
+			if genErr != nil {
+				return checkpointid.EmptyCheckpointID, fmt.Errorf("failed to generate checkpoint ID: %w", genErr)
+			}
+			return cpID, nil
+		}
+	}
+
+	if len(eligible) == 1 {
+		cpID, genErr := checkpointid.Generate()
+		if genErr != nil {
+			return checkpointid.EmptyCheckpointID, fmt.Errorf("failed to generate checkpoint ID: %w", genErr)
+		}
+		return cpID, nil
+	}
+
+	return checkpointid.EmptyCheckpointID, nil
+}
+
+func shouldLinkSessionState(state *session.State) bool {
+	if state == nil {
+		return false
+	}
+	if state.Phase.IsActive() {
+		return true
+	}
+	if !state.FullyCondensed && (state.StepCount > 0 || len(state.FilesTouched) > 0) {
+		return true
+	}
+	return false
+}
+
+func resolveCommitCheckpointID(message, checkpointID string) string {
+	if checkpointID != "" {
+		return checkpointID
+	}
+	if cpID, found := trailers.ParseCheckpoint(message); found {
+		return cpID.String()
+	}
+	return ""
 }

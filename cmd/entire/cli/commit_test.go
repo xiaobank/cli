@@ -3,12 +3,12 @@ package cli
 import (
 	"bytes"
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	checkpointid "github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
@@ -52,7 +52,7 @@ func TestCommit_WritesCheckpointTrailerAndExtraHeader(t *testing.T) {
 	require.True(t, found, "expected checkpoint trailer in commit message")
 
 	require.Len(t, commit.ExtraHeaders, 1)
-	require.Equal(t, trailers.CheckpointTrailerKey, commit.ExtraHeaders[0].Key)
+	require.Equal(t, trailers.CheckpointHeaderKey, commit.ExtraHeaders[0].Key)
 	require.Equal(t, cpID.String(), commit.ExtraHeaders[0].Value)
 
 	require.Contains(t, out.String(), "[")
@@ -75,7 +75,57 @@ func TestCommit_NoStagedChangesReturnsError(t *testing.T) {
 
 	err := cmd.Execute()
 	require.Error(t, err)
-	require.True(t, errors.Is(err, git.ErrEmptyCommit))
+	require.ErrorIs(t, err, git.ErrEmptyCommit)
+}
+
+func TestCommit_ForceLinksActiveSessionWithoutPreparedCheckpoint(t *testing.T) {
+	repoDir := t.TempDir()
+	testutil.InitRepo(t, repoDir)
+	testutil.WriteFile(t, repoDir, "hello.txt", "initial\n")
+	testutil.GitAdd(t, repoDir, "hello.txt")
+	testutil.GitCommit(t, repoDir, "initial")
+
+	t.Chdir(repoDir)
+
+	strat := strategy.NewManualCommitStrategy()
+	require.NoError(t, strat.InitializeSession(context.Background(), "test-force-link", agent.AgentTypeClaudeCode, "", "update file", ""))
+
+	testutil.WriteFile(t, repoDir, "hello.txt", "forced link\n")
+	testutil.GitAdd(t, repoDir, "hello.txt")
+
+	cmd := newCommitCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"-m", "feat: forced link"})
+
+	require.NoError(t, cmd.Execute())
+
+	repo, err := git.PlainOpen(repoDir)
+	require.NoError(t, err)
+
+	head, err := repo.Head()
+	require.NoError(t, err)
+
+	commit, err := repo.CommitObject(head.Hash())
+	require.NoError(t, err)
+
+	cpID, found := trailers.ParseCheckpoint(commit.Message)
+	require.True(t, found, "expected forced checkpoint trailer in commit message")
+	require.NotEmpty(t, cpID.String())
+
+	require.Len(t, commit.ExtraHeaders, 1)
+	require.Equal(t, trailers.CheckpointHeaderKey, commit.ExtraHeaders[0].Key)
+	require.Equal(t, cpID.String(), commit.ExtraHeaders[0].Value)
+}
+
+func TestResolveCommitCheckpointID_ParsesFinalMessage(t *testing.T) {
+	t.Parallel()
+
+	cpID := checkpointid.MustCheckpointID("abc123def456")
+	message := trailers.FormatCheckpoint("feat: parse final message", cpID)
+
+	resolved := resolveCommitCheckpointID(message, "")
+	require.Equal(t, cpID.String(), resolved)
 }
 
 func setupCommitSession(ctx context.Context, repoDir, sessionID, filePath, content string) error {

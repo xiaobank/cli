@@ -40,6 +40,9 @@ const (
 	// This trailer survives git amend and rebase operations.
 	CheckpointTrailerKey = "Entire-Checkpoint"
 
+	// CheckpointHeaderKey is the lowercase commit object extra header key.
+	CheckpointHeaderKey = "checkpoint"
+
 	// EphemeralBranchTrailerKey identifies the shadow branch that a checkpoint originated from.
 	// Used in manual-commit strategy checkpoint commits on entire/checkpoints/v1 branch.
 	// Format: full branch name e.g. "entire/2b4c177"
