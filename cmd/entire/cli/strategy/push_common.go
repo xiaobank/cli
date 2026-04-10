@@ -8,9 +8,10 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
+	"github.com/entireio/cli/cmd/entire/cli/settings"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -75,15 +76,16 @@ func doPushBranch(ctx context.Context, target, branchName string) error {
 	// Try pushing first
 	if err := tryPushSessionsCommon(ctx, target, branchName); err == nil {
 		stop(" done")
+		printSettingsCommitHint(ctx, target)
 		return nil
 	}
 	stop("")
 
-	// Push failed - likely non-fast-forward. Try to fetch and merge.
+	// Push failed - likely non-fast-forward. Try to fetch and rebase.
 	fmt.Fprintf(os.Stderr, "[entire] Syncing %s with remote...", branchName)
 	stop = startProgressDots(os.Stderr)
 
-	if err := fetchAndMergeSessionsCommon(ctx, target, branchName); err != nil {
+	if err := fetchAndRebaseSessionsCommon(ctx, target, branchName); err != nil {
 		stop("")
 		fmt.Fprintf(os.Stderr, "[entire] Warning: couldn't sync %s: %v\n", branchName, err)
 		printCheckpointRemoteHint(target)
@@ -91,7 +93,7 @@ func doPushBranch(ctx context.Context, target, branchName string) error {
 	}
 	stop(" done")
 
-	// Try pushing again after merge
+	// Try pushing again after rebase
 	fmt.Fprintf(os.Stderr, "[entire] Pushing %s to %s...", branchName, displayTarget)
 	stop = startProgressDots(os.Stderr)
 
@@ -101,6 +103,7 @@ func doPushBranch(ctx context.Context, target, branchName string) error {
 		printCheckpointRemoteHint(target)
 	} else {
 		stop(" done")
+		printSettingsCommitHint(ctx, target)
 	}
 
 	return nil
@@ -116,14 +119,53 @@ func printCheckpointRemoteHint(target string) {
 	fmt.Fprintln(os.Stderr, "[entire] Checkpoints are saved locally but not synced. Ensure you have access to the checkpoint remote.")
 }
 
+// settingsHintOnce ensures the settings commit hint prints at most once per process.
+var settingsHintOnce sync.Once
+
+// printSettingsCommitHint prints a hint after a successful checkpoint remote push
+// when the committed .entire/settings.json does not contain a checkpoint_remote config.
+// entire.io discovers the external checkpoint repo by reading the committed project
+// settings, so the checkpoint_remote must be present in HEAD:.entire/settings.json
+// (not just in settings.local.json or uncommitted local changes).
+// Uses sync.Once to avoid duplicates when multiple branches/refs are pushed in a
+// single pre-push invocation.
+func printSettingsCommitHint(ctx context.Context, target string) {
+	if !isURL(target) {
+		return
+	}
+	settingsHintOnce.Do(func() {
+		if isCheckpointRemoteCommitted(ctx) {
+			return
+		}
+		fmt.Fprintln(os.Stderr, "[entire] Note: Checkpoints were pushed to a separate checkpoint remote, but .entire/settings.json does not contain checkpoint_remote in the latest commit. entire.io will not be able to discover these checkpoints until checkpoint_remote is committed and pushed in .entire/settings.json.")
+	})
+}
+
+// isCheckpointRemoteCommitted returns true if the committed .entire/settings.json
+// at HEAD contains a valid checkpoint_remote configuration. This is the true
+// discoverability check: entire.io reads from committed project settings, not from
+// local overrides or uncommitted changes.
+func isCheckpointRemoteCommitted(ctx context.Context) bool {
+	cmd := exec.CommandContext(ctx, "git", "show", "HEAD:.entire/settings.json")
+	output, err := cmd.Output()
+	if err != nil {
+		return false // file doesn't exist at HEAD
+	}
+	// Parse the committed content and check for checkpoint_remote
+	committed, err := settings.LoadFromBytes(output)
+	if err != nil {
+		return false
+	}
+	return committed.GetCheckpointRemote() != nil
+}
+
 // tryPushSessionsCommon attempts to push the sessions branch.
 func tryPushSessionsCommon(ctx context.Context, remote, branchName string) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
 	// Use --no-verify to prevent recursive hook calls
-	cmd := exec.CommandContext(ctx, "git", "push", "--no-verify", remote, branchName)
-	cmd.Stdin = nil // Disconnect stdin to prevent hanging in hook context
+	cmd := CheckpointGitCommand(ctx, remote, "push", "--no-verify", remote, branchName)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -137,10 +179,11 @@ func tryPushSessionsCommon(ctx context.Context, remote, branchName string) error
 	return nil
 }
 
-// fetchAndMergeSessionsCommon fetches remote sessions and merges into local using go-git.
-// Since session logs are append-only (unique cond-* directories), we just combine trees.
+// fetchAndRebaseSessionsCommon fetches remote sessions and rebases local commits
+// on top of the remote tip. Since checkpoint shards use unique paths, rebases
+// always apply cleanly.
 // The target can be a remote name or a URL.
-func fetchAndMergeSessionsCommon(ctx context.Context, target, branchName string) error {
+func fetchAndRebaseSessionsCommon(ctx context.Context, target, branchName string) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
@@ -157,9 +200,11 @@ func fetchAndMergeSessionsCommon(ctx context.Context, target, branchName string)
 		fetchedRefName = plumbing.NewRemoteReferenceName(target, branchName)
 	}
 
-	// Use git CLI for fetch (go-git's fetch can be tricky with auth)
-	fetchCmd := exec.CommandContext(ctx, "git", "fetch", target, refSpec)
-	fetchCmd.Stdin = nil
+	// Use git CLI for fetch (go-git's fetch can be tricky with auth).
+	// Use --filter=blob:none for a partial fetch that downloads only commits
+	// and trees, skipping blobs. The merge only needs the tree structure to
+	// combine entries; blobs are already local or fetched on demand.
+	fetchCmd := CheckpointGitCommand(ctx, target, "fetch", "--no-tags", "--filter=blob:none", target, refSpec)
 	if output, err := fetchCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("fetch failed: %s", output)
 	}
@@ -169,13 +214,13 @@ func fetchAndMergeSessionsCommon(ctx context.Context, target, branchName string)
 		return fmt.Errorf("failed to open git repository: %w", err)
 	}
 
-	// Reconcile disconnected metadata branches before merging trees.
+	// Reconcile disconnected metadata branches before rebasing.
 	// The fetch above updated the remote-tracking ref, so reconciliation
 	// can compare fresh local vs remote. If disconnected (empty-orphan bug),
 	// this cherry-picks local commits onto remote tip, updating the local ref.
-	// If reconciliation fails, abort — proceeding to tree merge on disconnected
+	// If reconciliation fails, abort — proceeding to rebase on disconnected
 	// branches would silently combine unrelated histories.
-	if reconcileErr := ReconcileDisconnectedMetadataBranch(ctx, repo, os.Stderr); reconcileErr != nil {
+	if reconcileErr := ReconcileDisconnectedMetadataBranch(ctx, repo, fetchedRefName, os.Stderr); reconcileErr != nil {
 		return fmt.Errorf("metadata reconciliation failed: %w", reconcileErr)
 	}
 
@@ -184,55 +229,68 @@ func fetchAndMergeSessionsCommon(ctx context.Context, target, branchName string)
 	if err != nil {
 		return fmt.Errorf("failed to get local ref: %w", err)
 	}
-	localCommit, err := repo.CommitObject(localRef.Hash())
-	if err != nil {
-		return fmt.Errorf("failed to get local commit: %w", err)
-	}
-	localTree, err := localCommit.Tree()
-	if err != nil {
-		return fmt.Errorf("failed to get local tree: %w", err)
-	}
 
 	// Get fetched ref (remote-tracking or temp ref, updated by the fetch above)
 	remoteRef, err := repo.Reference(fetchedRefName, true)
 	if err != nil {
 		return fmt.Errorf("failed to get remote ref: %w", err)
 	}
-	remoteCommit, err := repo.CommitObject(remoteRef.Hash())
-	if err != nil {
-		return fmt.Errorf("failed to get remote commit: %w", err)
-	}
-	remoteTree, err := remoteCommit.Tree()
-	if err != nil {
-		return fmt.Errorf("failed to get remote tree: %w", err)
+
+	// If local is already at or behind remote, fast-forward
+	if localRef.Hash() == remoteRef.Hash() {
+		return nil
 	}
 
-	// Flatten both trees and combine entries
-	// Session logs have unique cond-* directories, so no conflicts expected
-	entries := make(map[string]object.TreeEntry)
-	if err := checkpoint.FlattenTree(repo, localTree, "", entries); err != nil {
-		return fmt.Errorf("failed to flatten local tree: %w", err)
+	// Find merge base
+	repoPath, err := getRepoPath(repo)
+	if err != nil {
+		return fmt.Errorf("failed to get repo path: %w", err)
 	}
-	if err := checkpoint.FlattenTree(repo, remoteTree, "", entries); err != nil {
-		return fmt.Errorf("failed to flatten remote tree: %w", err)
+	mergeBase, err := getMergeBase(ctx, repoPath, localRef.Hash().String(), remoteRef.Hash().String())
+	if err != nil {
+		return fmt.Errorf("failed to find merge base: %w", err)
 	}
 
-	// Build merged tree
-	mergedTreeHash, err := checkpoint.BuildTreeFromEntries(repo, entries)
-	if err != nil {
-		return fmt.Errorf("failed to build merged tree: %w", err)
+	// If local is ancestor of remote (merge base == local), fast-forward to remote
+	if mergeBase == localRef.Hash() {
+		ref := plumbing.NewHashReference(plumbing.NewBranchReferenceName(branchName), remoteRef.Hash())
+		if err := repo.Storer.SetReference(ref); err != nil {
+			return fmt.Errorf("failed to fast-forward branch ref: %w", err)
+		}
+		if isURL(target) {
+			_ = repo.Storer.RemoveReference(fetchedRefName) //nolint:errcheck // cleanup is best-effort
+		}
+		return nil
 	}
 
-	// Create merge commit with both parents
-	mergeCommitHash, err := createMergeCommitCommon(repo, mergedTreeHash,
-		[]plumbing.Hash{localRef.Hash(), remoteRef.Hash()},
-		"Merge remote session logs")
+	// Collect commits reachable from local but not from remote and cherry-pick
+	// them onto the remote tip. This preserves local-only commits even when the
+	// local metadata branch already contains old merge commits, while avoiding
+	// replaying shared ancestors older than the true merge-base.
+	localCommits, err := collectCommitsSince(ctx, repo, repoPath, localRef.Hash(), remoteRef.Hash())
 	if err != nil {
-		return fmt.Errorf("failed to create merge commit: %w", err)
+		return fmt.Errorf("failed to collect local commits: %w", err)
+	}
+
+	if len(localCommits) == 0 {
+		// No local-only commits — just point to remote
+		ref := plumbing.NewHashReference(plumbing.NewBranchReferenceName(branchName), remoteRef.Hash())
+		if err := repo.Storer.SetReference(ref); err != nil {
+			return fmt.Errorf("failed to update branch ref: %w", err)
+		}
+		if isURL(target) {
+			_ = repo.Storer.RemoveReference(fetchedRefName) //nolint:errcheck // cleanup is best-effort
+		}
+		return nil
+	}
+
+	newTip, err := cherryPickOnto(ctx, repo, remoteRef.Hash(), localCommits)
+	if err != nil {
+		return fmt.Errorf("failed to rebase local commits onto remote: %w", err)
 	}
 
 	// Update branch ref
-	newRef := plumbing.NewHashReference(plumbing.NewBranchReferenceName(branchName), mergeCommitHash)
+	newRef := plumbing.NewHashReference(plumbing.NewBranchReferenceName(branchName), newTip)
 	if err := repo.Storer.SetReference(newRef); err != nil {
 		return fmt.Errorf("failed to update branch ref: %w", err)
 	}
@@ -243,6 +301,59 @@ func fetchAndMergeSessionsCommon(ctx context.Context, target, branchName string)
 	}
 
 	return nil
+}
+
+// getMergeBase returns the merge base hash of two commits, or an error if they
+// have no common ancestor.
+func getMergeBase(ctx context.Context, repoPath, hashA, hashB string) (plumbing.Hash, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "git", "merge-base", hashA, hashB)
+	cmd.Dir = repoPath
+	output, err := cmd.Output()
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("git merge-base failed: %w", err)
+	}
+
+	return plumbing.NewHash(strings.TrimSpace(string(output))), nil
+}
+
+// collectCommitsSince returns non-merge commits reachable from tip but not from
+// exclude, ordered oldest-first in topological order.
+func collectCommitsSince(ctx context.Context, repo *git.Repository, repoPath string, tip, exclude plumbing.Hash) ([]*object.Commit, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	// cherryPickOnto computes each commit's delta against its first parent, so
+	// replaying merge commits would incorrectly re-apply changes that arrived via
+	// non-first-parent history. Limit the replay set to non-merge commits.
+	cmd := exec.CommandContext(ctx, "git", "rev-list", "--reverse", "--topo-order", "--no-merges", exclude.String()+".."+tip.String())
+	cmd.Dir = repoPath
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git rev-list failed: %w", err)
+	}
+
+	lines := strings.Fields(string(output))
+	if len(lines) > MaxCommitTraversalDepth {
+		return nil, fmt.Errorf("commit chain exceeded %d commits; aborting rebase", MaxCommitTraversalDepth)
+	}
+
+	commits := make([]*object.Commit, 0, len(lines))
+	for _, line := range lines {
+		hash := plumbing.NewHash(line)
+		commit, commitErr := repo.CommitObject(hash)
+		if commitErr != nil {
+			return nil, fmt.Errorf("failed to get commit %s: %w", hash, commitErr)
+		}
+		if len(commit.ParentHashes) > 1 {
+			continue
+		}
+		commits = append(commits, commit)
+	}
+
+	return commits, nil
 }
 
 // startProgressDots prints dots to w every second until the returned stop function

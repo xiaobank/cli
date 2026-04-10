@@ -3,11 +3,13 @@ module github.com/entireio/cli
 go 1.26.1
 
 require (
+	github.com/charmbracelet/bubbles v0.21.1
+	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/huh v0.8.0
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/creack/pty v1.1.24
 	github.com/denisbrodbeck/machineid v1.0.1
-	github.com/go-git/go-git/v6 v6.0.0-20260328145551-a93bccd59f82
+	github.com/go-git/go-git/v6 v6.0.0-alpha.1
 	github.com/google/uuid v1.6.0
 	github.com/posthog/posthog-go v1.11.2
 	github.com/sergi/go-diff v1.4.0
@@ -37,13 +39,14 @@ require (
 	github.com/bodgit/sevenzip v1.6.0 // indirect
 	github.com/bodgit/windows v1.0.1 // indirect
 	github.com/catppuccin/go v0.3.0 // indirect
-	github.com/charmbracelet/bubbles v0.21.1-0.20250623103423-23b8fd6302d7 // indirect
-	github.com/charmbracelet/bubbletea v1.3.6 // indirect
-	github.com/charmbracelet/colorprofile v0.2.3-0.20250311203215-f60798e515dc // indirect
-	github.com/charmbracelet/x/ansi v0.9.3 // indirect
-	github.com/charmbracelet/x/cellbuf v0.0.13 // indirect
+	github.com/charmbracelet/colorprofile v0.4.1 // indirect
+	github.com/charmbracelet/x/ansi v0.11.5 // indirect
+	github.com/charmbracelet/x/cellbuf v0.0.15 // indirect
 	github.com/charmbracelet/x/exp/strings v0.0.0-20240722160745-212f7b056ed0 // indirect
-	github.com/charmbracelet/x/term v0.2.1 // indirect
+	github.com/charmbracelet/x/term v0.2.2 // indirect
+	github.com/clipperhouse/displaywidth v0.9.0 // indirect
+	github.com/clipperhouse/stringish v0.1.1 // indirect
+	github.com/clipperhouse/uax29/v2 v2.5.0 // indirect
 	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/cyphar/filepath-securejoin v0.6.1 // indirect
 	github.com/danieljoos/wincred v1.2.3 // indirect
@@ -72,12 +75,12 @@ require (
 	github.com/klauspost/compress v1.17.11 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/klauspost/pgzip v1.2.6 // indirect
-	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
+	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
 	github.com/magiconair/properties v1.8.9 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-localereader v0.0.1 // indirect
-	github.com/mattn/go-runewidth v0.0.16 // indirect
+	github.com/mattn/go-runewidth v0.0.19 // indirect
 	github.com/mholt/archives v0.1.2 // indirect
 	github.com/minio/minlz v1.0.0 // indirect
 	github.com/mitchellh/copystructure v1.2.0 // indirect
@@ -114,7 +117,7 @@ require (
 	go4.org v0.0.0-20230225012048-214862532bf5 // indirect
 	golang.org/x/crypto v0.48.0 // indirect
 	golang.org/x/exp v0.0.0-20250218142911-aa4b98e5adaa // indirect
-	golang.org/x/net v0.50.0 // indirect
+	golang.org/x/net v0.51.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
