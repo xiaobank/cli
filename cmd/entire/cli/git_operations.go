@@ -385,7 +385,9 @@ func FetchMetadataBranch(ctx context.Context) error {
 
 	refSpec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branchName, branchName)
 
-	fetchCmd := strategy.CheckpointGitCommand(ctx, "origin", "fetch", "--no-tags", "--filter=blob:none", "origin", refSpec)
+	args := append([]string{"fetch", "--no-tags"}, strategy.PartialCloneFilterArgs(ctx)...)
+	args = append(args, "origin", refSpec)
+	fetchCmd := strategy.CheckpointGitCommand(ctx, "origin", args...)
 	if output, err := fetchCmd.CombinedOutput(); err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			return errors.New("fetch timed out after 2 minutes")
@@ -427,7 +429,9 @@ func FetchMetadataTreeOnly(ctx context.Context) error {
 
 	refSpec := fmt.Sprintf("+refs/heads/%s:refs/remotes/origin/%s", branchName, branchName)
 
-	fetchCmd := strategy.CheckpointGitCommand(ctx, "origin", "fetch", "--no-tags", "--depth=1", "--filter=blob:none", "origin", refSpec)
+	args := append([]string{"fetch", "--no-tags"}, strategy.PartialCloneFilterArgsWithDepth(ctx)...)
+	args = append(args, "origin", refSpec)
+	fetchCmd := strategy.CheckpointGitCommand(ctx, "origin", args...)
 	if output, err := fetchCmd.CombinedOutput(); err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			return errors.New("treeless fetch timed out after 2 minutes")
@@ -465,7 +469,9 @@ func FetchV2MainTreeOnly(ctx context.Context) error {
 
 	refSpec := fmt.Sprintf("+%s:%s", paths.V2MainRefName, paths.V2MainRefName)
 
-	fetchCmd := strategy.CheckpointGitCommand(ctx, "origin", "fetch", "--no-tags", "--depth=1", "--filter=blob:none", "origin", refSpec)
+	args := append([]string{"fetch", "--no-tags"}, strategy.PartialCloneFilterArgsWithDepth(ctx)...)
+	args = append(args, "origin", refSpec)
+	fetchCmd := strategy.CheckpointGitCommand(ctx, "origin", args...)
 	if output, err := fetchCmd.CombinedOutput(); err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			return errors.New("v2 treeless fetch timed out after 2 minutes")
@@ -486,7 +492,9 @@ func FetchV2MainRef(ctx context.Context) error {
 
 	refSpec := fmt.Sprintf("+%s:%s", paths.V2MainRefName, paths.V2MainRefName)
 
-	fetchCmd := strategy.CheckpointGitCommand(ctx, "origin", "fetch", "--no-tags", "--filter=blob:none", "origin", refSpec)
+	args := append([]string{"fetch", "--no-tags"}, strategy.PartialCloneFilterArgs(ctx)...)
+	args = append(args, "origin", refSpec)
+	fetchCmd := strategy.CheckpointGitCommand(ctx, "origin", args...)
 	if output, err := fetchCmd.CombinedOutput(); err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			return errors.New("v2 fetch timed out after 2 minutes")

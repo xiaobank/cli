@@ -1694,3 +1694,111 @@ func TestReadAgentTypeFromTree_MetadataJSON_OverridesDir(t *testing.T) {
 	result := ReadAgentTypeFromTree(tree, "cp")
 	assert.Equal(t, agent.AgentTypeCursor, result)
 }
+
+func TestIsPromisorRepo(t *testing.T) {
+	// Uses t.Chdir and resets package-level sync.Once — cannot be parallel.
+
+	t.Run("NonPromisor", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		testutil.InitRepo(t, tmpDir)
+		testutil.WriteFile(t, tmpDir, "f.txt", "init")
+		testutil.GitAdd(t, tmpDir, "f.txt")
+		testutil.GitCommit(t, tmpDir, "init")
+
+		t.Chdir(tmpDir)
+		resetPromisorCacheForTest()
+
+		ctx := context.Background()
+		assert.False(t, IsPromisorRepo(ctx))
+	})
+
+	t.Run("Promisor", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		testutil.InitRepo(t, tmpDir)
+		testutil.WriteFile(t, tmpDir, "f.txt", "init")
+		testutil.GitAdd(t, tmpDir, "f.txt")
+		testutil.GitCommit(t, tmpDir, "init")
+
+		cmd := exec.CommandContext(context.Background(), "git", "config", "extensions.partialClone", "origin")
+		cmd.Dir = tmpDir
+		require.NoError(t, cmd.Run())
+
+		t.Chdir(tmpDir)
+		resetPromisorCacheForTest()
+
+		ctx := context.Background()
+		assert.True(t, IsPromisorRepo(ctx))
+	})
+}
+
+func TestPartialCloneFilterArgs(t *testing.T) {
+	// Uses t.Chdir and resets package-level sync.Once — cannot be parallel.
+
+	t.Run("NonPromisor", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		testutil.InitRepo(t, tmpDir)
+		testutil.WriteFile(t, tmpDir, "f.txt", "init")
+		testutil.GitAdd(t, tmpDir, "f.txt")
+		testutil.GitCommit(t, tmpDir, "init")
+
+		t.Chdir(tmpDir)
+		resetPromisorCacheForTest()
+
+		ctx := context.Background()
+		assert.Equal(t, []string{"--depth=1"}, PartialCloneFilterArgs(ctx))
+	})
+
+	t.Run("Promisor", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		testutil.InitRepo(t, tmpDir)
+		testutil.WriteFile(t, tmpDir, "f.txt", "init")
+		testutil.GitAdd(t, tmpDir, "f.txt")
+		testutil.GitCommit(t, tmpDir, "init")
+
+		cmd := exec.CommandContext(context.Background(), "git", "config", "extensions.partialClone", "origin")
+		cmd.Dir = tmpDir
+		require.NoError(t, cmd.Run())
+
+		t.Chdir(tmpDir)
+		resetPromisorCacheForTest()
+
+		ctx := context.Background()
+		assert.Equal(t, []string{"--filter=blob:none"}, PartialCloneFilterArgs(ctx))
+	})
+}
+
+func TestPartialCloneFilterArgsWithDepth(t *testing.T) {
+	// Uses t.Chdir and resets package-level sync.Once — cannot be parallel.
+
+	t.Run("NonPromisor", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		testutil.InitRepo(t, tmpDir)
+		testutil.WriteFile(t, tmpDir, "f.txt", "init")
+		testutil.GitAdd(t, tmpDir, "f.txt")
+		testutil.GitCommit(t, tmpDir, "init")
+
+		t.Chdir(tmpDir)
+		resetPromisorCacheForTest()
+
+		ctx := context.Background()
+		assert.Equal(t, []string{"--depth=1"}, PartialCloneFilterArgsWithDepth(ctx))
+	})
+
+	t.Run("Promisor", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		testutil.InitRepo(t, tmpDir)
+		testutil.WriteFile(t, tmpDir, "f.txt", "init")
+		testutil.GitAdd(t, tmpDir, "f.txt")
+		testutil.GitCommit(t, tmpDir, "init")
+
+		cmd := exec.CommandContext(context.Background(), "git", "config", "extensions.partialClone", "origin")
+		cmd.Dir = tmpDir
+		require.NoError(t, cmd.Run())
+
+		t.Chdir(tmpDir)
+		resetPromisorCacheForTest()
+
+		ctx := context.Background()
+		assert.Equal(t, []string{"--depth=1", "--filter=blob:none"}, PartialCloneFilterArgsWithDepth(ctx))
+	})
+}

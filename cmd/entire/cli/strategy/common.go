@@ -49,6 +49,52 @@ const MaxCommitTraversalDepth = 1000
 // Each package needs its own package-scoped sentinel for git log iteration patterns.
 var errStop = errors.New("stop iteration")
 
+var (
+	promisorOnce sync.Once
+	isPromisor   bool
+)
+
+// IsPromisorRepo returns true if the repository is already configured as a
+// partial clone (promisor-enabled). Detection checks git config for
+// extensions.partialClone, which git sets when a repo is cloned with
+// --filter or receives a filtered fetch.
+// The result is cached for the lifetime of the process.
+func IsPromisorRepo(ctx context.Context) bool {
+	promisorOnce.Do(func() {
+		cmd := exec.CommandContext(ctx, "git", "config", "--get", "extensions.partialClone")
+		out, err := cmd.Output()
+		isPromisor = err == nil && strings.TrimSpace(string(out)) != ""
+	})
+	return isPromisor
+}
+
+// resetPromisorCacheForTest resets the cached promisor detection result.
+// Only for use in tests.
+func resetPromisorCacheForTest() {
+	promisorOnce = sync.Once{}
+	isPromisor = false
+}
+
+// PartialCloneFilterArgs returns fetch arguments appropriate for the repo type.
+// Promisor repos: ["--filter=blob:none"] (treeless fetch, consistent with partial clone).
+// Non-promisor repos: ["--depth=1"] (shallow fetch, avoids creating promisor packs).
+func PartialCloneFilterArgs(ctx context.Context) []string {
+	if IsPromisorRepo(ctx) {
+		return []string{"--filter=blob:none"}
+	}
+	return []string{"--depth=1"}
+}
+
+// PartialCloneFilterArgsWithDepth returns fetch arguments for tree-only fetches.
+// Promisor repos: ["--depth=1", "--filter=blob:none"].
+// Non-promisor repos: ["--depth=1"] (filter omitted to avoid creating promisor packs).
+func PartialCloneFilterArgsWithDepth(ctx context.Context) []string {
+	if IsPromisorRepo(ctx) {
+		return []string{"--depth=1", "--filter=blob:none"}
+	}
+	return []string{"--depth=1"}
+}
+
 // IsEmptyRepository returns true if the repository has no commits yet.
 // After git-init, HEAD points to an unborn branch (e.g., refs/heads/main)
 // whose target does not yet exist. repo.Head() returns ErrReferenceNotFound

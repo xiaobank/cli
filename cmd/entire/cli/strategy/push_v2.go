@@ -119,10 +119,14 @@ func fetchAndMergeRef(ctx context.Context, target string, refName plumbing.Refer
 	tmpRefName := plumbing.ReferenceName("refs/entire-fetch-tmp/" + tmpRefSuffix)
 	refSpec := fmt.Sprintf("+%s:%s", refName, tmpRefName)
 
-	// Use --filter=blob:none for a partial fetch that downloads only commits
-	// and trees, skipping blobs. The merge only needs the tree structure to
-	// combine entries; blobs are already local or fetched on demand.
-	fetchCmd := CheckpointGitCommand(ctx, target, "fetch", "--no-tags", "--filter=blob:none", target, refSpec)
+	// In promisor repos, use --filter=blob:none to stay consistent with partial clone.
+	// In non-promisor repos, do a plain fetch (needs full history for tree merge).
+	args := []string{"fetch", "--no-tags"}
+	if IsPromisorRepo(ctx) {
+		args = append(args, "--filter=blob:none")
+	}
+	args = append(args, target, refSpec)
+	fetchCmd := CheckpointGitCommand(ctx, target, args...)
 	fetchCmd.Env = append(fetchCmd.Env, "GIT_TERMINAL_PROMPT=0")
 	if output, err := fetchCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("fetch failed: %s", output)

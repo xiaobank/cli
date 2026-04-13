@@ -368,7 +368,9 @@ func FetchMetadataBranch(ctx context.Context, remoteURL string) error {
 
 	tmpRef := "refs/entire-fetch-tmp/" + branchName
 	refSpec := fmt.Sprintf("+refs/heads/%s:%s", branchName, tmpRef)
-	fetchCmd := CheckpointGitCommand(fetchCtx, remoteURL, "fetch", "--no-tags", "--filter=blob:none", remoteURL, refSpec)
+	args := append([]string{"fetch", "--no-tags"}, PartialCloneFilterArgs(ctx)...)
+	args = append(args, remoteURL, refSpec)
+	fetchCmd := CheckpointGitCommand(fetchCtx, remoteURL, args...)
 	// Merge GIT_TERMINAL_PROMPT=0 into whatever env CheckpointGitCommand set.
 	// If the token was injected, cmd.Env is already populated; otherwise use os.Environ().
 	if fetchCmd.Env == nil {
@@ -414,7 +416,9 @@ func FetchV2MainFromURL(ctx context.Context, remoteURL string) error {
 	defer cancel()
 
 	refSpec := fmt.Sprintf("+%s:%s", paths.V2MainRefName, paths.V2MainRefName)
-	fetchCmd := CheckpointGitCommand(fetchCtx, remoteURL, "fetch", "--no-tags", "--filter=blob:none", remoteURL, refSpec)
+	args := append([]string{"fetch", "--no-tags"}, PartialCloneFilterArgs(ctx)...)
+	args = append(args, remoteURL, refSpec)
+	fetchCmd := CheckpointGitCommand(fetchCtx, remoteURL, args...)
 	if fetchCmd.Env == nil {
 		fetchCmd.Env = os.Environ()
 	}

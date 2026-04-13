@@ -201,10 +201,14 @@ func fetchAndRebaseSessionsCommon(ctx context.Context, target, branchName string
 	}
 
 	// Use git CLI for fetch (go-git's fetch can be tricky with auth).
-	// Use --filter=blob:none for a partial fetch that downloads only commits
-	// and trees, skipping blobs. The merge only needs the tree structure to
-	// combine entries; blobs are already local or fetched on demand.
-	fetchCmd := CheckpointGitCommand(ctx, target, "fetch", "--no-tags", "--filter=blob:none", target, refSpec)
+	// In promisor repos, use --filter=blob:none to stay consistent with partial clone.
+	// In non-promisor repos, do a plain fetch (needs full history for rebase).
+	args := []string{"fetch", "--no-tags"}
+	if IsPromisorRepo(ctx) {
+		args = append(args, "--filter=blob:none")
+	}
+	args = append(args, target, refSpec)
+	fetchCmd := CheckpointGitCommand(ctx, target, args...)
 	if output, err := fetchCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("fetch failed: %s", output)
 	}
