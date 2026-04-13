@@ -131,11 +131,21 @@ var userAliases = map[string]bool{
 
 // normalizeKind returns the canonical entry kind ("user" or "assistant") for a
 // JSONL transcript line. It checks the "type" field, then falls back to "role".
+// For type:"message" lines (used by external agents like pi), the role is
+// extracted from the nested "message" object.
 // Returns "" for unrecognised or dropped entries.
 func normalizeKind(raw map[string]json.RawMessage) string {
 	kind := unquote(raw["type"])
 	if kind == "" {
 		kind = unquote(raw["role"])
+	}
+
+	// External agents may wrap messages as type:"message" with the actual role
+	// inside a nested "message" object: {"type":"message","message":{"role":"user",...}}.
+	if kind == transcriptTypeMessage {
+		if role := nestedMessageRole(raw); role != "" {
+			kind = role
+		}
 	}
 
 	if droppedTypes[kind] {
@@ -146,6 +156,21 @@ func normalizeKind(raw map[string]json.RawMessage) string {
 	}
 	if kind == transcript.TypeAssistant {
 		return transcript.TypeAssistant
+	}
+	return ""
+}
+
+// nestedMessageRole extracts the "role" field from a nested "message" object.
+func nestedMessageRole(raw map[string]json.RawMessage) string {
+	msgRaw, ok := raw["message"]
+	if !ok {
+		return ""
+	}
+	var msg struct {
+		Role string `json:"role"`
+	}
+	if json.Unmarshal(msgRaw, &msg) == nil {
+		return msg.Role
 	}
 	return ""
 }
@@ -639,12 +664,21 @@ func stripAssistantContent(contentRaw json.RawMessage) json.RawMessage {
 			continue
 		}
 
-		if blockType == transcript.ContentTypeToolUse {
+		if blockType == transcript.ContentTypeToolUse || blockType == "toolCall" {
 			stripped := make(map[string]json.RawMessage)
-			copyField(stripped, block, "type")
+			stripped["type"] = json.RawMessage(`"` + transcript.ContentTypeToolUse + `"`)
 			copyField(stripped, block, "id")
 			copyField(stripped, block, "name")
-			copyField(stripped, block, "input")
+			// Normalize "arguments" (used by external agents like pi) to "input".
+			if _, ok := block["input"]; ok {
+				copyField(stripped, block, "input")
+			} else {
+				copyField(stripped, block, "arguments")
+				if v, ok := stripped["arguments"]; ok {
+					stripped["input"] = v
+					delete(stripped, "arguments")
+				}
+			}
 			result = append(result, stripped)
 			continue
 		}

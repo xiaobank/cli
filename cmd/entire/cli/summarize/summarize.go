@@ -129,13 +129,53 @@ func BuildCondensedTranscriptFromBytes(content redact.RedactedBytes, agentType t
 		return buildCondensedTranscriptFromCodex(content)
 	case agent.AgentTypeClaudeCode, agent.AgentTypeCursor, agent.AgentTypeUnknown:
 		// Claude/cursor format - fall through to shared logic below
+	default:
+		// External/unknown agent types: use compact auto-detection which handles
+		// any JSONL variant (including type:"message" with nested message.role).
+		return buildCondensedTranscriptViaCompact(content)
 	}
-	// Claude format (JSONL) - handles Claude Code, Unknown, and any future agent types
+	// Claude format (JSONL) - handles Claude Code, Unknown, and Cursor
 	lines, err := transcript.ParseFromBytes(content.Bytes())
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse transcript: %w", err)
 	}
 	return BuildCondensedTranscript(lines), nil
+}
+
+// buildCondensedTranscriptViaCompact normalizes a transcript using the format
+// auto-detection in compact.Compact, then parses the compact output into entries.
+// This is the fallback for external agent types whose transcript format isn't
+// known at compile time.
+func buildCondensedTranscriptViaCompact(content redact.RedactedBytes) ([]Entry, error) {
+	compacted, err := compact.Compact(content, compact.MetadataFields{
+		Agent:      "unknown",
+		CLIVersion: "0.0.0",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to compact transcript: %w", err)
+	}
+	return buildCondensedFromCompactBytes(compacted)
+}
+
+// buildCondensedFromCompactBytes parses compact transcript.jsonl bytes into entries.
+func buildCondensedFromCompactBytes(compactBytes []byte) ([]Entry, error) {
+	compactEntries, err := compact.BuildCondensedEntries(compactBytes)
+	if err != nil {
+		return nil, fmt.Errorf("parsing compact transcript: %w", err)
+	}
+
+	entries := make([]Entry, 0, len(compactEntries))
+	for _, entry := range compactEntries {
+		switch entry.Type {
+		case "user":
+			entries = append(entries, Entry{Type: EntryTypeUser, Content: entry.Content})
+		case "assistant":
+			entries = append(entries, Entry{Type: EntryTypeAssistant, Content: entry.Content})
+		case "tool":
+			entries = append(entries, Entry{Type: EntryTypeTool, ToolName: entry.ToolName, ToolDetail: entry.ToolDetail})
+		}
+	}
+	return entries, nil
 }
 
 // buildCondensedTranscriptFromGemini parses Gemini JSON transcript and extracts a condensed view.

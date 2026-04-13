@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/agent/external"
 	"github.com/entireio/cli/cmd/entire/cli/agent/geminicli"
 	"github.com/entireio/cli/cmd/entire/cli/agent/opencode"
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
@@ -154,6 +155,9 @@ Note: --session filters the list view; --commit and --checkpoint are mutually ex
 			if rawTranscriptFlag && checkpointFlag == "" {
 				return errors.New("--raw-transcript requires --checkpoint/-c flag")
 			}
+
+			// Discover external agents so checkpoints from external agents can be resolved.
+			external.DiscoverAndRegister(cmd.Context())
 
 			// Convert short flag to verbose (verbose = !short)
 			verbose := !shortFlag

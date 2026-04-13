@@ -633,3 +633,139 @@ func assertJSONLines(t *testing.T, actual []byte, expected []string) {
 		}
 	}
 }
+
+// --- External agent (pi format) tests ---
+
+// TestCompact_PiMessageFormat verifies that the compact layer handles transcripts
+// using type:"message" with a nested message.role field (pi agent format).
+func TestCompact_PiMessageFormat(t *testing.T) {
+	t.Parallel()
+
+	input := []byte(`{"type":"session","version":3,"id":"sess-1","timestamp":"2026-01-01T00:00:00Z","cwd":"/repo"}
+{"type":"model_change","id":"mc1","parentId":null,"timestamp":"2026-01-01T00:00:00Z","provider":"anthropic","modelId":"claude-opus-4-6"}
+{"type":"message","id":"m1","parentId":"mc1","timestamp":"2026-01-01T00:00:01Z","message":{"role":"user","content":[{"type":"text","text":"add a README"}],"timestamp":1700000000000}}
+{"type":"message","id":"m2","parentId":"m1","timestamp":"2026-01-01T00:00:02Z","message":{"role":"assistant","content":[{"type":"text","text":"I'll create a README for you."},{"type":"toolCall","id":"tc1","name":"write","arguments":{"path":"README.md","content":"# Hello"}}],"usage":{"input":500,"output":100},"stopReason":"toolUse"}}
+`)
+
+	opts := agentOpts("pi")
+	result, err := Compact(redact.AlreadyRedacted(input), opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(result)), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected at least 2 output lines, got %d: %s", len(lines), string(result))
+	}
+
+	// Verify we got user and assistant entries, and toolCall was normalized to tool_use
+	var hasUser, hasAssistant, hasToolUse bool
+	for _, line := range lines {
+		var parsed map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &parsed); err != nil {
+			t.Fatalf("failed to parse output line: %v", err)
+		}
+		if parsed["type"] == "user" {
+			hasUser = true
+		}
+		if parsed["type"] == "assistant" {
+			hasAssistant = true
+			// Check that the assistant content has a normalized tool_use block
+			if content, ok := parsed["content"].([]interface{}); ok {
+				for _, block := range content {
+					if blockMap, ok := block.(map[string]interface{}); ok {
+						if blockMap["type"] == "tool_use" {
+							hasToolUse = true
+							// Verify "arguments" was renamed to "input"
+							if _, hasInput := blockMap["input"]; !hasInput {
+								t.Error("tool_use block should have 'input' field (normalized from 'arguments')")
+							}
+							if _, hasArgs := blockMap["arguments"]; hasArgs {
+								t.Error("tool_use block should not have 'arguments' field after normalization")
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	if !hasUser {
+		t.Error("expected a user entry in compact output")
+	}
+	if !hasAssistant {
+		t.Error("expected an assistant entry in compact output")
+	}
+	if !hasToolUse {
+		t.Error("expected a tool_use entry in compact output (normalized from toolCall)")
+	}
+
+	// Verify that BuildCondensedEntries can parse the compact output into tool entries
+	condensed, err := BuildCondensedEntries(result)
+	if err != nil {
+		t.Fatalf("BuildCondensedEntries failed: %v", err)
+	}
+	var hasTool bool
+	for _, entry := range condensed {
+		if entry.Type == "tool" && entry.ToolName == "write" {
+			hasTool = true
+		}
+	}
+	if !hasTool {
+		t.Errorf("expected condensed entry with tool name 'write', got: %+v", condensed)
+	}
+}
+
+func TestNormalizeKind_NestedMessageRole(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "type:message with role:user",
+			raw:  `{"type":"message","message":{"role":"user","content":[]}}`,
+			want: "user",
+		},
+		{
+			name: "type:message with role:assistant",
+			raw:  `{"type":"message","message":{"role":"assistant","content":[]}}`,
+			want: "assistant",
+		},
+		{
+			name: "type:message without message field",
+			raw:  `{"type":"message"}`,
+			want: "",
+		},
+		{
+			name: "type:message with non-object message",
+			raw:  `{"type":"message","message":"hello"}`,
+			want: "",
+		},
+		{
+			name: "regular user type unchanged",
+			raw:  `{"type":"user","message":{"content":"hello"}}`,
+			want: "user",
+		},
+		{
+			name: "regular assistant type unchanged",
+			raw:  `{"type":"assistant","message":{"content":[]}}`,
+			want: "assistant",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var raw map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(tt.raw), &raw); err != nil {
+				t.Fatalf("failed to parse test input: %v", err)
+			}
+			got := normalizeKind(raw)
+			if got != tt.want {
+				t.Errorf("normalizeKind() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

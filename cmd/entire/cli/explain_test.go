@@ -16,6 +16,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
+	"github.com/entireio/cli/cmd/entire/cli/session"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/summarize"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
@@ -4781,4 +4782,68 @@ func createCommitWithTree(t *testing.T, repo *git.Repository, treeHash plumbing.
 		t.Fatalf("failed to store commit: %v", err)
 	}
 	return hash
+}
+
+// TestExplainCmd_DiscoversExternalAgents verifies that the explain command
+// discovers external agent plugins so that checkpoints from external agents
+// (e.g. pi) can be resolved. This was missing, causing transcript parsing
+// to fail for external agents.
+func TestExplainCmd_DiscoversExternalAgents(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh not available")
+	}
+
+	tmpDir := t.TempDir()
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "f.txt", "init")
+	testutil.GitAdd(t, tmpDir, "f.txt")
+	testutil.GitCommit(t, tmpDir, "init")
+
+	t.Chdir(tmpDir)
+	paths.ClearWorktreeRootCache()
+	session.ClearGitCommonDirCache()
+
+	// Create .entire/settings.json with external_agents enabled
+	entireDir := filepath.Join(tmpDir, paths.EntireDir)
+	if err := os.MkdirAll(entireDir, 0o755); err != nil {
+		t.Fatalf("failed to create .entire directory: %v", err)
+	}
+	settingsFile := filepath.Join(entireDir, "settings.json")
+	if err := os.WriteFile(settingsFile, []byte(`{"enabled":true,"external_agents":true}`), 0o644); err != nil {
+		t.Fatalf("failed to write settings file: %v", err)
+	}
+
+	// Create a mock external agent binary
+	agentName := types.AgentName("explain-test-agent")
+	binDir := t.TempDir()
+	binPath := filepath.Join(binDir, "entire-agent-"+string(agentName))
+	infoJSON := `{
+  "protocol_version": 1,
+  "name": "` + string(agentName) + `",
+  "type": "Explain Test Agent",
+  "description": "Agent for explain discovery test",
+  "is_preview": false,
+  "protected_dirs": [],
+  "hook_names": [],
+  "capabilities": {"transcript_analyzer": true}
+}`
+	script := "#!/bin/sh\nif [ \"$1\" = \"info\" ]; then\n  echo '" + infoJSON + "'\nfi\n"
+	if err := os.WriteFile(binPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("failed to write mock agent binary: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	// Execute the explain command — it should discover the external agent
+	cmd := newExplainCmd()
+	cmd.SetArgs([]string{"--no-pager"})
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetContext(context.Background())
+	_ = cmd.Execute() //nolint:errcheck // May error (no checkpoints); we only check agent discovery
+
+	// The external agent should have been discovered and registered
+	if _, err := agent.Get(agentName); err != nil {
+		t.Errorf("expected external agent %q to be registered after explain, got: %v", agentName, err)
+	}
 }

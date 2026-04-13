@@ -400,6 +400,9 @@ func generateSummary(ctx context.Context, redactedTranscript redact.RedactedByte
 		scopedTranscript = scoped
 	case agent.AgentTypeCodex, agent.AgentTypeClaudeCode, agent.AgentTypeCursor, agent.AgentTypeFactoryAIDroid, agent.AgentTypeUnknown:
 		scopedTranscript = transcript.SliceFromLine(transcriptBytes, state.CheckpointTranscriptStart)
+	default:
+		// External agents: use line-based slicing (works for any JSONL format)
+		scopedTranscript = transcript.SliceFromLine(transcriptBytes, state.CheckpointTranscriptStart)
 	}
 
 	if len(scopedTranscript) == 0 {
