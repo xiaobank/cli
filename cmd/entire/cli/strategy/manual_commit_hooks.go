@@ -630,8 +630,8 @@ type postCommitActionHandler struct {
 	filesTouchedBefore         []string
 	sessionsWithCommittedFiles int // number of processable sessions that have tracked files
 
-	// Cached git objects — resolved once per PostCommit invocation to avoid
-	// redundant reads across filesOverlapWithContent, filesWithRemainingAgentChanges,
+	// Cached git objects — resolved once per session handler to avoid redundant
+	// reads across filesOverlapWithContent, filesWithRemainingAgentChanges,
 	// CondenseSession, and calculateSessionAttributions.
 	headTree      *object.Tree                // HEAD commit tree (shared across all sessions)
 	parentTree    *object.Tree                // HEAD's first parent tree (shared, nil for initial commits)
@@ -652,10 +652,10 @@ func (h *postCommitActionHandler) parentCommitHash() string {
 	return ""
 }
 
-// computeBaseLinkage computes commit-level linkage signals (tree hash, patch ID,
-// files-changed hash). These are identical across sessions since they depend on
-// the commit, not the session. Called once per PostCommit invocation and cached
-// on the handler's baseLinkage field.
+// computeBaseLinkage computes commit-level linkage signals (tree hash, patch ID).
+// These are identical across sessions since they depend on the commit, not the
+// session. They are cached on the per-session handler to avoid duplicate work
+// within one session's PostCommit flow.
 func (h *postCommitActionHandler) computeBaseLinkage(ctx context.Context) {
 	logCtx := logging.WithComponent(ctx, "checkpoint")
 	h.baseLinkage = &checkpoint.LinkageMetadata{
@@ -672,45 +672,14 @@ func (h *postCommitActionHandler) computeBaseLinkage(ctx context.Context) {
 	} else {
 		h.baseLinkage.PatchID = patchID
 	}
-
-	// Compute files-changed hash (committed files' blob hashes — survives rebase + other-file conflicts)
-	committedFiles := make([]string, 0, len(h.committedFileSet))
-	for f := range h.committedFileSet {
-		committedFiles = append(committedFiles, f)
-	}
-	fch, err := gitops.ComputeFilesChangedHash(ctx, h.repoDir, h.newHead, committedFiles)
-	if err != nil {
-		logging.Warn(logCtx, "failed to compute files-changed hash for linkage",
-			slog.String("commit", h.newHead),
-			slog.String("error", err.Error()),
-		)
-	} else {
-		h.baseLinkage.FilesChangedHash = fch
-	}
 }
 
-// linkageForSession returns linkage metadata for a specific session by copying
-// the commit-level base linkage and adding the session-specific SessionFilesHash.
-func (h *postCommitActionHandler) linkageForSession(ctx context.Context, sessionFilesTouched []string) *checkpoint.LinkageMetadata {
+// linkageForCommit returns the cached commit-level linkage metadata.
+func (h *postCommitActionHandler) linkageForCommit(ctx context.Context) *checkpoint.LinkageMetadata {
 	if h.baseLinkage == nil {
 		h.computeBaseLinkage(ctx)
 	}
-
-	// Copy base linkage so each session gets its own SessionFilesHash
-	logCtx := logging.WithComponent(ctx, "checkpoint")
-	linkage := *h.baseLinkage
-	if len(sessionFilesTouched) > 0 {
-		sfh, err := gitops.ComputeFilesChangedHash(ctx, h.repoDir, h.newHead, sessionFilesTouched)
-		if err != nil {
-			logging.Warn(logCtx, "failed to compute session files hash for linkage",
-				slog.String("commit", h.newHead),
-				slog.String("error", err.Error()),
-			)
-		} else {
-			linkage.SessionFilesHash = sfh
-		}
-	}
-	return &linkage
+	return h.baseLinkage
 }
 
 func (h *postCommitActionHandler) HandleCondense(state *session.State) error {
@@ -734,7 +703,7 @@ func (h *postCommitActionHandler) HandleCondense(state *session.State) error {
 			parentCommitHash: h.parentCommitHash(),
 			headCommitHash:   h.newHead,
 			allAgentFiles:    h.allAgentFiles,
-			linkage:          h.linkageForSession(h.ctx, state.FilesTouched),
+			linkage:          h.linkageForCommit(h.ctx),
 		})
 	} else {
 		h.s.updateBaseCommitIfChanged(h.ctx, state, h.newHead)
@@ -764,7 +733,7 @@ func (h *postCommitActionHandler) HandleCondenseIfFilesTouched(state *session.St
 			parentCommitHash: h.parentCommitHash(),
 			headCommitHash:   h.newHead,
 			allAgentFiles:    h.allAgentFiles,
-			linkage:          h.linkageForSession(h.ctx, state.FilesTouched),
+			linkage:          h.linkageForCommit(h.ctx),
 		})
 	} else {
 		h.s.updateBaseCommitIfChanged(h.ctx, state, h.newHead)
