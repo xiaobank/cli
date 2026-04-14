@@ -6,9 +6,6 @@
     "checkpoint_remote": {
       "provider": "github",
       "repo": "entireio/cli-checkpoints"
-    },
-    "summarize": {
-      "enabled": true
     }
   }
 }
