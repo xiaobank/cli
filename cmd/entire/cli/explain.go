@@ -27,6 +27,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 	"github.com/entireio/cli/cmd/entire/cli/transcript"
 	transcriptcompact "github.com/entireio/cli/cmd/entire/cli/transcript/compact"
+	"github.com/entireio/cli/redact"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -35,6 +36,12 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
+
+const defaultCheckpointSummaryTimeout = 30 * time.Second
+
+var checkpointSummaryTimeout = defaultCheckpointSummaryTimeout
+
+var generateTranscriptSummary = summarize.GenerateFromTranscript
 
 // interaction holds a single prompt and its responses for display.
 type interaction struct {
@@ -451,7 +458,7 @@ func readV2ContentFromMain(ctx context.Context, v2Reader *checkpoint.V2GitStore,
 // generateCheckpointSummary generates an AI summary for a checkpoint and persists it.
 // The summary is generated from the scoped transcript (only this checkpoint's portion),
 // not the entire session transcript.
-func generateCheckpointSummary(ctx context.Context, w, _ io.Writer, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, checkpointID id.CheckpointID, cpSummary *checkpoint.CheckpointSummary, content *checkpoint.SessionContent, force bool) error {
+func generateCheckpointSummary(ctx context.Context, w, errW io.Writer, v1Store *checkpoint.GitStore, v2Store *checkpoint.V2GitStore, checkpointID id.CheckpointID, cpSummary *checkpoint.CheckpointSummary, content *checkpoint.SessionContent, force bool) error {
 	// Check if summary already exists
 	if content.Metadata.Summary != nil && !force {
 		return fmt.Errorf("checkpoint %s already has a summary (use --force to regenerate)", checkpointID)
@@ -470,8 +477,11 @@ func generateCheckpointSummary(ctx context.Context, w, _ io.Writer, v1Store *che
 
 	// Generate summary using shared helper
 	logging.Info(ctx, "generating checkpoint summary")
+	if errW != nil {
+		fmt.Fprintln(errW, "Generating checkpoint summary...")
+	}
 
-	summary, err := summarize.GenerateFromTranscript(ctx, scopedTranscript, cpSummary.FilesTouched, content.Metadata.Agent, nil)
+	summary, err := generateCheckpointAISummary(ctx, scopedTranscript, cpSummary.FilesTouched, content.Metadata.Agent)
 	if err != nil {
 		return fmt.Errorf("failed to generate summary: %w", err)
 	}
@@ -504,6 +514,39 @@ func generateCheckpointSummary(ctx context.Context, w, _ io.Writer, v1Store *che
 
 	fmt.Fprintln(w, "✓ Summary generated and saved")
 	return nil
+}
+
+func generateCheckpointAISummary(ctx context.Context, scopedTranscript []byte, filesTouched []string, agentType types.AgentType) (*checkpoint.Summary, error) {
+	timeoutCtx, cancel := context.WithTimeout(ctx, checkpointSummaryTimeout)
+	timeoutDuration := checkpointSummaryTimeout
+	if deadline, ok := timeoutCtx.Deadline(); ok {
+		timeoutDuration = time.Until(deadline)
+	}
+	defer cancel()
+
+	// scopedTranscript is read from checkpoint storage, which redacts on write.
+	summary, err := generateTranscriptSummary(timeoutCtx, redact.AlreadyRedacted(scopedTranscript), filesTouched, agentType, nil)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(timeoutCtx.Err(), context.Canceled) {
+			return nil, fmt.Errorf("summary generation canceled: %w", context.Canceled)
+		}
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(timeoutCtx.Err(), context.DeadlineExceeded) {
+			return nil, fmt.Errorf("summary generation timed out after %s: %w", formatSummaryTimeout(timeoutDuration), context.DeadlineExceeded)
+		}
+		return nil, err
+	}
+
+	return summary, nil
+}
+
+func formatSummaryTimeout(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	if d < time.Second {
+		return d.Round(10 * time.Millisecond).String()
+	}
+	return d.Round(time.Second).String()
 }
 
 // explainTemporaryCheckpoint finds and formats a temporary checkpoint by shadow commit hash prefix.
@@ -722,6 +765,8 @@ func scopeTranscriptForCheckpoint(fullTranscript []byte, startOffset int, agentT
 			return nil
 		}
 		return scoped
+	case agent.AgentTypeCodex:
+		return transcript.SliceFromLine(fullTranscript, startOffset)
 	case agent.AgentTypeClaudeCode, agent.AgentTypeCursor, agent.AgentTypeFactoryAIDroid, agent.AgentTypeUnknown:
 		return transcript.SliceFromLine(fullTranscript, startOffset)
 	}
@@ -735,7 +780,8 @@ func extractPromptsFromTranscript(transcriptBytes []byte, agentType types.AgentT
 		return nil
 	}
 
-	condensed, err := summarize.BuildCondensedTranscriptFromBytes(transcriptBytes, agentType)
+	// transcriptBytes is read from checkpoint storage, which redacts on write.
+	condensed, err := summarize.BuildCondensedTranscriptFromBytes(redact.AlreadyRedacted(transcriptBytes), agentType)
 	if err != nil || len(condensed) == 0 {
 		condensed, err = buildCondensedCompactTranscriptEntries(transcriptBytes)
 	}
@@ -886,7 +932,8 @@ func formatTranscriptBytes(transcriptBytes []byte, fallback string, agentType ty
 		return "  (none)\n"
 	}
 
-	condensed, err := summarize.BuildCondensedTranscriptFromBytes(transcriptBytes, agentType)
+	// transcriptBytes is read from checkpoint storage, which redacts on write.
+	condensed, err := summarize.BuildCondensedTranscriptFromBytes(redact.AlreadyRedacted(transcriptBytes), agentType)
 	if err != nil || len(condensed) == 0 {
 		condensed, err = buildCondensedCompactTranscriptEntries(transcriptBytes)
 	}

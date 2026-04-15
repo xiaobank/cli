@@ -62,6 +62,13 @@ func hasTTY() bool {
 		return false
 	}
 
+	// Pi Coding Agent sets PI_CODING_AGENT=true when running shell commands.
+	// Like other agents, the subprocess may inherit the TTY but can't respond
+	// to interactive prompts.
+	if os.Getenv("PI_CODING_AGENT") != "" {
+		return false
+	}
+
 	// GIT_TERMINAL_PROMPT=0 disables git's own terminal prompts.
 	// Factory AI Droid (and other non-interactive environments like CI) set this.
 	// Since we run as a git hook, respect it — if the environment doesn't want
@@ -1396,6 +1403,7 @@ func (s *ManualCommitStrategy) condenseAndUpdateState(
 	state.AttributionBaseCommit = newHead
 	state.StepCount = 0
 	state.CheckpointTranscriptStart = result.TotalTranscriptLines
+	state.CompactTranscriptStart += result.CompactTranscriptLines
 	state.CheckpointTranscriptSize = int64(len(result.Transcript))
 
 	// Clear attribution tracking — condensation already used these values
@@ -2468,6 +2476,8 @@ func readPromptsFromShadowBranch(_ context.Context, repo *git.Repository, state 
 //
 
 func (s *ManualCommitStrategy) HandleTurnEnd(ctx context.Context, state *SessionState) error { //nolint:unparam // error return is part of the hook contract; callers check it
+	hadMidTurnCommits := len(state.TurnCheckpointIDs) > 0
+
 	// Finalize all checkpoints from this turn with the full transcript.
 	//
 	// IMPORTANT: This is best-effort - errors are logged but don't fail the hook.
@@ -2482,6 +2492,36 @@ func (s *ManualCommitStrategy) HandleTurnEnd(ctx context.Context, state *Session
 			slog.Int("error_count", errCount),
 		)
 	}
+
+	// Advance CheckpointTranscriptStart to the actual transcript end after
+	// mid-turn commits. When an agent commits mid-turn (e.g., Codex "commit/push"),
+	// condensation records TotalTranscriptLines at commit time, but the agent
+	// continues writing to the transcript (tool results, token counts, task_complete).
+	// Without this fix, the next checkpoint's scoped transcript starts mid-turn,
+	// including a tail of already-condensed content.
+	//
+	// Skip this when carry-forward is active. carryForwardToNewShadowBranch
+	// intentionally resets CheckpointTranscriptStart to 0 so the next checkpoint
+	// remains self-contained with the full transcript.
+	if hadMidTurnCommits && state.TranscriptPath != "" && len(state.FilesTouched) == 0 {
+		transcriptPath, resolveErr := resolveTranscriptPath(state)
+		if resolveErr == nil {
+			if ag, agErr := agent.GetByAgentType(state.AgentType); agErr == nil {
+				if analyzer, ok := agent.AsTranscriptAnalyzer(ag); ok {
+					if pos, posErr := analyzer.GetTranscriptPosition(transcriptPath); posErr == nil && pos > state.CheckpointTranscriptStart {
+						logging.Debug(logging.WithComponent(ctx, "hooks"),
+							"advancing CheckpointTranscriptStart to turn end after mid-turn commit",
+							slog.String("session_id", state.SessionID),
+							slog.Int("old_offset", state.CheckpointTranscriptStart),
+							slog.Int("new_offset", pos),
+						)
+						state.CheckpointTranscriptStart = pos
+					}
+				}
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -2557,17 +2597,24 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 		prompts = readPromptsFromFilesystem(ctx, state.SessionID)
 	}
 
-	// Redact secrets before writing — matches WriteCommitted behavior.
-	// The live transcript on disk contains raw content; redaction must happen
-	// before anything is persisted to the metadata branch.
-	fullTranscript, err = redact.JSONLBytes(fullTranscript)
-	if err != nil {
-		logging.Warn(logCtx, "finalize: transcript redaction failed, skipping",
+	// Redact secrets before writing. Checkpoint store methods require
+	// pre-redacted in-memory transcript content from callers. The live
+	// transcript on disk is still treated as raw/untrusted input, so redact it
+	// here before anything is persisted to the metadata branch.
+	//
+	// On failure: drop the transcript but continue writing checkpoint metadata
+	// (attribution, files touched, prompts). Hooks run without user interaction
+	// so there is no retry path — preserving partial metadata is better than
+	// losing everything. Persisting an unredacted transcript would be worse.
+	_, redactSpan := perf.Start(logCtx, "redact_transcript")
+	redactedTranscript, redactErr := redact.JSONLBytes(fullTranscript)
+	redactSpan.End()
+	if redactErr != nil {
+		logging.Warn(logCtx, "finalize: transcript redaction failed, dropping transcript",
 			slog.String("session_id", state.SessionID),
-			slog.String("error", err.Error()),
+			slog.String("error", redactErr.Error()),
 		)
-		state.TurnCheckpointIDs = nil
-		return 1 // Count as error - all checkpoints will be skipped
+		redactedTranscript = redact.RedactedBytes{}
 	}
 	for i, p := range prompts {
 		prompts[i] = redact.String(p)
@@ -2596,13 +2643,13 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 		updateOpts := checkpoint.UpdateCommittedOptions{
 			CheckpointID: cpID,
 			SessionID:    state.SessionID,
-			Transcript:   fullTranscript,
+			Transcript:   redactedTranscript,
 			Prompts:      prompts,
 			Agent:        state.AgentType,
 		}
 
 		// Generate compact transcript for v2 /main
-		if v2Store != nil && len(fullTranscript) > 0 {
+		if v2Store != nil && redactedTranscript.Len() > 0 {
 			finalAg, _ := agent.GetByAgentType(state.AgentType) //nolint:errcheck // ag may be nil for unknown agent types; compactTranscriptForV2 handles nil
 			startLine := 0
 			if content, readErr := store.ReadSessionContentByID(ctx, cpID, state.SessionID); readErr == nil && content != nil {
@@ -2618,7 +2665,7 @@ func (s *ManualCommitStrategy) finalizeAllTurnCheckpoints(ctx context.Context, s
 					slog.String("error", errMsg),
 				)
 			}
-			updateOpts.CompactTranscript = compactTranscriptForV2(logCtx, finalAg, fullTranscript, startLine)
+			updateOpts.CompactTranscript = compactTranscriptForV2(logCtx, finalAg, redactedTranscript, startLine)
 		}
 
 		updateErr := store.UpdateCommitted(ctx, updateOpts)
@@ -2715,13 +2762,15 @@ func (s *ManualCommitStrategy) carryForwardToNewShadowBranch(
 	remainingFiles []string,
 ) {
 	logCtx := logging.WithComponent(ctx, "checkpoint")
+	start := time.Now()
 	store := checkpoint.NewGitStore(repo)
 
 	// Don't include metadata directory in carry-forward. The carry-forward branch
 	// only needs to preserve file content for comparison - not the transcript.
 	// Including the transcript would cause sessionHasNewContent to always return true
 	// because CheckpointTranscriptStart is reset to 0 for carry-forward.
-	result, err := store.WriteTemporary(ctx, checkpoint.WriteTemporaryOptions{
+	writeCtx, carryForwardWriteSpan := perf.Start(ctx, "write_carry_forward_shadow")
+	result, err := store.WriteTemporary(writeCtx, checkpoint.WriteTemporaryOptions{
 		SessionID:         state.SessionID,
 		BaseCommit:        state.BaseCommit,
 		WorktreeID:        state.WorktreeID,
@@ -2732,12 +2781,16 @@ func (s *ManualCommitStrategy) carryForwardToNewShadowBranch(
 		IsFirstCheckpoint: false,
 	})
 	if err != nil {
+		carryForwardWriteSpan.RecordError(err)
+		carryForwardWriteSpan.End()
 		logging.Warn(logCtx, "post-commit: carry-forward failed",
 			slog.String("session_id", state.SessionID),
 			slog.String("error", err.Error()),
 		)
 		return
 	}
+	carryForwardWriteSpan.End()
+	duration := time.Since(start)
 	if result.Skipped {
 		logging.Debug(logCtx, "post-commit: carry-forward skipped (no changes)",
 			slog.String("session_id", state.SessionID),
@@ -2756,6 +2809,7 @@ func (s *ManualCommitStrategy) carryForwardToNewShadowBranch(
 	// but this would complicate checkpoint retrieval and require careful tracking of dependencies.
 	state.StepCount = 1
 	state.CheckpointTranscriptStart = 0
+	state.CompactTranscriptStart = 0
 	state.CheckpointTranscriptSize = 0
 	state.LastCheckpointID = ""
 	// NOTE: TurnCheckpointIDs is intentionally NOT cleared here. Those checkpoint
@@ -2764,6 +2818,11 @@ func (s *ManualCommitStrategy) carryForwardToNewShadowBranch(
 
 	logging.Info(logCtx, "post-commit: carried forward remaining files",
 		slog.String("session_id", state.SessionID),
+		slog.Int("remaining_files", len(remainingFiles)),
+	)
+	logging.Debug(logCtx, "carry-forward timings",
+		slog.String("session_id", state.SessionID),
+		slog.Int64("write_carry_forward_shadow_ms", duration.Milliseconds()),
 		slog.Int("remaining_files", len(remainingFiles)),
 	)
 }
