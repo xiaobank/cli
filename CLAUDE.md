@@ -373,7 +373,7 @@ The manual-commit strategy (`manual_commit*.go`) does not modify the active bran
 - `manual_commit_rewind.go` - Rewind implementation: file restoration from checkpoint trees
 - `manual_commit_git.go` - Git operations: checkpoint commits, tree building
 - `manual_commit_logs.go` - Session log retrieval and session listing
-- `manual_commit_hooks.go` - Git hook handlers (prepare-commit-msg, post-commit, pre-push)
+- `manual_commit_hooks.go` - Git hook handlers (prepare-commit-msg, post-commit, pre-push); sequence operations like revert/cherry-pick only reuse an existing `LastCheckpointID` and never mint a fresh checkpoint ID
 - `manual_commit_reset.go` - Shadow branch reset/cleanup functionality
 - `session_state.go` - Package-level session state functions (`LoadSessionState`, `SaveSessionState`, `ListSessionStates`, `FindMostRecentSession`)
 - `hooks.go` - Git hook installation
@@ -483,7 +483,7 @@ The strategy uses a **12-hex-char random checkpoint ID** (e.g., `a3b2c4d5e6f7`) 
 1. **Generated once per checkpoint**: When condensing session metadata to the metadata branch
 
 2. **Added to user commits** via `Entire-Checkpoint` trailer:
-   - **Manual-commit**: Added via `prepare-commit-msg` hook (user can remove it before committing)
+  - **Manual-commit**: Added via `prepare-commit-msg` hook (user can remove it before committing). During revert/cherry-pick, the hook only reuses an existing `LastCheckpointID`; it does not create a new checkpoint ID because sequence-operation commits are not condensed immediately.
 
 3. **Used for directory sharding** on `entire/checkpoints/v1` branch:
    - Path format: `<id[:2]>/<id[2:]>/`
@@ -534,6 +534,7 @@ entire/checkpoints/v1 commit:
 
 - `Entire-Checkpoint: <checkpoint-id>` - 12-hex-char ID linking to metadata on `entire/checkpoints/v1`
   - Added via `prepare-commit-msg` hook; user can remove it before committing to skip linking
+  - During revert/cherry-pick, only an existing `LastCheckpointID` is reused; no fresh checkpoint ID is generated for the sequence-operation commit
 
 **On shadow branch commits (`entire/<commit-hash[:7]>-<worktreeHash[:6]>`):**
 

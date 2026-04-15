@@ -308,18 +308,14 @@ func isGitSequenceOperation(ctx context.Context) bool {
 
 func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFile string, source string) error {
 	logCtx := logging.WithComponent(ctx, "checkpoint")
+	isSequenceOp := isGitSequenceOperation(ctx)
 
 	// Skip during rebase, cherry-pick, or revert operations — UNLESS an agent
 	// session is ACTIVE. When an agent runs git revert/cherry-pick as part of
-	// its work, the commit should be checkpointed. When the user does it
-	// manually (no active session), skip as before.
-	//
-	// Note: The trailer is added here, but condensation is deferred. PostCommit's
-	// state machine skips ActionCondense when IsRebaseInProgress=true (sequence
-	// operation files like REVERT_HEAD still exist during post-commit). The
-	// checkpoint data is preserved on the shadow branch and will be condensed
-	// on the next normal commit or when the session ends (TurnEnd/Stop).
-	if isGitSequenceOperation(ctx) {
+	// its work, we only reuse an existing checkpoint ID. PostCommit still skips
+	// condensation while the sequence operation is in progress, so minting a new
+	// checkpoint ID here would leave a dangling trailer on the commit.
+	if isSequenceOp {
 		if !s.hasActiveSessionInWorktree(ctx) {
 			logging.Debug(logCtx, "prepare-commit-msg: skipped during git sequence operation (no active session)",
 				slog.String("strategy", "manual-commit"),
@@ -426,16 +422,8 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 	}
 	readCommitMessageSpan.End()
 
-	// Generate a fresh checkpoint ID and resolve session metadata
-	_, resolveMetadataSpan := perf.Start(ctx, "resolve_session_metadata")
-	checkpointID, err := id.Generate()
-	if err != nil {
-		resolveMetadataSpan.RecordError(err)
-		resolveMetadataSpan.End()
-		return fmt.Errorf("failed to generate checkpoint ID: %w", err)
-	}
-
 	// Determine agent type and last prompt from session
+	_, resolveMetadataSpan := perf.Start(ctx, "resolve_session_metadata")
 	var agentType types.AgentType
 	var lastPrompt string
 	if len(sessionsWithContent) > 0 {
@@ -453,6 +441,17 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 	commitLinking := settings.CommitLinkingPrompt // safe default
 	if stngs, loadErr := settings.Load(ctx); loadErr == nil {
 		commitLinking = stngs.GetCommitLinking()
+	}
+
+	checkpointID, shouldSkip, err := resolveCheckpointIDForPrepareCommit(logCtx, isSequenceOp, source, sessionsWithContent)
+	if err != nil {
+		resolveMetadataSpan.RecordError(err)
+		resolveMetadataSpan.End()
+		return fmt.Errorf("failed to resolve checkpoint ID: %w", err)
+	}
+	if shouldSkip {
+		resolveMetadataSpan.End()
+		return nil
 	}
 	resolveMetadataSpan.End()
 
@@ -516,6 +515,42 @@ func (s *ManualCommitStrategy) PrepareCommitMsg(ctx context.Context, commitMsgFi
 	writeCommitMessageSpan.End()
 
 	return nil
+}
+
+func firstReusableCheckpointID(states []*SessionState) id.CheckpointID {
+	for _, state := range states {
+		if state.LastCheckpointID.IsEmpty() {
+			continue
+		}
+		return state.LastCheckpointID
+	}
+	return ""
+}
+
+func resolveCheckpointIDForPrepareCommit(
+	logCtx context.Context,
+	isSequenceOp bool,
+	source string,
+	sessions []*SessionState,
+) (id.CheckpointID, bool, error) {
+	if !isSequenceOp {
+		checkpointID, err := id.Generate()
+		if err != nil {
+			return "", false, fmt.Errorf("generate checkpoint ID: %w", err)
+		}
+		return checkpointID, false, nil
+	}
+
+	checkpointID := firstReusableCheckpointID(sessions)
+	if checkpointID.IsEmpty() {
+		logging.Debug(logCtx, "prepare-commit-msg: skipped sequence operation without reusable checkpoint ID",
+			slog.String("strategy", "manual-commit"),
+			slog.String("source", source),
+		)
+		return "", true, nil
+	}
+
+	return checkpointID, false, nil
 }
 
 // handleAmendCommitMsg handles the prepare-commit-msg hook for amend operations

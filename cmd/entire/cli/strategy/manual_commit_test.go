@@ -865,10 +865,11 @@ func TestShadowStrategy_PrepareCommitMsg_SkipsSessionWhenContentCheckFails(t *te
 	require.Equal(t, originalMsg, string(content))
 }
 
-// TestShadowStrategy_PrepareCommitMsg_AgentRevertGetsTrailer verifies that when an
-// agent runs git revert (REVERT_HEAD exists) and the session is ACTIVE, the commit
-// gets a checkpoint trailer. The agent's work should be checkpointed.
-func TestShadowStrategy_PrepareCommitMsg_AgentRevertGetsTrailer(t *testing.T) {
+// TestShadowStrategy_PrepareCommitMsg_AgentRevertReusesLastCheckpointID verifies
+// that an agent-driven revert/cherry-pick only reuses an existing checkpoint ID.
+// Sequence-operation commits are not condensed in PostCommit, so generating a
+// fresh trailer here would leave a dangling checkpoint link.
+func TestShadowStrategy_PrepareCommitMsg_AgentRevertReusesLastCheckpointID(t *testing.T) {
 	dir := setupGitRepo(t)
 	t.Chdir(dir)
 	t.Setenv("ENTIRE_TEST_TTY", "1")
@@ -895,6 +896,11 @@ func TestShadowStrategy_PrepareCommitMsg_AgentRevertGetsTrailer(t *testing.T) {
 	})
 	require.NoError(t, err)
 
+	state, err := s.loadSessionState(context.Background(), "agent-revert-session")
+	require.NoError(t, err)
+	state.LastCheckpointID = testTrailerCheckpointID
+	require.NoError(t, s.saveSessionState(context.Background(), state))
+
 	// Simulate REVERT_HEAD existing (git revert in progress)
 	gitDir, err := GetGitDir(context.Background())
 	require.NoError(t, err)
@@ -902,7 +908,7 @@ func TestShadowStrategy_PrepareCommitMsg_AgentRevertGetsTrailer(t *testing.T) {
 	require.NoError(t, os.WriteFile(revertHeadPath, []byte("fake-revert-head"), 0o644))
 	defer os.Remove(revertHeadPath)
 
-	// PrepareCommitMsg should add a trailer (active session = agent doing the revert)
+	// PrepareCommitMsg should reuse the existing checkpoint trailer.
 	commitMsgFile := filepath.Join(t.TempDir(), "COMMIT_EDITMSG")
 	require.NoError(t, os.WriteFile(commitMsgFile, []byte("Revert \"add feature\"\n"), 0o644))
 
@@ -912,8 +918,58 @@ func TestShadowStrategy_PrepareCommitMsg_AgentRevertGetsTrailer(t *testing.T) {
 	content, err := os.ReadFile(commitMsgFile)
 	require.NoError(t, err)
 
+	cpID, found := trailers.ParseCheckpoint(string(content))
+	assert.True(t, found, "agent-initiated revert should reuse an existing checkpoint trailer")
+	assert.Equal(t, testTrailerCheckpointID, cpID)
+}
+
+// TestShadowStrategy_PrepareCommitMsg_AgentRevertWithoutCheckpointIDSkipped verifies
+// that sequence-operation commits do not mint a fresh checkpoint ID when the
+// session has never condensed. That would create a dangling trailer because
+// PostCommit still skips condensation during the sequence operation.
+func TestShadowStrategy_PrepareCommitMsg_AgentRevertWithoutCheckpointIDSkipped(t *testing.T) {
+	dir := setupGitRepo(t)
+	t.Chdir(dir)
+	t.Setenv("ENTIRE_TEST_TTY", "1")
+
+	s := &ManualCommitStrategy{}
+
+	err := s.InitializeSession(context.Background(), "agent-revert-no-checkpoint", agent.AgentTypeClaudeCode, "", "revert the change", "")
+	require.NoError(t, err)
+
+	metaDir := filepath.Join(".entire", "metadata", "agent-revert-no-checkpoint")
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, metaDir), 0o755))
+	transcript := `{"type":"human","message":{"content":"revert the change"}}` + "\n" +
+		`{"type":"assistant","message":{"content":"I'll revert that"}}` + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, metaDir, "full.jsonl"), []byte(transcript), 0o644))
+
+	err = s.SaveStep(context.Background(), StepContext{
+		SessionID:     "agent-revert-no-checkpoint",
+		MetadataDir:   metaDir,
+		ModifiedFiles: []string{"test.txt"},
+		AgentType:     agent.AgentTypeClaudeCode,
+	})
+	require.NoError(t, err)
+
+	gitDir, err := GetGitDir(context.Background())
+	require.NoError(t, err)
+	revertHeadPath := filepath.Join(gitDir, "REVERT_HEAD")
+	require.NoError(t, os.WriteFile(revertHeadPath, []byte("fake-revert-head"), 0o644))
+	defer os.Remove(revertHeadPath)
+
+	commitMsgFile := filepath.Join(t.TempDir(), "COMMIT_EDITMSG")
+	originalMsg := "Revert \"add feature\"\n"
+	require.NoError(t, os.WriteFile(commitMsgFile, []byte(originalMsg), 0o644))
+
+	err = s.PrepareCommitMsg(context.Background(), commitMsgFile, "")
+	require.NoError(t, err)
+
+	content, err := os.ReadFile(commitMsgFile)
+	require.NoError(t, err)
+
 	_, found := trailers.ParseCheckpoint(string(content))
-	assert.True(t, found, "agent-initiated revert should get a checkpoint trailer")
+	assert.False(t, found, "sequence operations without LastCheckpointID should not get a new trailer")
+	assert.Equal(t, originalMsg, string(content))
 }
 
 // TestShadowStrategy_PrepareCommitMsg_UserRevertSkipped verifies that when a user
