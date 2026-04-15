@@ -27,7 +27,7 @@ With Entire, you can:
   - [Strategy](#strategy)
 - [Local Device Auth Testing](#local-device-auth-testing)
 - [Commands Reference](#commands-reference)
-- [Configuration](#configuration)
+- [Configure Entire](#configure-entire)
 - [Security & Privacy](#security--privacy)
 - [Troubleshooting](#troubleshooting)
 - [Development](#development)
@@ -258,7 +258,7 @@ entire enable --force
 entire enable --local
 ```
 
-## Configuration
+## Configure Entire
 
 Entire uses two configuration files in the `.entire/` directory:
 
