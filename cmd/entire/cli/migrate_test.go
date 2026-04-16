@@ -353,7 +353,7 @@ func TestMigrateCheckpointsGmeta_PreservesCombinedAttribution(t *testing.T) {
 	assert.Equal(t, combined.AgentLines, summary.CombinedAttribution.AgentLines)
 	assert.Equal(t, combined.AgentRemoved, summary.CombinedAttribution.AgentRemoved)
 	assert.Equal(t, combined.TotalLinesChanged, summary.CombinedAttribution.TotalLinesChanged)
-	assert.Equal(t, combined.AgentPercentage, summary.CombinedAttribution.AgentPercentage)
+	assert.InDelta(t, combined.AgentPercentage, summary.CombinedAttribution.AgentPercentage, 0.001)
 }
 
 func TestMigrateCheckpointsV2_CompactionSkipped(t *testing.T) {

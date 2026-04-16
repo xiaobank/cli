@@ -9,6 +9,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/redact"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -29,7 +30,7 @@ func TestGmetaStore_WriteCommitted_SingleSession(t *testing.T) {
 		SessionID:        "session-001",
 		Strategy:         "manual-commit",
 		Branch:           "main",
-		Transcript:       []byte(`{"type":"text","content":"hello"}`),
+		Transcript:       redact.AlreadyRedacted([]byte(`{"type":"text","content":"hello"}`)),
 		Prompts:          []string{"build a feature"},
 		FilesTouched:     []string{"src/foo.go", "src/bar.go"},
 		CheckpointsCount: 3,
@@ -115,7 +116,7 @@ func TestGmetaStore_WriteCommitted_MultiSession(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    "session-001",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"type":"text","content":"hello"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"text","content":"hello"}`)),
 		Prompts:      []string{"first prompt"},
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
@@ -128,7 +129,7 @@ func TestGmetaStore_WriteCommitted_MultiSession(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    "session-002",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"type":"text","content":"world"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"text","content":"world"}`)),
 		Prompts:      []string{"second prompt"},
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
@@ -180,7 +181,7 @@ func TestGmetaStore_UpdateCommitted(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    "session-001",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"type":"text","content":"initial"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"text","content":"initial"}`)),
 		Prompts:      []string{"initial prompt"},
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
@@ -192,7 +193,7 @@ func TestGmetaStore_UpdateCommitted(t *testing.T) {
 	err = store.UpdateCommitted(ctx, UpdateCommittedOptions{
 		CheckpointID: cpID,
 		SessionID:    "session-001",
-		Transcript:   []byte(`{"type":"text","content":"final complete transcript"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"text","content":"final complete transcript"}`)),
 		Prompts:      []string{"updated prompt"},
 		Agent:        agent.AgentTypeClaudeCode,
 	})
@@ -236,7 +237,7 @@ func TestGmetaStore_UpdateCommitted_NotFound(t *testing.T) {
 	err := store.UpdateCommitted(ctx, UpdateCommittedOptions{
 		CheckpointID: cpID,
 		SessionID:    "session-001",
-		Transcript:   []byte(`{"type":"text"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"text"}`)),
 		Agent:        agent.AgentTypeClaudeCode,
 	})
 	assert.ErrorIs(t, err, ErrCheckpointNotFound)
@@ -440,7 +441,7 @@ func TestGmetaStore_ReadCommitted_RoundTrip(t *testing.T) {
 		SessionID:        "session-001",
 		Strategy:         "manual-commit",
 		Branch:           "main",
-		Transcript:       []byte(`{"type":"text","content":"hello"}`),
+		Transcript:       redact.AlreadyRedacted([]byte(`{"type":"text","content":"hello"}`)),
 		Prompts:          []string{"build a feature"},
 		FilesTouched:     []string{"src/foo.go", "src/bar.go"},
 		CheckpointsCount: 3,
@@ -485,7 +486,7 @@ func TestGmetaStore_ReadSessionContent_RoundTrip(t *testing.T) {
 	ctx := context.Background()
 
 	cpID := id.MustCheckpointID("a3b2c4d5e6f7")
-	transcript := []byte(`{"type":"text","content":"hello world"}`)
+	transcript := redact.AlreadyRedacted([]byte(`{"type":"text","content":"hello world"}`))
 
 	err := store.WriteCommitted(ctx, WriteCommittedOptions{
 		CheckpointID:     cpID,
@@ -532,7 +533,7 @@ func TestGmetaStore_TokenUsage_RoundTrip(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    "session-001",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"type":"text","content":"hello"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"text","content":"hello"}`)),
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 		Agent:        agent.AgentTypeClaudeCode,
@@ -577,7 +578,7 @@ func TestGmetaStore_InitialAttribution_RoundTrip(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    "session-001",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"type":"text","content":"hello"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"text","content":"hello"}`)),
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 		InitialAttribution: &InitialAttribution{
@@ -606,7 +607,7 @@ func TestGmetaStore_InitialAttribution_RoundTrip(t *testing.T) {
 	assert.Equal(t, 1, content.Metadata.InitialAttribution.HumanRemoved)
 	assert.Equal(t, 15, content.Metadata.InitialAttribution.TotalCommitted)
 	assert.Equal(t, 22, content.Metadata.InitialAttribution.TotalLinesChanged)
-	assert.Equal(t, 68.2, content.Metadata.InitialAttribution.AgentPercentage)
+	assert.InDelta(t, 68.2, content.Metadata.InitialAttribution.AgentPercentage, 0.001)
 	assert.Equal(t, 2, content.Metadata.InitialAttribution.MetricVersion)
 }
 
@@ -622,7 +623,7 @@ func TestGmetaStore_UpdateCheckpointSummary_CombinedAttribution(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    "session-001",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"type":"text","content":"hello"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"text","content":"hello"}`)),
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	})
@@ -655,7 +656,7 @@ func TestGmetaStore_UpdateCheckpointSummary_CombinedAttribution(t *testing.T) {
 	assert.Equal(t, combined.HumanRemoved, summary.CombinedAttribution.HumanRemoved)
 	assert.Equal(t, combined.TotalCommitted, summary.CombinedAttribution.TotalCommitted)
 	assert.Equal(t, combined.TotalLinesChanged, summary.CombinedAttribution.TotalLinesChanged)
-	assert.Equal(t, combined.AgentPercentage, summary.CombinedAttribution.AgentPercentage)
+	assert.InDelta(t, combined.AgentPercentage, summary.CombinedAttribution.AgentPercentage, 0.001)
 	assert.Equal(t, combined.MetricVersion, summary.CombinedAttribution.MetricVersion)
 }
 
@@ -690,7 +691,7 @@ func TestGmetaStore_TokenUsage_MultiSession_Aggregated(t *testing.T) {
 			CheckpointID: cpID,
 			SessionID:    tc.sid,
 			Strategy:     "manual-commit",
-			Transcript:   []byte(`{"type":"text"}`),
+			Transcript:   redact.AlreadyRedacted([]byte(`{"type":"text"}`)),
 			AuthorName:   "Test",
 			AuthorEmail:  "test@test.com",
 			TokenUsage:   &agent.TokenUsage{InputTokens: tc.input, OutputTokens: 1000},
@@ -718,7 +719,7 @@ func TestGmetaStore_TokenUsage_Nil_WhenAbsent(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    "session-001",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"type":"text"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"text"}`)),
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	})
@@ -746,7 +747,7 @@ func TestGmetaStore_ReadSessionContent_NotFound(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    "session-001",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"type":"text"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"text"}`)),
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	})
@@ -769,7 +770,7 @@ func TestGmetaStore_GetSessionLog_RoundTrip(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    "session-001",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"type":"text","content":"log content"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"text","content":"log content"}`)),
 		Prompts:      []string{"do something"},
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
@@ -796,7 +797,7 @@ func TestGmetaStore_GetSessionLog_MultiSession_ReturnsLatest(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    "session-001",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"type":"text","content":"first"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"text","content":"first"}`)),
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	})
@@ -806,7 +807,7 @@ func TestGmetaStore_GetSessionLog_MultiSession_ReturnsLatest(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    "session-002",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"type":"text","content":"second"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"text","content":"second"}`)),
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	})
@@ -829,7 +830,7 @@ func TestGmetaStore_GetSessionLog_MultiSession_SameTimestampKeepsAppendOrder(t *
 		CheckpointID: cpID,
 		SessionID:    "session-zzz",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"type":"text","content":"first"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"text","content":"first"}`)),
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	}))
@@ -837,7 +838,7 @@ func TestGmetaStore_GetSessionLog_MultiSession_SameTimestampKeepsAppendOrder(t *
 		CheckpointID: cpID,
 		SessionID:    "session-aaa",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"type":"text","content":"second"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"text","content":"second"}`)),
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	}))
@@ -865,7 +866,7 @@ func TestGmetaStore_ReadCommitted_MultiSession(t *testing.T) {
 			CheckpointID: cpID,
 			SessionID:    sid,
 			Strategy:     "manual-commit",
-			Transcript:   []byte(`{"type":"text"}`),
+			Transcript:   redact.AlreadyRedacted([]byte(`{"type":"text"}`)),
 			AuthorName:   "Test",
 			AuthorEmail:  "test@test.com",
 		})

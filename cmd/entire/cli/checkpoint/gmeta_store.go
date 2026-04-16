@@ -3,6 +3,7 @@ package checkpoint
 import (
 	"context"
 	"crypto/sha1" //nolint:gosec // SHA-1 used per gmeta spec for fanout/set keys, not for security
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -99,7 +100,7 @@ func (s *GmetaStore) WriteCommitted(ctx context.Context, opts WriteCommittedOpti
 	s.addSessionIDToList(basePath, sessionID, entries)
 
 	// Build tree and commit
-	return s.commitEntries(refName, parentHash, rootTreeHash, targetPath, basePath, entries,
+	return s.commitEntries(ctx, refName, parentHash, rootTreeHash, targetPath, basePath, entries,
 		gmetaCommitMessage(len(entries)), opts.AuthorName, opts.AuthorEmail)
 }
 
@@ -131,7 +132,7 @@ func (s *GmetaStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOp
 	}
 
 	// Replace transcript
-	if len(opts.Transcript) > 0 {
+	if len(opts.Transcript.Bytes()) > 0 {
 		// Clear existing transcript list entries
 		listPrefix := sessionPath + "transcript/__list/"
 		for key := range entries {
@@ -139,7 +140,7 @@ func (s *GmetaStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOp
 				delete(entries, key)
 			}
 		}
-		if err := s.writeTranscriptList(ctx, opts.Transcript, opts.Agent, sessionPath, entries); err != nil {
+		if err := s.writeTranscriptList(ctx, opts.Transcript.Bytes(), opts.Agent, sessionPath, entries); err != nil {
 			return err
 		}
 	}
@@ -159,7 +160,7 @@ func (s *GmetaStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOp
 	}
 
 	authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
-	return s.commitEntries(refName, parentHash, rootTreeHash, targetPath, basePath, entries,
+	return s.commitEntries(ctx, refName, parentHash, rootTreeHash, targetPath, basePath, entries,
 		gmetaCommitMessage(len(entries)), authorName, authorEmail)
 }
 
@@ -182,14 +183,14 @@ func gmetaFanout(value string) string {
 func gmetaListEntryID(content []byte, offsetMs int) string {
 	ts := time.Now().UnixMilli() + int64(offsetMs)
 	h := sha1.Sum(content) //nolint:gosec // gmeta spec uses SHA-1 for content hash prefix
-	hashPrefix := fmt.Sprintf("%x", h[:])
+	hashPrefix := hex.EncodeToString(h[:])
 	return fmt.Sprintf("%d-%s", ts, hashPrefix[:5])
 }
 
 // gmetaSetEntryName returns the set entry filename: sha1(value).
 func gmetaSetEntryName(value string) string {
 	h := sha1.Sum([]byte(value)) //nolint:gosec // gmeta spec uses SHA-1 for set keys
-	return fmt.Sprintf("%x", h[:])
+	return hex.EncodeToString(h[:])
 }
 
 // writeCheckpointFields writes checkpoint-level gmeta entries (strategy, cli-version, branch, etc.).
@@ -258,16 +259,16 @@ func (s *GmetaStore) writeSessionEntries(ctx context.Context, opts WriteCommitte
 	}
 
 	// Transcript
-	transcript := opts.Transcript
-	if len(transcript) == 0 && opts.TranscriptPath != "" {
+	transcriptBytes := opts.Transcript.Bytes()
+	if len(transcriptBytes) == 0 && opts.TranscriptPath != "" {
 		var readErr error
-		transcript, readErr = os.ReadFile(opts.TranscriptPath)
+		transcriptBytes, readErr = os.ReadFile(opts.TranscriptPath)
 		if readErr != nil {
-			transcript = nil
+			transcriptBytes = nil
 		}
 	}
-	if len(transcript) > 0 {
-		if err := s.writeTranscriptList(ctx, transcript, opts.Agent, sessionPath, entries); err != nil {
+	if len(transcriptBytes) > 0 {
+		if err := s.writeTranscriptList(ctx, transcriptBytes, opts.Agent, sessionPath, entries); err != nil {
 			return err
 		}
 	}
@@ -416,14 +417,14 @@ func (s *GmetaStore) writeTaskEntries(ctx context.Context, opts WriteCommittedOp
 		// Incremental task checkpoint: append the full checkpoint envelope to incremental/__list/
 		redactedData, err := redact.JSONLBytes(opts.IncrementalData)
 		if err != nil {
-			redactedData = redact.Bytes(opts.IncrementalData)
+			redactedData = redact.AlreadyRedacted(redact.Bytes(opts.IncrementalData))
 		}
 
 		checkpoint := incrementalCheckpointData{
 			Type:      opts.IncrementalType,
 			ToolUseID: opts.ToolUseID,
 			Timestamp: time.Now().UTC(),
-			Data:      json.RawMessage(redactedData),
+			Data:      json.RawMessage(redactedData.Bytes()),
 		}
 		checkpointData, err := json.Marshal(checkpoint)
 		if err != nil {
@@ -462,11 +463,14 @@ func (s *GmetaStore) writeTaskEntries(ctx context.Context, opts WriteCommittedOp
 			)
 		} else if len(transcriptData) > 0 {
 			redacted, redactErr := redact.JSONLBytes(transcriptData)
+			var redactedBytes []byte
 			if redactErr != nil {
-				redacted = redact.Bytes(transcriptData)
+				redactedBytes = redact.Bytes(transcriptData)
+			} else {
+				redactedBytes = redacted.Bytes()
 			}
 
-			chunks, chunkErr := agent.ChunkTranscript(ctx, redacted, opts.Agent)
+			chunks, chunkErr := agent.ChunkTranscript(ctx, redactedBytes, opts.Agent)
 			if chunkErr != nil {
 				return fmt.Errorf("failed to chunk subagent transcript: %w", chunkErr)
 			}
@@ -496,7 +500,7 @@ func (s *GmetaStore) writeTranscriptList(ctx context.Context, transcript []byte,
 		return fmt.Errorf("failed to redact transcript: %w", err)
 	}
 
-	chunks, err := agent.ChunkTranscript(ctx, redacted, agentType)
+	chunks, err := agent.ChunkTranscript(ctx, redacted.Bytes(), agentType)
 	if err != nil {
 		return fmt.Errorf("failed to chunk transcript: %w", err)
 	}
@@ -625,7 +629,7 @@ func (s *GmetaStore) flattenTargetEntries(rootTreeHash plumbing.Hash, targetPath
 // commitEntries builds a tree from entries, splices it into the root, and commits.
 // targetPath is like "change-id/a3/a3b2c4d5e6f7" (no trailing slash).
 // basePath is targetPath + "/" (with trailing slash).
-func (s *GmetaStore) commitEntries(refName plumbing.ReferenceName, parentHash, rootTreeHash plumbing.Hash, targetPath, basePath string, entries map[string]object.TreeEntry, message, authorName, authorEmail string) error {
+func (s *GmetaStore) commitEntries(ctx context.Context, refName plumbing.ReferenceName, parentHash, rootTreeHash plumbing.Hash, targetPath, basePath string, entries map[string]object.TreeEntry, message, authorName, authorEmail string) error {
 	// Convert entries to relative paths (strip basePath prefix)
 	relEntries := make(map[string]object.TreeEntry, len(entries))
 	for path, entry := range entries {
@@ -637,7 +641,7 @@ func (s *GmetaStore) commitEntries(refName plumbing.ReferenceName, parentHash, r
 	}
 
 	// Build the target subtree from relative entries
-	targetTreeHash, err := BuildTreeFromEntries(s.repo, relEntries)
+	targetTreeHash, err := BuildTreeFromEntries(ctx, s.repo, relEntries)
 	if err != nil {
 		return fmt.Errorf("failed to build gmeta subtree: %w", err)
 	}
@@ -955,7 +959,7 @@ func (s *GmetaStore) UpdateCheckpointSummary(ctx context.Context, checkpointID i
 	}
 
 	authorName, authorEmail := GetGitAuthorFromRepo(s.repo)
-	return s.commitEntries(refName, parentHash, rootTreeHash, targetPath, basePath, entries,
+	return s.commitEntries(ctx, refName, parentHash, rootTreeHash, targetPath, basePath, entries,
 		gmetaCommitMessage(len(entries)), authorName, authorEmail)
 }
 
@@ -986,13 +990,6 @@ func readGmetaSetValues(repo *git.Repository, tree *object.Tree, key string) []s
 		}
 		_ = reader.Close()
 	}
-	return values
-}
-
-// readGmetaListValues reads all string values from <key>/__list/ in a tree.
-// Order is tree-entry order, which is sufficient for unordered lists.
-func readGmetaListValues(repo *git.Repository, tree *object.Tree, key string) []string {
-	values, _ := readGmetaListValuesWithEntryNames(repo, tree, key)
 	return values
 }
 

@@ -3,6 +3,7 @@ package checkpoint
 import (
 	"context"
 	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/redact"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -52,7 +54,7 @@ func TestGmetaInterop_TreeLayout(t *testing.T) {
 		SessionID:        sessionID,
 		Strategy:         "manual-commit",
 		Branch:           "main",
-		Transcript:       []byte(`{"role":"assistant","content":"Hello world"}`),
+		Transcript:       redact.AlreadyRedacted([]byte(`{"role":"assistant","content":"Hello world"}`)),
 		Prompts:          []string{"Build a feature"},
 		FilesTouched:     []string{"src/foo.go", "src/bar.go"},
 		CheckpointsCount: 3,
@@ -116,7 +118,7 @@ func TestGmetaInterop_TreeLayout(t *testing.T) {
 
 		// Verify filename = sha1(content)
 		h := sha1.Sum([]byte(content))
-		expectedName := fmt.Sprintf("%x", h[:])
+		expectedName := hex.EncodeToString(h[:])
 		assert.Equal(t, expectedName, filename,
 			"set entry name should be sha1(%q)", content)
 	}
@@ -185,7 +187,7 @@ func TestGmetaInterop_MultiSession(t *testing.T) {
 			CheckpointID: cpID,
 			SessionID:    sid,
 			Strategy:     "manual-commit",
-			Transcript:   []byte(`{"content":"hello from ` + sid + `"}`),
+			Transcript:   redact.AlreadyRedacted([]byte(`{"content":"hello from ` + sid + `"}`)),
 			Prompts:      []string{"prompt for " + sid},
 			AuthorName:   "Test",
 			AuthorEmail:  "test@test.com",
@@ -290,7 +292,7 @@ func TestGmetaInterop_RustCLI(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    sessionID,
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"role":"assistant","content":"Hello"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"role":"assistant","content":"Hello"}`)),
 		Prompts:      []string{"Test prompt"},
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
