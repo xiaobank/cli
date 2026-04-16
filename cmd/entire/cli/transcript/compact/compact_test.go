@@ -52,7 +52,7 @@ func TestCompact_AssistantStripping(t *testing.T) {
 `)
 
 	expected := []string{
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:00:01Z","id":"msg-1","content":[{"type":"text","text":"Here's my answer."},{"type":"tool_use","id":"tu-1","name":"Bash","input":{"command":"ls"}},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"abc"}}]}`,
+		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:00:01Z","id":"msg-1","content":[{"thinking":"hmm...","type":"thinking"},{"type":"text","text":"Here's my answer."},{"type":"tool_use","id":"tu-1","name":"Bash","input":{"command":"ls"}},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"abc"}}]}`,
 	}
 
 	result, err := Compact(redact.AlreadyRedacted(input), defaultOpts)
@@ -65,16 +65,18 @@ func TestCompact_AssistantStripping(t *testing.T) {
 func TestCompact_AssistantThinkingOnly(t *testing.T) {
 	t.Parallel()
 
-	// Assistant lines with only thinking content should be dropped entirely
-	// (streaming intermediates that carry no user-visible content).
 	input := []byte(`{"type":"assistant","timestamp":"2026-01-01T00:00:01Z","requestId":"req-1","message":{"id":"msg-1","content":[{"type":"thinking","thinking":"hmm..."}]}}
 `)
+
+	expected := []string{
+		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:00:01Z","id":"msg-1","content":[{"thinking":"hmm...","type":"thinking"}]}`,
+	}
 
 	result, err := Compact(redact.AlreadyRedacted(input), defaultOpts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	assertJSONLines(t, result, nil)
+	assertJSONLines(t, result, expected)
 }
 
 func TestCompact_UserWithToolResult(t *testing.T) {
@@ -217,7 +219,7 @@ func TestCompact_StreamingFragmentTokenMerge(t *testing.T) {
 `)
 
 	expected := []string{
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"t2","id":"m1","input_tokens":100,"output_tokens":42,"content":[{"type":"text","text":"done"}]}`,
+		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"t2","id":"m1","input_tokens":100,"output_tokens":42,"content":[{"thinking":"hmm","type":"thinking"},{"type":"text","text":"done"}]}`,
 	}
 
 	result, err := Compact(redact.AlreadyRedacted(input), defaultOpts)
@@ -366,7 +368,7 @@ func TestCompact_FullFixture_WithTruncation(t *testing.T) {
 	// to inline into, so user text is emitted and tool result is lost.
 	expected := []string{
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"2026-01-01T00:01:00Z","content":[{"text":"now fix the bug"}]}`,
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:01:01Z","id":"msg-2","content":[{"type":"text","text":"I found the issue."},{"type":"tool_use","id":"tu-2","name":"Edit","input":{"file_path":"/repo/bug.go","old_string":"bad","new_string":"good"}}]}`,
+		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:01:01Z","id":"msg-2","content":[{"thinking":"analyzing the bug...","type":"thinking"},{"type":"text","text":"I found the issue."},{"type":"tool_use","id":"tu-2","name":"Edit","input":{"file_path":"/repo/bug.go","old_string":"bad","new_string":"good"}}]}`,
 	}
 
 	result, err := Compact(redact.AlreadyRedacted([]byte(fixtureFullJSONL)), opts)
@@ -382,13 +384,13 @@ func TestCompact_FullFixture_NoTruncation(t *testing.T) {
 	expected := []string{
 		// Line 0: user "hello"
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"2026-01-01T00:00:00Z","content":[{"text":"hello"}]}`,
-		// Line 1: assistant (thinking stripped, caller stripped, tool result inlined from line 3 with file metadata)
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:00:01Z","id":"msg-1","content":[{"type":"text","text":"Hi there!"},{"type":"tool_use","id":"tu-1","name":"Bash","input":{"command":"ls"},"result":{"output":"file1.txt\nfile2.txt","status":"success","file":{"filePath":"/repo/file1.txt","numLines":10}}}]}`,
+		// Line 1: assistant (thinking preserved, caller stripped, tool result inlined from line 3 with file metadata)
+		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:00:01Z","id":"msg-1","content":[{"thinking":"let me think...","type":"thinking"},{"type":"text","text":"Hi there!"},{"type":"tool_use","id":"tu-1","name":"Bash","input":{"command":"ls"},"result":{"output":"file1.txt\nfile2.txt","status":"success","file":{"filePath":"/repo/file1.txt","numLines":10}}}]}`,
 		// Line 2: progress — dropped
 		// Line 3: user with tool_result — inlined above, user text emitted
 		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"user","ts":"2026-01-01T00:01:00Z","content":[{"text":"now fix the bug"}]}`,
-		// Line 4: assistant (thinking + redacted_thinking stripped)
-		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:01:01Z","id":"msg-2","content":[{"type":"text","text":"I found the issue."},{"type":"tool_use","id":"tu-2","name":"Edit","input":{"file_path":"/repo/bug.go","old_string":"bad","new_string":"good"}}]}`,
+		// Line 4: assistant (thinking preserved, redacted_thinking stripped)
+		`{"v":1,"agent":"claude-code","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:01:01Z","id":"msg-2","content":[{"thinking":"analyzing the bug...","type":"thinking"},{"type":"text","text":"I found the issue."},{"type":"tool_use","id":"tu-2","name":"Edit","input":{"file_path":"/repo/bug.go","old_string":"bad","new_string":"good"}}]}`,
 		// Lines 5-6: file-history-snapshot, system — dropped
 	}
 

@@ -176,9 +176,10 @@ func compactJSONL(content []byte, opts MetadataFields) ([]byte, error) {
 
 func compactJSONLWith(content []byte, opts MetadataFields, preprocess linePreprocessor) ([]byte, error) {
 	base := newTranscriptLine(opts)
+	preserveThinking := opts.Agent == "claude-code"
 
 	// Pass 1: parse all lines into intermediate entries.
-	entries, err := parseJSONLEntries(content, preprocess)
+	entries, err := parseJSONLEntries(content, preprocess, preserveThinking)
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +284,7 @@ func appendLine(result *[]byte, line transcriptLine) {
 
 // parseJSONLEntries parses all JSONL lines into intermediate entries,
 // filtering dropped types and malformed lines.
-func parseJSONLEntries(content []byte, preprocess linePreprocessor) ([]parsedEntry, error) {
+func parseJSONLEntries(content []byte, preprocess linePreprocessor, preserveThinking bool) ([]parsedEntry, error) {
 	reader := bufio.NewReader(bytes.NewReader(content))
 	var entries []parsedEntry
 
@@ -294,7 +295,7 @@ func parseJSONLEntries(content []byte, preprocess linePreprocessor) ([]parsedEnt
 		}
 
 		if len(bytes.TrimSpace(lineBytes)) > 0 {
-			if e, ok := parseLine(lineBytes, preprocess); ok {
+			if e, ok := parseLine(lineBytes, preprocess, preserveThinking); ok {
 				entries = append(entries, e)
 			}
 		}
@@ -309,7 +310,7 @@ func parseJSONLEntries(content []byte, preprocess linePreprocessor) ([]parsedEnt
 
 // parseLine converts a single JSONL line into a parsedEntry.
 // Returns ok=false for dropped/malformed lines.
-func parseLine(lineBytes []byte, preprocess linePreprocessor) (parsedEntry, bool) {
+func parseLine(lineBytes []byte, preprocess linePreprocessor, preserveThinking bool) (parsedEntry, bool) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(lineBytes, &raw); err != nil {
 		return parsedEntry{}, false
@@ -336,7 +337,7 @@ func parseLine(lineBytes []byte, preprocess linePreprocessor) (parsedEntry, bool
 		if msg != nil {
 			e.id = unquote(msg["id"])
 			if contentRaw, ok := msg["content"]; ok {
-				e.content = stripAssistantContent(contentRaw)
+				e.content = stripAssistantContent(contentRaw, preserveThinking)
 			}
 			e.inputTokens, e.outputTokens = extractUsageTokens(msg)
 		}
@@ -620,7 +621,7 @@ func extractUserContent(contentRaw json.RawMessage) userContent {
 	return uc
 }
 
-func stripAssistantContent(contentRaw json.RawMessage) json.RawMessage {
+func stripAssistantContent(contentRaw json.RawMessage, preserveThinking bool) json.RawMessage {
 	var str string
 	if json.Unmarshal(contentRaw, &str) == nil {
 		return contentRaw
@@ -635,7 +636,19 @@ func stripAssistantContent(contentRaw json.RawMessage) json.RawMessage {
 	for _, block := range blocks {
 		blockType := unquote(block["type"])
 
-		if blockType == "thinking" || blockType == "redacted_thinking" {
+		if blockType == "redacted_thinking" {
+			continue
+		}
+
+		if preserveThinking && blockType == "thinking" {
+			stripped := make(map[string]json.RawMessage)
+			copyField(stripped, block, "type")
+			copyField(stripped, block, "thinking")
+			result = append(result, stripped)
+			continue
+		}
+
+		if blockType == "thinking" {
 			continue
 		}
 
