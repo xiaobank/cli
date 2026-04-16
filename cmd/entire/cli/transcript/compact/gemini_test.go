@@ -61,6 +61,34 @@ func TestCompact_GeminiStartLine(t *testing.T) {
 	})
 }
 
+func TestCompact_GeminiThoughtOnlyAssistant(t *testing.T) {
+	t.Parallel()
+
+	input := []byte(`{
+		"sessionId": "s1",
+		"messages": [
+			{
+				"id":"m1",
+				"timestamp":"2026-01-01T00:00:01Z",
+				"type":"gemini",
+				"content":"",
+				"thoughts":[{"subject":"Planning","description":"I should inspect the project first."}],
+				"tokens":{"input":10,"output":5}
+			}
+		]
+	}`)
+
+	expected := []string{
+		`{"v":1,"agent":"gemini-cli","cli_version":"0.5.1","type":"assistant","ts":"2026-01-01T00:00:01Z","id":"m1","input_tokens":10,"output_tokens":5,"content":[{"thinking":"Planning\n\nI should inspect the project first.","type":"thinking"}]}`,
+	}
+
+	result, err := Compact(redact.AlreadyRedacted(input), agentOpts("gemini-cli"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	assertJSONLines(t, result, expected)
+}
+
 func TestIsGeminiFormat(t *testing.T) {
 	t.Parallel()
 

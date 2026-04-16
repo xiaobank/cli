@@ -56,8 +56,14 @@ type geminiMessage struct {
 	Timestamp string           `json:"timestamp"`
 	Type      string           `json:"type"`
 	Content   json.RawMessage  `json:"content"`
+	Thoughts  []geminiThought   `json:"thoughts"`
 	ToolCalls []geminiToolCall `json:"toolCalls"`
 	Tokens    *geminiTokens    `json:"tokens"`
+}
+
+type geminiThought struct {
+	Subject     string `json:"subject"`
+	Description string `json:"description"`
 }
 
 // geminiTokens holds token usage from a Gemini message.
@@ -152,7 +158,28 @@ func emitGeminiUser(result *[]byte, base transcriptLine, msg geminiMessage, ts j
 // emitGeminiAssistant produces a single assistant line. The content array
 // contains text blocks (from content field) and tool_use blocks (from toolCalls).
 func emitGeminiAssistant(result *[]byte, base transcriptLine, msg geminiMessage, ts json.RawMessage) {
-	content := make([]map[string]json.RawMessage, 0, 1+len(msg.ToolCalls))
+	content := make([]map[string]json.RawMessage, 0, len(msg.Thoughts)+1+len(msg.ToolCalls))
+
+	for _, thought := range msg.Thoughts {
+		thinkingText := geminiThoughtText(thought)
+		if thinkingText == "" {
+			continue
+		}
+
+		blockType, err := json.Marshal("thinking")
+		if err != nil {
+			continue
+		}
+		thinking, err := json.Marshal(thinkingText)
+		if err != nil {
+			continue
+		}
+
+		content = append(content, map[string]json.RawMessage{
+			"type":     blockType,
+			"thinking": thinking,
+		})
+	}
 
 	if contentText := geminiContentText(msg.Content); contentText != "" {
 		b, err := json.Marshal(transcript.ContentTypeText)
@@ -212,6 +239,22 @@ func emitGeminiAssistant(result *[]byte, base transcriptLine, msg geminiMessage,
 		line.OutputTokens = msg.Tokens.Output
 	}
 	appendLine(result, line)
+}
+
+func geminiThoughtText(thought geminiThought) string {
+	subject := strings.TrimSpace(thought.Subject)
+	description := strings.TrimSpace(thought.Description)
+
+	switch {
+	case subject != "" && description != "":
+		return subject + "\n\n" + description
+	case description != "":
+		return description
+	case subject != "":
+		return subject
+	default:
+		return ""
+	}
 }
 
 // geminiContentText extracts the text from a Gemini content field which may
