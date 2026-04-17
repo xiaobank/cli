@@ -5,11 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
+	"github.com/entireio/cli/cmd/entire/cli/logging"
 )
 
 // GenerateTextStreaming runs the Claude CLI in stream-json mode, dispatches
@@ -54,8 +57,29 @@ func (c *ClaudeCodeAgent) GenerateTextStreaming(
 		return "", fmt.Errorf("claude stream start: %w", err)
 	}
 
-	final, parseErr := streamClaudeResponse(stdout, makeProgressDispatcher(progress))
+	final, malformed, parseErr := streamClaudeResponse(stdout, makeProgressDispatcher(progress))
+	// Drain any unread stdout so the subprocess can exit cleanly even if the
+	// scanner aborted early (e.g. bufio.ErrTooLong on an oversized line).
+	// Without this, a blocked pipe would deadlock cmd.Wait() in interactive
+	// mode, which has no deadline. The copy error is intentionally discarded —
+	// stdout is about to be closed anyway.
+	if _, drainErr := io.Copy(io.Discard, stdout); drainErr != nil {
+		logging.Debug(ctx, "draining claude stream stdout", slog.String("error", drainErr.Error()))
+	}
 	waitErr := cmd.Wait()
+
+	if malformed > 0 {
+		logging.Warn(ctx, "skipped malformed claude stream lines",
+			slog.Int("count", malformed))
+	}
+
+	// A specific envelope error outranks a generic ctx-cancel message: if
+	// the stream produced an is_error result just before cancellation, the
+	// user deserves the specific cause (auth, rate-limit, etc.) rather than
+	// "canceled".
+	if final != nil && final.IsError {
+		return "", envelopeErrorMessage(final)
+	}
 
 	// Context errors pass through as sentinels so callers can use errors.Is.
 	if ctx.Err() != nil {
@@ -66,27 +90,17 @@ func (c *ClaudeCodeAgent) GenerateTextStreaming(
 	}
 
 	if final != nil {
-		if !final.IsError {
-			if final.Result == nil {
-				return "", errors.New("claude returned empty result")
-			}
-			if progress != nil {
-				progress(agent.GenerationProgress{
-					Phase:        agent.PhaseDone,
-					OutputTokens: outputTokensFromUsage(final.Usage),
-					DurationMs:   final.DurationMs,
-				})
-			}
-			return *final.Result, nil
+		if final.Result == nil {
+			return "", errors.New("claude returned empty result")
 		}
-		msg := "claude CLI reported error"
-		if final.Result != nil && *final.Result != "" {
-			msg = fmt.Sprintf("%s: %s", msg, *final.Result)
+		if progress != nil {
+			progress(agent.GenerationProgress{
+				Phase:        agent.PhaseDone,
+				OutputTokens: outputTokensFromUsage(final.Usage),
+				DurationMs:   final.DurationMs,
+			})
 		}
-		if final.APIErrorStatus != nil {
-			msg = fmt.Sprintf("%s (HTTP %d)", msg, *final.APIErrorStatus)
-		}
-		return "", errors.New(msg)
+		return *final.Result, nil
 	}
 
 	// No envelope: check if the CLI rejected streaming flags (older version).
@@ -94,6 +108,8 @@ func (c *ClaudeCodeAgent) GenerateTextStreaming(
 	if waitErr != nil {
 		stderrStr := stderr.String()
 		if looksLikeUnrecognizedFlag(stderrStr) {
+			logging.Warn(ctx, "claude CLI rejected stream-json flags; falling back to non-streaming (no progress output)",
+				slog.String("stderr", strings.TrimSpace(stderrStr)))
 			return c.GenerateText(ctx, prompt, model)
 		}
 		if stderrStr != "" {
@@ -108,16 +124,29 @@ func (c *ClaudeCodeAgent) GenerateTextStreaming(
 	return "", errors.New("claude exited without producing a result")
 }
 
+// envelopeErrorMessage formats an is_error result envelope as a user-facing
+// error. Preserves the CLI's result text and HTTP status when present.
+func envelopeErrorMessage(final *streamEvent) error {
+	msg := "claude CLI reported error"
+	if final.Result != nil && *final.Result != "" {
+		msg = fmt.Sprintf("%s: %s", msg, *final.Result)
+	}
+	if final.APIErrorStatus != nil {
+		msg = fmt.Sprintf("%s (HTTP %d)", msg, *final.APIErrorStatus)
+	}
+	return errors.New(msg)
+}
+
 // makeProgressDispatcher returns a per-event handler that translates raw
 // stream events into agent.GenerationProgress callbacks. PhaseDone is
 // emitted by GenerateTextStreaming after cmd.Wait, because it needs data
 // from the parsed final envelope (OutputTokens, DurationMs).
-func makeProgressDispatcher(progress agent.ProgressFn) func(StreamEvent) {
+func makeProgressDispatcher(progress agent.ProgressFn) func(streamEvent) {
 	if progress == nil {
-		return func(StreamEvent) {} // no-op: drain events
+		return func(streamEvent) {} // progress disabled; scanner itself reads the stream
 	}
 	var outputTokensEstimate int
-	return func(ev StreamEvent) {
+	return func(ev streamEvent) {
 		switch {
 		case ev.Type == "system" && ev.Subtype == "status" && ev.Status == "requesting":
 			progress(agent.GenerationProgress{Phase: agent.PhaseConnecting})

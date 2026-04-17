@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
 )
@@ -80,7 +81,7 @@ func TestGenerateTextStreaming_FallsBackToLegacy(t *testing.T) {
 	}
 }
 
-func TestGenerateTextStreaming_ContextDeadlineExceededPassesThrough(t *testing.T) {
+func TestGenerateTextStreaming_ContextCanceledPassesThrough(t *testing.T) {
 	t.Parallel()
 	ag := &ClaudeCodeAgent{
 		CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
@@ -92,6 +93,47 @@ func TestGenerateTextStreaming_ContextDeadlineExceededPassesThrough(t *testing.T
 	_, err := ag.GenerateTextStreaming(ctx, "p", "", nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("err = %v; want context.Canceled", err)
+	}
+}
+
+func TestGenerateTextStreaming_ContextDeadlineExceededPassesThrough(t *testing.T) {
+	t.Parallel()
+	ag := &ClaudeCodeAgent{
+		CommandRunner: func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+			return exec.CommandContext(ctx, "sh", "-c", "sleep 5")
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	_, err := ag.GenerateTextStreaming(ctx, "p", "", nil)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v; want context.DeadlineExceeded", err)
+	}
+}
+
+func TestGenerateTextStreaming_EnvelopeErrorBeatsCtxCancel(t *testing.T) {
+	t.Parallel()
+	// A specific envelope error should be preserved even if ctx was canceled
+	// after the result event arrived — otherwise users see generic "canceled"
+	// instead of the specific failure (auth / rate-limit / HTTP 401 / etc.).
+	body := `{"type":"result","subtype":"success","is_error":true,"api_error_status":401,"result":"Auth required"}`
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // parent ctx is dead before the call
+	ag := &ClaudeCodeAgent{
+		CommandRunner: func(_ context.Context, _ string, _ ...string) *exec.Cmd {
+			// Detach the subprocess from the canceled parent ctx so cmd.Start
+			// and the scan-to-EOF complete, letting us exercise the
+			// "envelope-present but ctx.Err() != nil" branch.
+			return exec.CommandContext(context.Background(), "sh", "-c",
+				"cat <<'ENDOFSTREAM'\n"+body+"\nENDOFSTREAM")
+		},
+	}
+	_, err := ag.GenerateTextStreaming(ctx, "p", "", nil)
+	if err == nil {
+		t.Fatal("err = nil; want envelope error surfaced despite cancellation")
+	}
+	if !strings.Contains(err.Error(), "Auth required") {
+		t.Errorf("err = %q; want envelope result text preserved over cancellation", err)
 	}
 }
 

@@ -81,7 +81,7 @@ func TestStreamClaudeResponse_SuccessFixture(t *testing.T) {
 		t.Fatalf("read fixture: %v", err)
 	}
 	var phases []string
-	final, err := streamClaudeResponse(bytes.NewReader(raw), func(ev StreamEvent) {
+	final, _, err := streamClaudeResponse(bytes.NewReader(raw), func(ev streamEvent) {
 		phases = append(phases, ev.Type+"/"+ev.Subtype+"/"+ev.Status)
 	})
 	if err != nil {
@@ -111,7 +111,7 @@ func TestStreamClaudeResponse_ErrorFixture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}
-	final, err := streamClaudeResponse(bytes.NewReader(raw), nil)
+	final, _, err := streamClaudeResponse(bytes.NewReader(raw), nil)
 	if err != nil {
 		t.Fatalf("streamClaudeResponse error = %v; want nil (parsing succeeded)", err)
 	}
@@ -133,19 +133,22 @@ func TestStreamClaudeResponse_SkipsMalformedLine(t *testing.T) {
 		`not valid json at all`,
 		`{"type":"result","subtype":"success","is_error":false,"result":"ok"}`,
 	}, "\n")
-	final, err := streamClaudeResponse(strings.NewReader(body), nil)
+	final, malformed, err := streamClaudeResponse(strings.NewReader(body), nil)
 	if err != nil {
 		t.Fatalf("err = %v; want nil (malformed lines skipped)", err)
 	}
 	if final == nil || final.Result == nil || *final.Result != "ok" {
 		t.Errorf("final.Result = %v; want \"ok\"", final.Result)
 	}
+	if malformed != 1 {
+		t.Errorf("malformed = %d; want 1 (one invalid line)", malformed)
+	}
 }
 
 func TestStreamClaudeResponse_NoFinalEvent(t *testing.T) {
 	t.Parallel()
 	body := `{"type":"system","subtype":"init"}`
-	final, err := streamClaudeResponse(strings.NewReader(body), nil)
+	final, _, err := streamClaudeResponse(strings.NewReader(body), nil)
 	if final != nil {
 		t.Errorf("final = %v; want nil when stream has no result event", final)
 	}
@@ -157,7 +160,7 @@ func TestStreamClaudeResponse_NoFinalEvent(t *testing.T) {
 func TestStreamClaudeResponse_ReaderError(t *testing.T) {
 	t.Parallel()
 	r := errReader{err: errors.New("boom")}
-	if _, err := streamClaudeResponse(r, nil); err == nil {
+	if _, _, err := streamClaudeResponse(r, nil); err == nil {
 		t.Error("err = nil; want propagated reader error")
 	}
 }

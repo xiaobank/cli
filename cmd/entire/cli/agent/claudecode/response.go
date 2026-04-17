@@ -40,13 +40,13 @@ func parseGenerateTextResponse(stdout []byte) (string, error) {
 // so we lift the default scanner limit substantially.
 const streamBufferMax = 4 * 1024 * 1024 // 4 MiB
 
-// StreamEvent represents one decoded line from the stream-json NDJSON output.
+// streamEvent represents one decoded line from the stream-json NDJSON output.
 // Fields are populated based on the event Type/Subtype.
-type StreamEvent struct {
+type streamEvent struct {
 	Type    string           `json:"type"`
 	Subtype string           `json:"subtype"`
 	Status  string           `json:"status"` // e.g. "requesting" for type=system,subtype=status
-	Event   StreamInnerEvent `json:"event"`  // for type=stream_event
+	Event   streamInnerEvent `json:"event"`  // for type=stream_event
 
 	// Fields populated for type=result.
 	IsError        bool          `json:"is_error"`
@@ -57,42 +57,42 @@ type StreamEvent struct {
 	Usage          *messageUsage `json:"usage"`
 }
 
-// StreamInnerEvent holds the nested "event" payload for type=stream_event.
-type StreamInnerEvent struct {
+// streamInnerEvent holds the nested "event" payload for type=stream_event.
+type streamInnerEvent struct {
 	Type    string         `json:"type"` // "message_start" | "content_block_delta" | "message_delta" | ...
-	Delta   *StreamDelta   `json:"delta,omitempty"`
-	Message *StreamMessage `json:"message,omitempty"`
+	Delta   *streamDelta   `json:"delta,omitempty"`
+	Message *streamMessage `json:"message,omitempty"`
 }
 
-// StreamDelta carries the content-block delta payload.
-type StreamDelta struct {
+// streamDelta carries the content-block delta payload.
+type streamDelta struct {
 	Type     string `json:"type"` // "text_delta" | "thinking_delta" | ...
 	Text     string `json:"text,omitempty"`
 	Thinking string `json:"thinking,omitempty"`
 }
 
-// StreamMessage is the partial-message payload on message_start. Only the
+// streamMessage is the partial-message payload on message_start. Only the
 // usage field is currently consumed by callers; other fields are ignored.
-type StreamMessage struct {
+type streamMessage struct {
 	Usage *messageUsage `json:"usage,omitempty"`
 }
 
 // streamClaudeResponse reads NDJSON-encoded events from r, invokes onEvent
 // for every successfully decoded event, and returns the final result event
-// once the stream ends. Malformed lines are skipped silently to keep the
-// stream resilient against single-line corruption. If the stream ends
-// without ever producing a result event, returns (nil, error).
-func streamClaudeResponse(r io.Reader, onEvent func(StreamEvent)) (*StreamEvent, error) {
+// once the stream ends. Malformed lines are skipped to keep the stream
+// resilient against single-line corruption; the count is returned so callers
+// can log schema drift even on otherwise-successful runs.
+func streamClaudeResponse(r io.Reader, onEvent func(streamEvent)) (*streamEvent, int, error) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 64*1024), streamBufferMax)
-	var final *StreamEvent
+	var final *streamEvent
 	var malformedLines int
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue
 		}
-		var ev StreamEvent
+		var ev streamEvent
 		if err := json.Unmarshal(line, &ev); err != nil {
 			malformedLines++
 			continue // best-effort: skip and keep streaming
@@ -106,13 +106,13 @@ func streamClaudeResponse(r io.Reader, onEvent func(StreamEvent)) (*StreamEvent,
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("reading claude stream: %w", err)
+		return nil, malformedLines, fmt.Errorf("reading claude stream: %w", err)
 	}
 	if final == nil {
 		if malformedLines > 0 {
-			return nil, fmt.Errorf("claude stream ended without a result event (%d malformed lines skipped)", malformedLines)
+			return nil, malformedLines, fmt.Errorf("claude stream ended without a result event (%d malformed lines skipped)", malformedLines)
 		}
-		return nil, errors.New("claude stream ended without a result event")
+		return nil, 0, errors.New("claude stream ended without a result event")
 	}
-	return final, nil
+	return final, malformedLines, nil
 }
