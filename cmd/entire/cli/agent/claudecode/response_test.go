@@ -1,6 +1,9 @@
 package claudecode
 
 import (
+	"bytes"
+	"errors"
+	"os"
 	"strings"
 	"testing"
 )
@@ -70,3 +73,95 @@ func TestParseGenerateTextResponse(t *testing.T) {
 		})
 	}
 }
+
+func TestStreamClaudeResponse_SuccessFixture(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile("testdata/stream_success.jsonl")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	var phases []string
+	final, err := streamClaudeResponse(bytes.NewReader(raw), func(ev StreamEvent) {
+		phases = append(phases, ev.Type+"/"+ev.Subtype+"/"+ev.Status)
+	})
+	if err != nil {
+		t.Fatalf("streamClaudeResponse error = %v; want nil", err)
+	}
+	if final == nil {
+		t.Fatal("final event = nil; want result envelope")
+	}
+	const wantType = "result"
+	if final.Type != wantType {
+		t.Errorf("final.Type = %q; want %q", final.Type, wantType)
+	}
+	if final.IsError {
+		t.Errorf("final.IsError = true; want false for success fixture")
+	}
+	if final.Result == nil || *final.Result == "" {
+		t.Error("final.Result = nil/empty; want non-empty result string")
+	}
+	if len(phases) < 3 {
+		t.Errorf("observed %d events; want >= 3 phases", len(phases))
+	}
+}
+
+func TestStreamClaudeResponse_ErrorFixture(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile("testdata/stream_error_404.jsonl")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	final, err := streamClaudeResponse(bytes.NewReader(raw), nil)
+	if err != nil {
+		t.Fatalf("streamClaudeResponse error = %v; want nil (parsing succeeded)", err)
+	}
+	if final == nil {
+		t.Fatal("final event = nil; want result envelope with is_error:true")
+	}
+	if !final.IsError {
+		t.Error("final.IsError = false; want true for invalid-model fixture")
+	}
+	if final.APIErrorStatus == nil || *final.APIErrorStatus != 404 {
+		t.Errorf("APIErrorStatus = %v; want *404", final.APIErrorStatus)
+	}
+}
+
+func TestStreamClaudeResponse_SkipsMalformedLine(t *testing.T) {
+	t.Parallel()
+	body := strings.Join([]string{
+		`{"type":"system","subtype":"init"}`,
+		`not valid json at all`,
+		`{"type":"result","subtype":"success","is_error":false,"result":"ok"}`,
+	}, "\n")
+	final, err := streamClaudeResponse(strings.NewReader(body), nil)
+	if err != nil {
+		t.Fatalf("err = %v; want nil (malformed lines skipped)", err)
+	}
+	if final == nil || final.Result == nil || *final.Result != "ok" {
+		t.Errorf("final.Result = %v; want \"ok\"", final.Result)
+	}
+}
+
+func TestStreamClaudeResponse_NoFinalEvent(t *testing.T) {
+	t.Parallel()
+	body := `{"type":"system","subtype":"init"}`
+	final, err := streamClaudeResponse(strings.NewReader(body), nil)
+	if final != nil {
+		t.Errorf("final = %v; want nil when stream has no result event", final)
+	}
+	if err == nil {
+		t.Error("err = nil; want non-nil for stream with no result")
+	}
+}
+
+func TestStreamClaudeResponse_ReaderError(t *testing.T) {
+	t.Parallel()
+	r := errReader{err: errors.New("boom")}
+	if _, err := streamClaudeResponse(r, nil); err == nil {
+		t.Error("err = nil; want propagated reader error")
+	}
+}
+
+type errReader struct{ err error }
+
+func (e errReader) Read(_ []byte) (int, error) { return 0, e.err }

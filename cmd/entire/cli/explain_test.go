@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -103,145 +105,90 @@ func TestExplainCmd_RejectsPositionalArgs(t *testing.T) {
 	}
 }
 
-func TestGenerateCheckpointAISummary_AddsDefaultTimeoutWithoutParentDeadline(t *testing.T) {
-	tmpTimeout := checkpointSummaryTimeout
+func TestGenerateCheckpointAISummary_NoDeadlineWhenInteractive(t *testing.T) {
+	tmpResolver := summaryDeadlineResolver
 	tmpGenerator := generateTranscriptSummary
 	t.Cleanup(func() {
-		checkpointSummaryTimeout = tmpTimeout
+		summaryDeadlineResolver = tmpResolver
 		generateTranscriptSummary = tmpGenerator
 	})
 
-	checkpointSummaryTimeout = 50 * time.Millisecond
+	summaryDeadlineResolver = func(io.Writer) summaryDeadlineResult {
+		return summaryDeadlineResult{mode: deadlineModeNone}
+	}
 
-	var gotDeadline time.Time
+	var hadDeadline bool
 	generateTranscriptSummary = func(
 		ctx context.Context,
 		_ redact.RedactedBytes,
 		_ []string,
 		_ types.AgentType,
 		_ summarize.Generator,
+		_ agent.ProgressFn,
 	) (*checkpoint.Summary, error) {
-		deadline, ok := ctx.Deadline()
-		if !ok {
-			return nil, errors.New("expected deadline on summary context")
-		}
-		gotDeadline = deadline
+		_, hadDeadline = ctx.Deadline()
 		return &checkpoint.Summary{Intent: "intent", Outcome: "outcome"}, nil
 	}
 
-	start := time.Now()
-	summary, err := generateCheckpointAISummary(context.Background(), []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
+	summary, err := generateCheckpointAISummary(context.Background(), io.Discard, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
 	if err != nil {
 		t.Fatalf("generateCheckpointAISummary() error = %v", err)
 	}
 	if summary == nil {
 		t.Fatal("expected summary")
 	}
-	if gotDeadline.IsZero() {
-		t.Fatal("expected deadline to be set")
-	}
-	if remaining := gotDeadline.Sub(start); remaining < 30*time.Millisecond || remaining > 200*time.Millisecond {
-		t.Fatalf("deadline offset = %s, want around %s", remaining, checkpointSummaryTimeout)
+	if hadDeadline {
+		t.Error("interactive mode should run without a deadline")
 	}
 }
 
-func TestGenerateCheckpointAISummary_UsesParentDeadlineAndWrapsSentinel(t *testing.T) {
-	tmpTimeout := checkpointSummaryTimeout
+func TestGenerateCheckpointAISummary_IdleDeadlineWrapsSentinel(t *testing.T) {
+	tmpResolver := summaryDeadlineResolver
 	tmpGenerator := generateTranscriptSummary
 	t.Cleanup(func() {
-		checkpointSummaryTimeout = tmpTimeout
+		summaryDeadlineResolver = tmpResolver
 		generateTranscriptSummary = tmpGenerator
 	})
 
-	checkpointSummaryTimeout = 30 * time.Second
+	summaryDeadlineResolver = func(io.Writer) summaryDeadlineResult {
+		return summaryDeadlineResult{mode: deadlineModeIdle, duration: 20 * time.Millisecond}
+	}
 
-	parentCtx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
-	defer cancel()
-	parentDeadline, _ := parentCtx.Deadline()
-
-	var gotDeadline time.Time
 	generateTranscriptSummary = func(
 		ctx context.Context,
 		_ redact.RedactedBytes,
 		_ []string,
 		_ types.AgentType,
 		_ summarize.Generator,
+		_ agent.ProgressFn,
 	) (*checkpoint.Summary, error) {
-		gotDeadline, _ = ctx.Deadline()
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
 
-	_, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
+	_, err := generateCheckpointAISummary(context.Background(), io.Discard, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected DeadlineExceeded, got %v", err)
 	}
-	if gotDeadline.IsZero() {
-		t.Fatal("expected deadline to be captured")
-	}
-	if delta := gotDeadline.Sub(parentDeadline); delta < -5*time.Millisecond || delta > 5*time.Millisecond {
-		t.Fatalf("deadline delta = %s, want near 0", delta)
-	}
-	if strings.Contains(err.Error(), "30s") {
-		t.Fatalf("timeout error should not report default timeout when parent deadline fired: %v", err)
-	}
-}
-
-func TestGenerateCheckpointAISummary_ClampsLongParentDeadlineToDefaultTimeout(t *testing.T) {
-	tmpTimeout := checkpointSummaryTimeout
-	tmpGenerator := generateTranscriptSummary
-	t.Cleanup(func() {
-		checkpointSummaryTimeout = tmpTimeout
-		generateTranscriptSummary = tmpGenerator
-	})
-
-	checkpointSummaryTimeout = 50 * time.Millisecond
-
-	parentCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-
-	var gotDeadline time.Time
-	generateTranscriptSummary = func(
-		ctx context.Context,
-		_ redact.RedactedBytes,
-		_ []string,
-		_ types.AgentType,
-		_ summarize.Generator,
-	) (*checkpoint.Summary, error) {
-		deadline, ok := ctx.Deadline()
-		if !ok {
-			return nil, errors.New("expected deadline on summary context")
-		}
-		gotDeadline = deadline
-		return &checkpoint.Summary{Intent: "intent", Outcome: "outcome"}, nil
-	}
-
-	start := time.Now()
-	summary, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
-	if err != nil {
-		t.Fatalf("generateCheckpointAISummary() error = %v", err)
-	}
-	if summary == nil {
-		t.Fatal("expected summary")
-	}
-	if gotDeadline.IsZero() {
-		t.Fatal("expected deadline to be set")
-	}
-	if remaining := gotDeadline.Sub(start); remaining < 30*time.Millisecond || remaining > 200*time.Millisecond {
-		t.Fatalf("deadline offset = %s, want around %s", remaining, checkpointSummaryTimeout)
+	if !strings.Contains(err.Error(), "idle") {
+		t.Errorf("expected message mentioning idle watchdog, got %q", err)
 	}
 }
 
 func TestGenerateCheckpointAISummary_UsesCancellationSentinel(t *testing.T) {
-	tmpTimeout := checkpointSummaryTimeout
+	tmpResolver := summaryDeadlineResolver
 	tmpGenerator := generateTranscriptSummary
 	t.Cleanup(func() {
-		checkpointSummaryTimeout = tmpTimeout
+		summaryDeadlineResolver = tmpResolver
 		generateTranscriptSummary = tmpGenerator
 	})
+
+	summaryDeadlineResolver = func(io.Writer) summaryDeadlineResult {
+		return summaryDeadlineResult{mode: deadlineModeNone}
+	}
 
 	parentCtx, cancel := context.WithCancel(context.Background())
 
@@ -251,13 +198,14 @@ func TestGenerateCheckpointAISummary_UsesCancellationSentinel(t *testing.T) {
 		_ []string,
 		_ types.AgentType,
 		_ summarize.Generator,
+		_ agent.ProgressFn,
 	) (*checkpoint.Summary, error) {
 		cancel()
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
 
-	_, err := generateCheckpointAISummary(parentCtx, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
+	_, err := generateCheckpointAISummary(parentCtx, io.Discard, []byte("transcript"), nil, agent.AgentTypeClaudeCode, nil)
 	if err == nil {
 		t.Fatal("expected cancellation error")
 	}
@@ -4859,4 +4807,110 @@ func createCommitWithTree(t *testing.T, repo *git.Repository, treeHash plumbing.
 		t.Fatalf("failed to store commit: %v", err)
 	}
 	return hash
+}
+
+func TestSummaryProgressWriter_AllPhases(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	w := newSummaryProgressWriter(&buf)
+	// Force non-inplace mode so output is deterministic regardless of test environment.
+	w.inplace = false
+
+	w.handle(agent.GenerationProgress{Phase: agent.PhaseConnecting})
+	w.handle(agent.GenerationProgress{Phase: agent.PhaseFirstToken, TTFTms: 1500, CachedInputTokens: 35900})
+	w.handle(agent.GenerationProgress{Phase: agent.PhaseGenerating, OutputTokens: 200})
+	w.handle(agent.GenerationProgress{Phase: agent.PhaseGenerating, OutputTokens: 1240})
+	w.handle(agent.GenerationProgress{Phase: agent.PhaseDone, DurationMs: 3140, OutputTokens: 1890})
+
+	out := buf.String()
+	for _, want := range []string{
+		"Sending request to Anthropic",
+		"Anthropic responded",
+		"1.5s",  // TTFT
+		"35.9k", // cached input tokens
+		"Writing summary",
+		"1.2k", // generating tokens
+		"Summary generated",
+		"3.1s", // duration
+		"1.9k", // output tokens
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q\nfull output:\n%s", want, out)
+		}
+	}
+}
+
+func TestSummaryProgressWriter_DedupsGenerating(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	w := newSummaryProgressWriter(&buf)
+	w.inplace = false
+	w.handle(agent.GenerationProgress{Phase: agent.PhaseGenerating, OutputTokens: 100})
+	w.handle(agent.GenerationProgress{Phase: agent.PhaseGenerating, OutputTokens: 100})
+	w.handle(agent.GenerationProgress{Phase: agent.PhaseGenerating, OutputTokens: 200})
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 2 {
+		t.Errorf("got %d lines; want 2 (dedup of identical Generating updates)\nlines: %v", len(lines), lines)
+	}
+}
+
+func TestSummaryProgressWriter_LastActivityTracked(t *testing.T) {
+	t.Parallel()
+	w := newSummaryProgressWriter(io.Discard)
+	before := time.Now().UnixNano()
+	w.handle(agent.GenerationProgress{Phase: agent.PhaseGenerating, OutputTokens: 1})
+	got := w.lastActivity.Load()
+	if got < before {
+		t.Errorf("lastActivity = %d; want >= %d", got, before)
+	}
+}
+
+func TestStartIdleWatchdog_FiresOnStaleness(t *testing.T) {
+	t.Parallel()
+	var last atomic.Int64
+	last.Store(time.Now().UnixNano())
+	ctx, fired, stop := startIdleWatchdog(context.Background(), 30*time.Millisecond, &last)
+	defer stop()
+	select {
+	case <-ctx.Done():
+		if !fired.Load() {
+			t.Error("ctx canceled but watchdog flag not set")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("watchdog did not fire within 500ms (idle=30ms)")
+	}
+}
+
+func TestStartIdleWatchdog_DoesNotFireWhenBumped(t *testing.T) {
+	t.Parallel()
+	var last atomic.Int64
+	last.Store(time.Now().UnixNano())
+	ctx, fired, stop := startIdleWatchdog(context.Background(), 50*time.Millisecond, &last)
+	defer stop()
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		last.Store(time.Now().UnixNano())
+		time.Sleep(10 * time.Millisecond)
+	}
+	if fired.Load() {
+		t.Error("watchdog fired despite continuous bumps")
+	}
+	if ctx.Err() != nil {
+		t.Errorf("ctx.Err() = %v; want nil", ctx.Err())
+	}
+}
+
+func TestStartIdleWatchdog_ZeroIdleIsNoop(t *testing.T) {
+	t.Parallel()
+	var last atomic.Int64
+	last.Store(time.Now().UnixNano())
+	ctx, _, stop := startIdleWatchdog(context.Background(), 0, &last)
+	defer stop()
+	select {
+	case <-ctx.Done():
+		t.Error("ctx canceled; want unaffected with idle=0")
+	case <-time.After(100 * time.Millisecond):
+		// OK
+	}
 }

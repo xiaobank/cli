@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/entireio/cli/cmd/entire/cli/agent"
@@ -37,11 +38,31 @@ import (
 	"golang.org/x/term"
 )
 
-const defaultCheckpointSummaryTimeout = 30 * time.Second
-
-var checkpointSummaryTimeout = defaultCheckpointSummaryTimeout
-
 var generateTranscriptSummary = summarize.GenerateFromTranscript
+
+// deadlineMode describes how the summary deadline should be applied.
+type deadlineMode int
+
+const (
+	deadlineModeNone deadlineMode = iota // interactive TTY: no deadline, user Ctrl+C
+	deadlineModeIdle                     // non-interactive default: idle-based watchdog
+)
+
+// summaryDeadlineResult is the resolved deadline policy for a single
+// summary generation, computed once from TTY state.
+type summaryDeadlineResult struct {
+	mode     deadlineMode
+	duration time.Duration // zero when mode == deadlineModeNone
+}
+
+// summaryDeadlineResolver is package-level so tests can substitute the
+// resolution policy without touching stderr.
+var summaryDeadlineResolver = func(errW io.Writer) summaryDeadlineResult {
+	if isTerminalWriter(errW) {
+		return summaryDeadlineResult{mode: deadlineModeNone}
+	}
+	return summaryDeadlineResult{mode: deadlineModeIdle, duration: defaultNonTTYSummaryDeadline}
+}
 
 // interaction holds a single prompt and its responses for display.
 type interaction struct {
@@ -516,10 +537,10 @@ func generateCheckpointSummary(ctx context.Context, w, errW io.Writer, v1Store *
 	// Generate summary using shared helper
 	logging.Info(ctx, "generating checkpoint summary")
 	if errW != nil {
-		fmt.Fprintln(errW, "Generating checkpoint summary...")
+		fmt.Fprintf(errW, "Generating checkpoint summary... (transcript: %s)\n", humanizeBytes(len(scopedTranscript)))
 	}
 
-	summary, err := generateCheckpointAISummary(ctx, scopedTranscript, cpSummary.FilesTouched, content.Metadata.Agent, provider.Generator)
+	summary, err := generateCheckpointAISummary(ctx, errW, scopedTranscript, cpSummary.FilesTouched, content.Metadata.Agent, provider.Generator)
 	if err != nil {
 		return fmt.Errorf("failed to generate summary: %w", err)
 	}
@@ -555,27 +576,197 @@ func generateCheckpointSummary(ctx context.Context, w, errW io.Writer, v1Store *
 	return nil
 }
 
-func generateCheckpointAISummary(ctx context.Context, scopedTranscript []byte, filesTouched []string, agentType types.AgentType, generator summarize.Generator) (*checkpoint.Summary, error) {
-	timeoutCtx, cancel := context.WithTimeout(ctx, checkpointSummaryTimeout)
-	timeoutDuration := checkpointSummaryTimeout
-	if deadline, ok := timeoutCtx.Deadline(); ok {
-		timeoutDuration = time.Until(deadline)
+func generateCheckpointAISummary(ctx context.Context, errW io.Writer, scopedTranscript []byte, filesTouched []string, agentType types.AgentType, generator summarize.Generator) (*checkpoint.Summary, error) {
+	if errW == nil {
+		errW = io.Discard
 	}
-	defer cancel()
+	progressWriter := newSummaryProgressWriter(errW)
 
-	// scopedTranscript is read from checkpoint storage, which redacts on write.
-	summary, err := generateTranscriptSummary(timeoutCtx, redact.AlreadyRedacted(scopedTranscript), filesTouched, agentType, generator)
+	// Resolve deadline once based on TTY state.
+	resolved := summaryDeadlineResolver(errW)
+
+	runCtx := ctx
+	var idleFired *atomic.Bool
+	if resolved.mode == deadlineModeIdle {
+		// Layer a hard wall-clock cap on top of the idle watchdog so a
+		// degraded-but-chatty Claude CLI cannot hold a CI job indefinitely.
+		wallCtx, wallCancel := context.WithTimeout(ctx, maxWallClockSummaryDeadline)
+		defer wallCancel()
+		var stop func()
+		runCtx, idleFired, stop = startIdleWatchdog(wallCtx, resolved.duration, &progressWriter.lastActivity)
+		defer stop()
+	}
+
+	// Bump lastActivity immediately before the call so the idle watchdog's
+	// clock starts fresh at the actual API call start, not at
+	// progress-writer construction.
+	progressWriter.lastActivity.Store(time.Now().UnixNano())
+
+	summary, err := generateTranscriptSummary(
+		runCtx,
+		redact.AlreadyRedacted(scopedTranscript),
+		filesTouched,
+		agentType,
+		generator,
+		agent.ProgressFn(func(p agent.GenerationProgress) { progressWriter.handle(p) }),
+	)
 	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(timeoutCtx.Err(), context.Canceled) {
-			return nil, fmt.Errorf("summary generation canceled: %w", context.Canceled)
+		// Idle watchdog fires via context.WithCancel (produces Canceled, not
+		// DeadlineExceeded). Check the fired flag first so CI users see the
+		// diagnostic timeout message instead of "summary generation canceled".
+		if idleFired != nil && idleFired.Load() {
+			return nil, fmt.Errorf("summary generation timed out after %s idle: %w", formatSummaryTimeout(resolved.duration), context.DeadlineExceeded)
 		}
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(timeoutCtx.Err(), context.DeadlineExceeded) {
-			return nil, fmt.Errorf("summary generation timed out after %s: %w", formatSummaryTimeout(timeoutDuration), context.DeadlineExceeded)
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+			// In idle mode, DeadlineExceeded comes from the wall-clock cap,
+			// not the idle watchdog (which fires via Canceled, caught above).
+			duration := resolved.duration
+			if resolved.mode == deadlineModeIdle {
+				duration = maxWallClockSummaryDeadline
+			}
+			return nil, fmt.Errorf("summary generation timed out after %s: %w", formatSummaryTimeout(duration), context.DeadlineExceeded)
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(runCtx.Err(), context.Canceled) {
+			return nil, fmt.Errorf("summary generation canceled: %w", context.Canceled)
 		}
 		return nil, err
 	}
 
 	return summary, nil
+}
+
+const defaultNonTTYSummaryDeadline = 5 * time.Minute
+
+// maxWallClockSummaryDeadline is the absolute upper bound for summary
+// generation, even when the idle watchdog keeps getting refreshed.
+// Prevents a degraded but chatty Claude CLI from holding CI jobs open
+// indefinitely.
+const maxWallClockSummaryDeadline = 30 * time.Minute
+
+// startIdleWatchdog cancels the returned context if more than idle elapses
+// between successive updates to *lastActivity. It is a no-op when idle <= 0.
+// stop() must be called in a defer to release the goroutine; fired reports
+// whether the watchdog was the reason for cancellation.
+func startIdleWatchdog(parent context.Context, idle time.Duration, lastActivity *atomic.Int64) (ctx context.Context, fired *atomic.Bool, stop func()) {
+	fired = &atomic.Bool{}
+	if idle <= 0 {
+		return parent, fired, func() {}
+	}
+	ctx, cancel := context.WithCancel(parent)
+	done := make(chan struct{})
+	go func() {
+		poll := idle / 4
+		if poll < time.Millisecond {
+			poll = time.Millisecond
+		}
+		ticker := time.NewTicker(poll)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				ts := lastActivity.Load()
+				if ts > 0 && time.Since(time.Unix(0, ts)) >= idle {
+					fired.Store(true)
+					cancel()
+					return
+				}
+			case <-done:
+				return
+			case <-parent.Done():
+				return
+			}
+		}
+	}()
+	return ctx, fired, func() { close(done); cancel() }
+}
+
+// summaryProgressWriter renders agent.GenerationProgress events to the
+// configured writer using the existing statusStyles helper. On a TTY (and
+// outside ACCESSIBLE mode) it rewrites the current line for the running
+// token count; otherwise it appends one line per non-deduplicated event.
+type summaryProgressWriter struct {
+	w            io.Writer
+	inplace      bool
+	lastActivity atomic.Int64 // Unix-nano timestamp of last progress event
+	lastLine     string
+	arrow        string // precomputed styled glyph
+	check        string // precomputed styled glyph
+}
+
+func newSummaryProgressWriter(w io.Writer) *summaryProgressWriter {
+	styles := newStatusStyles(w)
+	pw := &summaryProgressWriter{
+		w:       w,
+		inplace: isTerminalWriter(w) && !IsAccessibleMode(),
+		arrow:   styles.render(styles.cyan, "→"),
+		check:   styles.render(styles.green, "✓"),
+	}
+	pw.lastActivity.Store(time.Now().UnixNano())
+	return pw
+}
+
+func (s *summaryProgressWriter) handle(p agent.GenerationProgress) {
+	s.lastActivity.Store(time.Now().UnixNano())
+	switch p.Phase {
+	case agent.PhaseConnecting:
+		s.printLine(s.arrow + " Sending request to Anthropic...")
+	case agent.PhaseFirstToken:
+		s.printLine(fmt.Sprintf(
+			"%s Anthropic responded (TTFT %s, %s cached input tokens) -- generating...",
+			s.arrow, formatMs(p.TTFTms), formatTokenCount(p.CachedInputTokens)))
+	case agent.PhaseGenerating:
+		s.updateLine(fmt.Sprintf(
+			"%s Writing summary... (~%s tokens)",
+			s.arrow, formatTokenCount(p.OutputTokens)))
+	case agent.PhaseDone:
+		s.printLine(fmt.Sprintf(
+			"%s Summary generated (%s, %s output tokens)",
+			s.check, formatMs(p.DurationMs), formatTokenCount(p.OutputTokens)))
+	}
+}
+
+func (s *summaryProgressWriter) printLine(line string) {
+	if s.inplace && s.lastLine != "" {
+		fmt.Fprint(s.w, "\r\033[2K")
+	}
+	fmt.Fprintln(s.w, line)
+	s.lastLine = ""
+}
+
+func (s *summaryProgressWriter) updateLine(line string) {
+	if s.lastLine == line {
+		return
+	}
+	if s.inplace {
+		fmt.Fprintf(s.w, "\r\033[2K%s", line)
+	} else {
+		fmt.Fprintln(s.w, line)
+	}
+	s.lastLine = line
+}
+
+// formatMs formats a millisecond count as "1.5s" / "120ms".
+func formatMs(ms int) string {
+	if ms < 1000 {
+		return fmt.Sprintf("%dms", ms)
+	}
+	return fmt.Sprintf("%.1fs", float64(ms)/1000.0)
+}
+
+// humanizeBytes formats a byte count as a short human-readable string
+// (e.g., 0 B, 500 B, 1.5 KB, 47 KB, 1.2 MB). Uses 1024-based units.
+func humanizeBytes(n int) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for x := int64(n) / unit; x >= unit; x /= unit {
+		div *= unit
+		exp++
+	}
+	suffix := []string{"KB", "MB", "GB", "TB"}[exp]
+	return fmt.Sprintf("%.1f %s", float64(n)/float64(div), suffix)
 }
 
 func formatSummaryTimeout(d time.Duration) string {

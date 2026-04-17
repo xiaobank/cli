@@ -67,6 +67,10 @@ type ClaudeGenerator struct {
 	// Model is the Claude model to use for summarization.
 	// If empty, defaults to DefaultModel ("sonnet").
 	Model string
+
+	// Progress receives streaming progress events when the underlying agent
+	// implements agent.StreamingTextGenerator. Optional; nil suppresses reporting.
+	Progress agent.ProgressFn
 }
 
 // Generate creates a summary from checkpoint data by calling the Claude CLI.
@@ -91,7 +95,13 @@ func (g *ClaudeGenerator) Generate(ctx context.Context, input Input) (*checkpoin
 		}
 	}
 
-	resultJSON, err := textGenerator.GenerateText(ctx, prompt, model)
+	var resultJSON string
+	var err error
+	if streamer, ok := agent.AsStreamingTextGenerator(textGenerator); ok {
+		resultJSON, err = streamer.GenerateTextStreaming(ctx, prompt, model, g.Progress)
+	} else {
+		resultJSON, err = textGenerator.GenerateText(ctx, prompt, model)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate summary text: %w", err)
 	}

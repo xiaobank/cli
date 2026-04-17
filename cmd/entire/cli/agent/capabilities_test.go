@@ -94,6 +94,20 @@ func (m *mockFullAgent) CalculateTotalTokenUsage([]byte, int, string) (*TokenUsa
 	return nil, nil //nolint:nilnil // test mock
 }
 
+// StreamingTextGenerator
+func (m *mockFullAgent) GenerateTextStreaming(context.Context, string, string, ProgressFn) (string, error) {
+	return "", nil
+}
+
+// mockBuiltinStreamingAgent is a built-in agent that implements StreamingTextGenerator but NOT CapabilityDeclarer.
+type mockBuiltinStreamingAgent struct {
+	mockBaseAgent
+}
+
+func (m *mockBuiltinStreamingAgent) GenerateTextStreaming(context.Context, string, string, ProgressFn) (string, error) {
+	return "", nil
+}
+
 // mockBuiltinPromptAgent is a built-in agent that implements PromptExtractor but NOT CapabilityDeclarer.
 type mockBuiltinPromptAgent struct {
 	mockBaseAgent
@@ -368,6 +382,46 @@ func TestAsPromptExtractor(t *testing.T) {
 		_, ok := AsPromptExtractor(nil)
 		if ok {
 			t.Error("expected false for nil agent")
+		}
+	})
+}
+
+func TestAsStreamingTextGenerator(t *testing.T) {
+	t.Parallel()
+
+	t.Run("not implemented", func(t *testing.T) {
+		t.Parallel()
+		ag := &mockBaseAgent{}
+		_, ok := AsStreamingTextGenerator(ag)
+		if ok {
+			t.Error("expected false for agent not implementing StreamingTextGenerator")
+		}
+	})
+
+	t.Run("builtin agent", func(t *testing.T) {
+		t.Parallel()
+		ag := &mockBuiltinStreamingAgent{}
+		stg, ok := AsStreamingTextGenerator(ag)
+		if !ok || stg == nil {
+			t.Error("expected true for built-in agent implementing StreamingTextGenerator")
+		}
+	})
+
+	t.Run("declared true", func(t *testing.T) {
+		t.Parallel()
+		ag := &mockFullAgent{caps: DeclaredCaps{StreamingTextGenerator: true}}
+		stg, ok := AsStreamingTextGenerator(ag)
+		if !ok || stg == nil {
+			t.Error("expected true when capability declared true")
+		}
+	})
+
+	t.Run("declared false", func(t *testing.T) {
+		t.Parallel()
+		ag := &mockFullAgent{caps: DeclaredCaps{StreamingTextGenerator: false}}
+		_, ok := AsStreamingTextGenerator(ag)
+		if ok {
+			t.Error("expected false when capability declared false")
 		}
 	})
 }

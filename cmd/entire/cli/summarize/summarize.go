@@ -29,9 +29,10 @@ import (
 //   - filesTouched: list of files modified during the session
 //   - agentType: the agent type to determine transcript format
 //   - generator: summary generator to use (if nil, uses default ClaudeGenerator)
+//   - progress: optional callback for streaming progress events (nil to suppress)
 //
 // Returns nil, error if transcript is empty or cannot be parsed.
-func GenerateFromTranscript(ctx context.Context, transcriptBytes redact.RedactedBytes, filesTouched []string, agentType types.AgentType, generator Generator) (*checkpoint.Summary, error) {
+func GenerateFromTranscript(ctx context.Context, transcriptBytes redact.RedactedBytes, filesTouched []string, agentType types.AgentType, generator Generator, progress agent.ProgressFn) (*checkpoint.Summary, error) {
 	if transcriptBytes.Len() == 0 {
 		return nil, errors.New("empty transcript")
 	}
@@ -51,7 +52,12 @@ func GenerateFromTranscript(ctx context.Context, transcriptBytes redact.Redacted
 	}
 
 	if generator == nil {
-		generator = &ClaudeGenerator{}
+		generator = &ClaudeGenerator{Progress: progress}
+	} else if cg, ok := generator.(*ClaudeGenerator); ok && cg.Progress == nil && progress != nil {
+		// Clone to avoid mutating the caller's struct.
+		clone := *cg
+		clone.Progress = progress
+		generator = &clone
 	}
 
 	summary, err := generator.Generate(ctx, input)

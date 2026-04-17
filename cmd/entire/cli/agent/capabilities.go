@@ -21,6 +21,7 @@ type DeclaredCaps struct {
 	TranscriptPreparer     bool `json:"transcript_preparer"`
 	TokenCalculator        bool `json:"token_calculator"`
 	TextGenerator          bool `json:"text_generator"`
+	StreamingTextGenerator bool `json:"streaming_text_generator"`
 	HookResponseWriter     bool `json:"hook_response_writer"`
 	SubagentAwareExtractor bool `json:"subagent_aware_extractor"`
 }
@@ -103,6 +104,22 @@ func AsTextGenerator(ag Agent) (TextGenerator, bool) { //nolint:ireturn // type-
 		return tg, cd.DeclaredCapabilities().TextGenerator
 	}
 	return tg, true
+}
+
+// AsStreamingTextGenerator returns the agent as StreamingTextGenerator if it both
+// implements the interface and (for CapabilityDeclarer agents) has declared the capability.
+func AsStreamingTextGenerator(ag Agent) (StreamingTextGenerator, bool) { //nolint:ireturn // type-assertion helper must return interface
+	if ag == nil {
+		return nil, false
+	}
+	stg, ok := ag.(StreamingTextGenerator)
+	if !ok {
+		return nil, false
+	}
+	if cd, ok := ag.(CapabilityDeclarer); ok {
+		return stg, cd.DeclaredCapabilities().StreamingTextGenerator
+	}
+	return stg, true
 }
 
 // AsHookResponseWriter returns the agent as HookResponseWriter if it both
