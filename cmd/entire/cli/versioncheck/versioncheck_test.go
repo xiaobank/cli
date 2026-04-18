@@ -98,12 +98,12 @@ func TestFetchLatestNightlyVersion(t *testing.T) {
 	githubReleasesURL = server.URL
 	t.Cleanup(func() { githubReleasesURL = original })
 
-	version, err := fetchLatestNightlyVersion(context.Background())
+	release, err := fetchLatestNightlyRelease(context.Background())
 	if err != nil {
-		t.Fatalf("fetchLatestNightlyVersion() error = %v", err)
+		t.Fatalf("fetchLatestNightlyRelease() error = %v", err)
 	}
-	if version != "v0.5.4-nightly.202604061200.abc1234" {
-		t.Errorf("fetchLatestNightlyVersion() = %q, want v0.5.4-nightly.202604061200.abc1234", version)
+	if release.TagName != "v0.5.4-nightly.202604061200.abc1234" {
+		t.Errorf("fetchLatestNightlyRelease() = %q, want v0.5.4-nightly.202604061200.abc1234", release.TagName)
 	}
 }
 
@@ -122,9 +122,9 @@ func TestFetchLatestNightlyVersion_NoNightlies(t *testing.T) {
 	githubReleasesURL = server.URL
 	t.Cleanup(func() { githubReleasesURL = original })
 
-	_, err := fetchLatestNightlyVersion(context.Background())
+	_, err := fetchLatestNightlyRelease(context.Background())
 	if err == nil {
-		t.Fatal("fetchLatestNightlyVersion() expected error when no nightlies, got nil")
+		t.Fatal("fetchLatestNightlyRelease() expected error when no nightlies, got nil")
 	}
 }
 
@@ -235,12 +235,12 @@ func TestFetchLatestVersion(t *testing.T) {
 	githubAPIURL = server.URL
 	t.Cleanup(func() { githubAPIURL = original })
 
-	version, err := fetchLatestVersion(context.Background())
+	release, err := fetchLatestRelease(context.Background())
 	if err != nil {
-		t.Fatalf("fetchLatestVersion(context.Background()) error = %v", err)
+		t.Fatalf("fetchLatestRelease(context.Background()) error = %v", err)
 	}
-	if version != "v1.2.3" {
-		t.Errorf("fetchLatestVersion(context.Background()) = %q, want v1.2.3", version)
+	if release.TagName != "v1.2.3" {
+		t.Errorf("fetchLatestRelease(context.Background()) = %q, want v1.2.3", release.TagName)
 	}
 }
 
@@ -260,9 +260,9 @@ func TestFetchLatestVersionPrerelease(t *testing.T) {
 	githubAPIURL = server.URL
 	t.Cleanup(func() { githubAPIURL = original })
 
-	_, err := fetchLatestVersion(context.Background())
+	_, err := fetchLatestRelease(context.Background())
 	if err == nil {
-		t.Fatal("fetchLatestVersion(context.Background()) expected error for prerelease, got nil")
+		t.Fatal("fetchLatestRelease(context.Background()) expected error for prerelease, got nil")
 	}
 }
 
@@ -276,9 +276,9 @@ func TestFetchLatestVersionServerError(t *testing.T) {
 	githubAPIURL = server.URL
 	t.Cleanup(func() { githubAPIURL = original })
 
-	_, err := fetchLatestVersion(context.Background())
+	_, err := fetchLatestRelease(context.Background())
 	if err == nil {
-		t.Fatal("fetchLatestVersion(context.Background()) expected error for 500 response, got nil")
+		t.Fatal("fetchLatestRelease(context.Background()) expected error for 500 response, got nil")
 	}
 }
 
@@ -302,19 +302,68 @@ func TestParseGitHubRelease(t *testing.T) {
 				t.Errorf("parseGitHubRelease() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
-			if got != tt.want {
-				t.Errorf("parseGitHubRelease() = %q, want %q", got, tt.want)
+			if tt.wantErr {
+				return
+			}
+			if got.TagName != tt.want {
+				t.Errorf("parseGitHubRelease() = %q, want %q", got.TagName, tt.want)
 			}
 		})
 	}
 }
 
 func TestUpdateCommand(t *testing.T) {
+	const plainBinPath = "/usr/local/bin/entire"
 	tests := []struct {
-		name     string
-		execPath func() (string, error)
-		want     string
+		name      string
+		execPath  func() (string, error)
+		writeProv *InstallProvenance
+		want      string
 	}{
+		{
+			name:     "install.sh provenance",
+			execPath: func() (string, error) { return plainBinPath, nil },
+			writeProv: &InstallProvenance{
+				Manager:     "install.sh",
+				Channel:     "stable",
+				Package:     "entire",
+				InstalledAt: time.Date(2026, time.April, 11, 12, 0, 0, 0, time.UTC),
+			},
+			want: "curl -fsSL https://entire.io/install.sh | bash",
+		},
+		{
+			name:     "brew provenance stable",
+			execPath: func() (string, error) { return plainBinPath, nil },
+			writeProv: &InstallProvenance{
+				Manager:     "brew",
+				Channel:     "stable",
+				Package:     "entire",
+				InstalledAt: time.Date(2026, time.April, 11, 12, 0, 0, 0, time.UTC),
+			},
+			want: "brew upgrade entire",
+		},
+		{
+			name:     "brew provenance nightly package",
+			execPath: func() (string, error) { return plainBinPath, nil },
+			writeProv: &InstallProvenance{
+				Manager:     "brew",
+				Channel:     "nightly",
+				Package:     "entire@nightly",
+				InstalledAt: time.Date(2026, time.April, 11, 12, 0, 0, 0, time.UTC),
+			},
+			want: "brew upgrade entire@nightly",
+		},
+		{
+			name:     "scoop provenance",
+			execPath: func() (string, error) { return plainBinPath, nil },
+			writeProv: &InstallProvenance{
+				Manager:     "scoop",
+				Channel:     "stable",
+				Package:     "entire/cli",
+				InstalledAt: time.Date(2026, time.April, 11, 12, 0, 0, 0, time.UTC),
+			},
+			want: "scoop update entire/cli",
+		},
 		{
 			name:     "homebrew cellar path",
 			execPath: func() (string, error) { return "/opt/homebrew/Cellar/entire/1.0.0/bin/entire", nil },
@@ -347,7 +396,7 @@ func TestUpdateCommand(t *testing.T) {
 		},
 		{
 			name:     "unknown path falls back to curl",
-			execPath: func() (string, error) { return "/usr/local/bin/entire", nil },
+			execPath: func() (string, error) { return plainBinPath, nil },
 			want:     "curl -fsSL https://entire.io/install.sh | bash",
 		},
 		{
@@ -359,6 +408,26 @@ func TestUpdateCommand(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			tmpHome := t.TempDir()
+			t.Setenv("HOME", tmpHome)
+
+			if tt.writeProv != nil {
+				configDir, err := globalConfigDirPath()
+				if err != nil {
+					t.Fatalf("globalConfigDirPath() error = %v", err)
+				}
+				if err := os.MkdirAll(configDir, 0o755); err != nil {
+					t.Fatalf("MkdirAll() error = %v", err)
+				}
+				data, err := json.Marshal(tt.writeProv)
+				if err != nil {
+					t.Fatalf("json.Marshal() error = %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(configDir, installProvenanceFileName), data, 0o644); err != nil {
+					t.Fatalf("WriteFile() error = %v", err)
+				}
+			}
+
 			original := executablePath
 			executablePath = tt.execPath
 			t.Cleanup(func() { executablePath = original })
@@ -367,6 +436,40 @@ func TestUpdateCommand(t *testing.T) {
 				t.Errorf("updateCommand() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestLoadInstallProvenance(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	configDir, err := globalConfigDirPath()
+	if err != nil {
+		t.Fatalf("globalConfigDirPath() error = %v", err)
+	}
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	want := &InstallProvenance{
+		Manager:     "brew",
+		Channel:     "stable",
+		Package:     "entire",
+		InstalledAt: time.Date(2026, time.April, 11, 13, 0, 0, 0, time.UTC),
+	}
+	data, err := json.Marshal(want)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, installProvenanceFileName), data, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	got, err := loadInstallProvenance()
+	if err != nil {
+		t.Fatalf("loadInstallProvenance() error = %v", err)
+	}
+	if *got != *want {
+		t.Fatalf("loadInstallProvenance() = %+v, want %+v", *got, *want)
 	}
 }
 

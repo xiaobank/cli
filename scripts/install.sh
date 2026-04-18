@@ -4,6 +4,8 @@ set -euo pipefail
 
 GITHUB_REPO="entireio/cli"
 DEFAULT_INSTALL_DIR="$HOME/.local/bin"
+GLOBAL_CONFIG_DIR="$HOME/.config/entire"
+INSTALL_PROVENANCE_PATH="${GLOBAL_CONFIG_DIR}/install.json"
 
 # Colors (disabled in non-interactive mode)
 if [[ -t 1 ]]; then
@@ -114,6 +116,21 @@ verify_checksum() {
     fi
 }
 
+write_install_provenance() {
+    local installed_at
+    installed_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+    mkdir -p "${GLOBAL_CONFIG_DIR}"
+    cat > "${INSTALL_PROVENANCE_PATH}" <<EOF
+{
+  "manager": "install.sh",
+  "channel": "stable",
+  "package": "entire",
+  "installed_at": "${installed_at}"
+}
+EOF
+}
+
 main() {
     if ! command -v curl &> /dev/null; then
         error "curl is required but not installed. Please install curl and try again."
@@ -190,6 +207,9 @@ main() {
     else
         error "Installation completed but the binary failed to execute. Please check the installation."
     fi
+
+    write_install_provenance
+    info "Wrote install provenance to ${INSTALL_PROVENANCE_PATH}"
 
     # Check if the installed binary is the one that will be found in PATH
     local path_binary
