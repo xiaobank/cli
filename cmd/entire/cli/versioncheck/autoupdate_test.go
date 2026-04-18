@@ -19,7 +19,6 @@ type autoUpdateFixture struct {
 	installCalls int
 	installErr   error
 	lastCommand  string
-	confirmed    bool
 }
 
 func newAutoUpdateFixture(t *testing.T) *autoUpdateFixture {
@@ -30,7 +29,7 @@ func newAutoUpdateFixture(t *testing.T) *autoUpdateFixture {
 	t.Setenv(envKillSwitch, "")
 	t.Setenv("ACCESSIBLE", "")
 
-	f := &autoUpdateFixture{t: t, confirmed: true}
+	f := &autoUpdateFixture{t: t}
 
 	origRun := runInstaller
 	runInstaller = func(_ context.Context, cmd string) error {
@@ -51,26 +50,22 @@ func newAutoUpdateFixture(t *testing.T) *autoUpdateFixture {
 	return f
 }
 
-func writeBrewProvenance(t *testing.T) {
+// useBrewExecutable points the install-manager detector at a brew cellar path.
+func useBrewExecutable(t *testing.T) {
 	t.Helper()
-	dir, err := settings.GlobalConfigDir()
-	if err != nil {
-		t.Fatalf("GlobalConfigDir() error = %v", err)
+	orig := executablePath
+	executablePath = func() (string, error) {
+		return "/opt/homebrew/Cellar/entire/1.0.0/bin/entire", nil
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	p := InstallProvenance{
-		Manager: "brew", Channel: "stable", Package: "entire",
-		InstalledAt: time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
-	}
-	data, err := json.Marshal(p)
-	if err != nil {
-		t.Fatalf("json.Marshal() error = %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, installProvenanceFileName), data, 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
+	t.Cleanup(func() { executablePath = orig })
+}
+
+// useUnknownExecutable forces the install-manager detector to "unknown".
+func useUnknownExecutable(t *testing.T) {
+	t.Helper()
+	orig := executablePath
+	executablePath = func() (string, error) { return "/usr/local/bin/entire-binary", nil }
+	t.Cleanup(func() { executablePath = orig })
 }
 
 func writeGlobalSettings(t *testing.T, mode string) {
@@ -82,7 +77,7 @@ func writeGlobalSettings(t *testing.T, mode string) {
 
 func TestMaybeAutoUpdate_ModeOff_DoesNothing(t *testing.T) {
 	f := newAutoUpdateFixture(t)
-	writeBrewProvenance(t)
+	useBrewExecutable(t)
 	// no settings file -> defaults to off
 
 	var buf bytes.Buffer
@@ -100,7 +95,7 @@ func TestMaybeAutoUpdate_ModeOff_DoesNothing(t *testing.T) {
 func TestMaybeAutoUpdate_KillSwitch_ShortCircuits(t *testing.T) {
 	f := newAutoUpdateFixture(t)
 	writeGlobalSettings(t, settings.AutoUpdateAuto)
-	writeBrewProvenance(t)
+	useBrewExecutable(t)
 	t.Setenv(envKillSwitch, "1")
 
 	var buf bytes.Buffer
@@ -115,7 +110,7 @@ func TestMaybeAutoUpdate_KillSwitch_ShortCircuits(t *testing.T) {
 func TestMaybeAutoUpdate_CI_ShortCircuits(t *testing.T) {
 	f := newAutoUpdateFixture(t)
 	writeGlobalSettings(t, settings.AutoUpdateAuto)
-	writeBrewProvenance(t)
+	useBrewExecutable(t)
 	t.Setenv("CI", "true")
 
 	var buf bytes.Buffer
@@ -130,7 +125,7 @@ func TestMaybeAutoUpdate_CI_ShortCircuits(t *testing.T) {
 func TestMaybeAutoUpdate_NoTTY_ShortCircuits(t *testing.T) {
 	f := newAutoUpdateFixture(t)
 	writeGlobalSettings(t, settings.AutoUpdateAuto)
-	writeBrewProvenance(t)
+	useBrewExecutable(t)
 	stdoutIsTerminal = func() bool { return false }
 
 	var buf bytes.Buffer
@@ -142,27 +137,25 @@ func TestMaybeAutoUpdate_NoTTY_ShortCircuits(t *testing.T) {
 	}
 }
 
-func TestMaybeAutoUpdate_AutoRequiresProvenance(t *testing.T) {
+func TestMaybeAutoUpdate_AutoRequiresKnownManager(t *testing.T) {
 	f := newAutoUpdateFixture(t)
 	writeGlobalSettings(t, settings.AutoUpdateAuto)
-	// no provenance file -> fallback to path inference
-	// executablePath default is os.Executable which in tests returns go test binary path -> not brew/mise
+	useUnknownExecutable(t)
 
 	var buf bytes.Buffer
 	release := &GitHubRelease{TagName: "v2.0.0", PublishedAt: time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)}
 	MaybeAutoUpdate(context.Background(), &buf, "1.0.0", release)
 
 	if f.installCalls != 0 {
-		t.Errorf("installer called on auto mode without provenance")
+		t.Errorf("installer called on auto mode without a known manager")
 	}
 }
 
 func TestMaybeAutoUpdate_AutoSoakDelay(t *testing.T) {
 	f := newAutoUpdateFixture(t)
 	writeGlobalSettings(t, settings.AutoUpdateAuto)
-	writeBrewProvenance(t)
+	useBrewExecutable(t)
 
-	// Published 1 hour before "now"
 	release := &GitHubRelease{
 		TagName:     "v2.0.0",
 		PublishedAt: nowFunc().Add(-1 * time.Hour),
@@ -178,9 +171,8 @@ func TestMaybeAutoUpdate_AutoSoakDelay(t *testing.T) {
 func TestMaybeAutoUpdate_AutoHappyPath(t *testing.T) {
 	f := newAutoUpdateFixture(t)
 	writeGlobalSettings(t, settings.AutoUpdateAuto)
-	writeBrewProvenance(t)
+	useBrewExecutable(t)
 
-	// Published 2 days before "now" — past the 24h soak
 	release := &GitHubRelease{
 		TagName:     "v2.0.0",
 		PublishedAt: nowFunc().Add(-48 * time.Hour),
@@ -191,17 +183,16 @@ func TestMaybeAutoUpdate_AutoHappyPath(t *testing.T) {
 	if f.installCalls != 1 {
 		t.Fatalf("installer called %d times, want 1", f.installCalls)
 	}
-	if f.lastCommand != "brew upgrade entire" {
-		t.Errorf("installer got %q, want brew upgrade entire", f.lastCommand)
+	if f.lastCommand != "brew upgrade --cask entire" {
+		t.Errorf("installer got %q, want brew upgrade --cask entire", f.lastCommand)
 	}
 }
 
 func TestMaybeAutoUpdate_AutoRetryCooldown(t *testing.T) {
 	f := newAutoUpdateFixture(t)
 	writeGlobalSettings(t, settings.AutoUpdateAuto)
-	writeBrewProvenance(t)
+	useBrewExecutable(t)
 
-	// Seed a recent failed attempt
 	cache := &VersionCache{
 		LastCheckTime:         nowFunc().Add(-25 * time.Hour),
 		LastUpdateAttemptTime: nowFunc().Add(-1 * time.Hour),
@@ -234,23 +225,10 @@ func TestMaybeAutoUpdate_AutoRetryCooldown(t *testing.T) {
 	}
 }
 
-func TestMaybeAutoUpdate_PromptModeYes(t *testing.T) {
+func TestMaybeAutoUpdate_PromptModeNoTTY(t *testing.T) {
 	f := newAutoUpdateFixture(t)
 	writeGlobalSettings(t, settings.AutoUpdatePrompt)
-	writeBrewProvenance(t)
-
-	// Replace the interactive confirm with a seam so the test doesn't open huh.
-	origRunInstaller := runInstaller
-	runInstaller = func(_ context.Context, cmd string) error {
-		f.installCalls++
-		f.lastCommand = cmd
-		return nil
-	}
-	t.Cleanup(func() { runInstaller = origRunInstaller })
-
-	// Skip huh by using a non-TTY short-circuit: prompt mode + no TTY == skipped.
-	// To actually exercise prompt=yes we'd need a huh stub; keep this as a
-	// negative test and ensure explicit yes path is covered via RunUpdateNow below.
+	useBrewExecutable(t)
 	stdoutIsTerminal = func() bool { return false }
 
 	var buf bytes.Buffer
@@ -265,7 +243,7 @@ func TestMaybeAutoUpdate_PromptModeYes(t *testing.T) {
 func TestMaybeAutoUpdate_RecordsFailureInCache(t *testing.T) {
 	f := newAutoUpdateFixture(t)
 	writeGlobalSettings(t, settings.AutoUpdateAuto)
-	writeBrewProvenance(t)
+	useBrewExecutable(t)
 	f.installErr = errors.New("simulated failure")
 
 	release := &GitHubRelease{
@@ -292,10 +270,10 @@ func TestMaybeAutoUpdate_RecordsFailureInCache(t *testing.T) {
 
 func TestRunUpdateNow_CheckOnly(t *testing.T) {
 	f := newAutoUpdateFixture(t)
-	writeBrewProvenance(t)
+	useBrewExecutable(t)
 
 	var buf bytes.Buffer
-	ran, err := RunUpdateNow(context.Background(), &buf, true, false)
+	ran, err := RunUpdateNow(context.Background(), &buf, "1.0.0", true, false)
 	if err != nil {
 		t.Fatalf("RunUpdateNow() error = %v", err)
 	}
@@ -305,7 +283,7 @@ func TestRunUpdateNow_CheckOnly(t *testing.T) {
 	if f.installCalls != 0 {
 		t.Errorf("installer called in check-only mode")
 	}
-	if !bytes.Contains(buf.Bytes(), []byte("brew upgrade entire")) {
+	if !bytes.Contains(buf.Bytes(), []byte("brew upgrade --cask entire")) {
 		t.Errorf("output missing command: %q", buf.String())
 	}
 }
@@ -315,7 +293,7 @@ func TestRunUpdateNow_KillSwitchBlocks(t *testing.T) {
 	t.Setenv(envKillSwitch, "1")
 
 	var buf bytes.Buffer
-	_, err := RunUpdateNow(context.Background(), &buf, false, true)
+	_, err := RunUpdateNow(context.Background(), &buf, "1.0.0", false, true)
 	if err == nil {
 		t.Fatal("RunUpdateNow() expected error with kill-switch set")
 	}
@@ -323,10 +301,10 @@ func TestRunUpdateNow_KillSwitchBlocks(t *testing.T) {
 
 func TestRunUpdateNow_YesSkipsPrompt(t *testing.T) {
 	f := newAutoUpdateFixture(t)
-	writeBrewProvenance(t)
+	useBrewExecutable(t)
 
 	var buf bytes.Buffer
-	ran, err := RunUpdateNow(context.Background(), &buf, false, true)
+	ran, err := RunUpdateNow(context.Background(), &buf, "1.0.0", false, true)
 	if err != nil {
 		t.Fatalf("RunUpdateNow() error = %v", err)
 	}

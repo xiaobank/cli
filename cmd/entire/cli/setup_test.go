@@ -950,32 +950,155 @@ func TestEnableCmd_AgentFlagEmptyValue(t *testing.T) {
 	}
 }
 
-// Tests for canPromptInteractively
+func TestEnableUsesSetupFlow(t *testing.T) {
+	t.Parallel()
 
-func TestCanPromptInteractively_EnvVar_True(t *testing.T) {
-	// Cannot use t.Parallel() because we use t.Setenv
-	t.Setenv("ENTIRE_TEST_TTY", "1")
+	tests := []struct {
+		name      string
+		args      []string
+		agentName string
+		want      bool
+	}{
+		{name: "bare enable", args: nil, want: false},
+		{name: "project only", args: []string{"--project"}, want: false},
+		{name: "local only", args: []string{"--local"}, want: false},
+		{name: "force", args: []string{"--force"}, want: true},
+		{name: "local dev", args: []string{"--local-dev"}, want: true},
+		{name: "absolute hook path", args: []string{"--absolute-git-hook-path"}, want: true},
+		{name: "telemetry changed", args: []string{"--telemetry=false"}, want: true},
+		{name: "checkpoint remote", args: []string{"--checkpoint-remote", "github:org/repo"}, want: true},
+		{name: "skip push sessions", args: []string{"--skip-push-sessions"}, want: true},
+		{name: "agent flag", args: []string{"--agent", "claude-code"}, agentName: "claude-code", want: true},
+	}
 
-	if !canPromptInteractively() {
-		t.Error("canPromptInteractively() = false, want true when ENTIRE_TEST_TTY=1")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cmd := newEnableCmd()
+			cmd.SetOut(&bytes.Buffer{})
+			cmd.SetErr(&bytes.Buffer{})
+			cmd.SetArgs(tt.args)
+			if err := cmd.ParseFlags(tt.args); err != nil {
+				t.Fatalf("ParseFlags() error = %v", err)
+			}
+
+			if got := enableUsesSetupFlow(cmd, tt.agentName); got != tt.want {
+				t.Fatalf("enableUsesSetupFlow(%v, %q) = %v, want %v", tt.args, tt.agentName, got, tt.want)
+			}
+		})
 	}
 }
 
-func TestCanPromptInteractively_EnvVar_False(t *testing.T) {
-	// Cannot use t.Parallel() because we use t.Setenv
+func TestEnableCmd_ForceOnConfiguredRepo_UsesConfigureFlow(t *testing.T) {
+	setupTestRepo(t)
 	t.Setenv("ENTIRE_TEST_TTY", "0")
+	writeSettings(t, testSettingsEnabled)
+	writeClaudeHooksFixture(t)
 
-	if canPromptInteractively() {
-		t.Error("canPromptInteractively() = true, want false when ENTIRE_TEST_TTY=0")
+	cmd := newEnableCmd()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"--force"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("enable --force error = %v", err)
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "Cannot show agent selection in non-interactive mode.") {
+		t.Fatalf("expected enable --force to route to configure flow, got: %s", output)
+	}
+	if strings.Contains(output, "Entire is already enabled.") {
+		t.Fatalf("expected enable --force to avoid the lightweight re-enable path, got: %s", output)
 	}
 }
 
-func TestCanPromptInteractively_EnvVar_OtherValue(t *testing.T) {
-	// Cannot use t.Parallel() because we use t.Setenv
-	t.Setenv("ENTIRE_TEST_TTY", "yes") // Not "1", so should be false
+func TestEnableCmd_ForceOnConfiguredDisabledRepo_Reenables(t *testing.T) {
+	setupTestRepo(t)
+	t.Setenv("ENTIRE_TEST_TTY", "0")
+	writeSettings(t, testSettingsDisabled)
+	writeClaudeHooksFixture(t)
 
-	if canPromptInteractively() {
-		t.Error("canPromptInteractively() = true, want false when ENTIRE_TEST_TTY is set but not '1'")
+	cmd := newEnableCmd()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"--force"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("enable --force error = %v", err)
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "Cannot show agent selection in non-interactive mode.") {
+		t.Fatalf("expected enable --force to route through manage agents before enabling, got: %s", output)
+	}
+	if !strings.Contains(output, "Entire is now enabled.") {
+		t.Fatalf("expected enable --force to still enable the repo, got: %s", output)
+	}
+
+	enabled, err := IsEnabled(context.Background())
+	if err != nil {
+		t.Fatalf("IsEnabled() error = %v", err)
+	}
+	if !enabled {
+		t.Fatal("expected repo to be enabled after enable --force")
+	}
+}
+
+func TestEnableCmd_ForceAndStrategyFlagsOnConfiguredDisabledRepo_ReenablesAndUpdatesSettings(t *testing.T) {
+	setupTestRepo(t)
+	t.Setenv("ENTIRE_TEST_TTY", "0")
+	writeSettings(t, testSettingsDisabled)
+	writeClaudeHooksFixture(t)
+
+	cmd := newEnableCmd()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"--force", "--checkpoint-remote", "github:org/repo", "--skip-push-sessions"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("enable with force and strategy flags error = %v", err)
+	}
+
+	output := stdout.String()
+	if !strings.Contains(output, "Settings updated") {
+		t.Fatalf("expected strategy flags to be applied, got: %s", output)
+	}
+	if !strings.Contains(output, "Cannot show agent selection in non-interactive mode.") {
+		t.Fatalf("expected force handling to still reach manage agents, got: %s", output)
+	}
+	if !strings.Contains(output, "Entire is now enabled.") {
+		t.Fatalf("expected repo to be enabled after updating settings, got: %s", output)
+	}
+
+	enabled, err := IsEnabled(context.Background())
+	if err != nil {
+		t.Fatalf("IsEnabled() error = %v", err)
+	}
+	if !enabled {
+		t.Fatal("expected repo to be enabled after enable with strategy flags")
+	}
+
+	s, err := LoadEntireSettings(context.Background())
+	if err != nil {
+		t.Fatalf("LoadEntireSettings() error = %v", err)
+	}
+	if got := s.StrategyOptions["push_sessions"]; got != false {
+		t.Fatalf("push_sessions = %v, want false", got)
+	}
+	checkpointRemote, ok := s.StrategyOptions["checkpoint_remote"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("checkpoint_remote = %#v, want map", s.StrategyOptions["checkpoint_remote"])
+	}
+	if checkpointRemote["provider"] != "github" || checkpointRemote["repo"] != "org/repo" {
+		t.Fatalf("checkpoint_remote = %#v, want github/org/repo", checkpointRemote)
 	}
 }
 
@@ -1626,6 +1749,117 @@ func TestManageAgents_NoChanges(t *testing.T) {
 	}
 }
 
+func TestManageAgents_NoChanges_StillPersistsVercelSetting(t *testing.T) {
+	setupTestRepo(t)
+	t.Setenv("ENTIRE_TEST_TTY", "1")
+	writeSettings(t, testSettingsEnabled)
+	writeClaudeHooksFixture(t)
+
+	if err := os.WriteFile("vercel.json", []byte(`{
+  "git": {
+    "deploymentEnabled": {
+      "entire/**": false
+    }
+  }
+}`), 0o644); err != nil {
+		t.Fatalf("write vercel.json: %v", err)
+	}
+
+	selectFn := func(_ []string) ([]string, error) {
+		return []string{string(agent.AgentNameClaudeCode)}, nil
+	}
+
+	var buf bytes.Buffer
+	err := runManageAgents(context.Background(), &buf, EnableOptions{}, selectFn)
+	if err != nil {
+		t.Fatalf("runManageAgents() error = %v", err)
+	}
+
+	if strings.Contains(buf.String(), "No changes made.") {
+		t.Fatalf("did not expect no-op output when settings changed, got: %s", buf.String())
+	}
+	if !strings.Contains(buf.String(), ".entire/settings.json") {
+		t.Fatalf("expected settings update output, got: %s", buf.String())
+	}
+
+	s, err := settings.Load(context.Background())
+	if err != nil {
+		t.Fatalf("load settings: %v", err)
+	}
+	if !s.Vercel {
+		t.Fatal("expected vercel setting to be enabled")
+	}
+}
+
+func TestManageAgents_ForceReinstallsSelectedAgentHooks(t *testing.T) {
+	// Cannot use t.Parallel() because we use t.Chdir and t.Setenv
+	setupTestRepo(t)
+	t.Setenv("ENTIRE_TEST_TTY", "1")
+	writeSettings(t, testSettingsEnabled)
+	writeClaudeHooksFixture(t)
+
+	// Simulate a stale or locally modified Entire-managed Claude hook.
+	modifiedHooksJSON := `{
+		"hooks": {
+			"Stop": [{"hooks": [{"type": "command", "command": "entire hooks claude-code stop --stale"}]}]
+		}
+	}`
+	if err := os.WriteFile(".claude/settings.json", []byte(modifiedHooksJSON), 0o644); err != nil {
+		t.Fatalf("Failed to mutate .claude/settings.json: %v", err)
+	}
+
+	selectFn := func(_ []string) ([]string, error) {
+		return []string{string(agent.AgentNameClaudeCode)}, nil
+	}
+
+	var buf bytes.Buffer
+	err := runManageAgents(context.Background(), &buf, EnableOptions{ForceHooks: true}, selectFn)
+	if err != nil {
+		t.Fatalf("runManageAgents() error = %v", err)
+	}
+
+	data, err := os.ReadFile(".claude/settings.json")
+	if err != nil {
+		t.Fatalf("Failed to read .claude/settings.json: %v", err)
+	}
+	content := string(data)
+
+	if strings.Contains(content, "stop --stale") {
+		t.Errorf("Expected force reinstall to rewrite stale Claude hook, got: %s", content)
+	}
+	if !strings.Contains(content, "entire hooks claude-code stop") {
+		t.Errorf("Expected force reinstall to restore canonical Claude hook, got: %s", content)
+	}
+	if strings.Contains(buf.String(), "No changes made.") {
+		t.Errorf("Force reinstall should not be treated as no-op, got: %s", buf.String())
+	}
+}
+
+func TestManageAgents_ForceReportsReinstalledAgentsSeparately(t *testing.T) {
+	// Cannot use t.Parallel() because we use t.Chdir and t.Setenv
+	setupTestRepo(t)
+	t.Setenv("ENTIRE_TEST_TTY", "1")
+	writeSettings(t, testSettingsEnabled)
+	writeClaudeHooksFixture(t)
+
+	selectFn := func(_ []string) ([]string, error) {
+		return []string{string(agent.AgentNameClaudeCode)}, nil
+	}
+
+	var buf bytes.Buffer
+	err := runManageAgents(context.Background(), &buf, EnableOptions{ForceHooks: true}, selectFn)
+	if err != nil {
+		t.Fatalf("runManageAgents() error = %v", err)
+	}
+
+	if !strings.Contains(buf.String(), "Reinstalled agents") {
+		t.Errorf("Expected force reinstall summary to mention reinstalled agents, got: %s", buf.String())
+	}
+	if strings.Contains(buf.String(), "Added agents") {
+		t.Errorf("Force reinstall should not be reported as added agents, got: %s", buf.String())
+	}
+}
+
 func TestManageAgents_AddAndRemove(t *testing.T) {
 	// Cannot use t.Parallel() because we use t.Chdir and t.Setenv
 	setupTestRepo(t)
@@ -1660,6 +1894,161 @@ func TestManageAgents_AddAndRemove(t *testing.T) {
 	}
 	if !checkGeminiCLIHooksInstalled() {
 		t.Error("Expected Gemini CLI hooks to be installed after selection")
+	}
+}
+
+func TestMaybePromptVercelDeploymentDisable_MergesExistingConfig(t *testing.T) {
+	setupTestRepo(t)
+
+	requireWriteFile := func(path, content string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
+	requireWriteFile("vercel.json", `{
+  "cleanUrls": true,
+  "git": {
+    "deploymentEnabled": {
+      "main": true
+    }
+  }
+}`)
+
+	var prompted bool
+	var buf bytes.Buffer
+	changed, err := maybePromptVercelDeploymentDisable(context.Background(), &buf, settings.EntireSettingsFile, func() (bool, error) {
+		prompted = true
+		return true, nil
+	})
+	if err != nil {
+		t.Fatalf("maybePromptVercelDeploymentDisable() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("expected Vercel setting change")
+	}
+	if !prompted {
+		t.Fatal("expected Vercel prompt to run")
+	}
+
+	projectSettings, err := settings.Load(context.Background())
+	if err != nil {
+		t.Fatalf("load settings: %v", err)
+	}
+	if !projectSettings.Vercel {
+		t.Fatal("expected vercel setting to be enabled")
+	}
+}
+
+func TestMaybePromptVercelDeploymentDisable_CreatesConfigWhenVercelDetected(t *testing.T) {
+	setupTestRepo(t)
+
+	if err := os.MkdirAll(".vercel", 0o755); err != nil {
+		t.Fatalf("mkdir .vercel: %v", err)
+	}
+
+	var buf bytes.Buffer
+	changed, err := maybePromptVercelDeploymentDisable(context.Background(), &buf, settings.EntireSettingsFile, func() (bool, error) {
+		return true, nil
+	})
+	if err != nil {
+		t.Fatalf("maybePromptVercelDeploymentDisable() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("expected Vercel setting change")
+	}
+
+	projectSettings, err := settings.Load(context.Background())
+	if err != nil {
+		t.Fatalf("load settings: %v", err)
+	}
+	if !projectSettings.Vercel {
+		t.Fatal("expected vercel setting to be enabled")
+	}
+}
+
+func TestMaybePromptVercelDeploymentDisable_SkipsPromptWhenAlreadyDisabledInVercelJSON(t *testing.T) {
+	setupTestRepo(t)
+
+	if err := os.WriteFile("vercel.json", []byte(`{
+  "git": {
+    "deploymentEnabled": {
+      "entire/**": false
+    }
+  }
+}`), 0o644); err != nil {
+		t.Fatalf("write vercel.json: %v", err)
+	}
+
+	promptCalled := false
+	var buf bytes.Buffer
+	changed, err := maybePromptVercelDeploymentDisable(context.Background(), &buf, settings.EntireSettingsFile, func() (bool, error) {
+		promptCalled = true
+		return true, nil
+	})
+	if err != nil {
+		t.Fatalf("maybePromptVercelDeploymentDisable() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("expected Vercel setting change from existing vercel.json")
+	}
+	if promptCalled {
+		t.Fatal("expected Vercel prompt to be skipped when already configured")
+	}
+	if !strings.Contains(buf.String(), ".entire/settings.json") {
+		t.Fatalf("expected settings update output, got %q", buf.String())
+	}
+
+	projectSettings, err := settings.Load(context.Background())
+	if err != nil {
+		t.Fatalf("load settings: %v", err)
+	}
+	if !projectSettings.Vercel {
+		t.Fatal("expected vercel setting to be enabled from existing vercel.json")
+	}
+}
+
+func TestMaybePromptVercelDeploymentDisable_WritesLocalSettingsWhenRequested(t *testing.T) {
+	setupTestRepo(t)
+
+	if err := os.MkdirAll(filepath.Dir(settings.EntireSettingsLocalFile), 0o755); err != nil {
+		t.Fatalf("mkdir settings dir: %v", err)
+	}
+	if err := os.WriteFile("vercel.json", []byte(`{}`), 0o644); err != nil {
+		t.Fatalf("write vercel.json: %v", err)
+	}
+
+	var buf bytes.Buffer
+	changed, err := maybePromptVercelDeploymentDisable(context.Background(), &buf, settings.EntireSettingsLocalFile, func() (bool, error) {
+		return true, nil
+	})
+	if err != nil {
+		t.Fatalf("maybePromptVercelDeploymentDisable() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("expected Vercel setting change")
+	}
+	if !strings.Contains(buf.String(), settings.EntireSettingsLocalFile) {
+		t.Fatalf("expected local settings update output, got %q", buf.String())
+	}
+
+	localSettingsPath := filepath.Join(".", settings.EntireSettingsLocalFile)
+	localSettings, err := settings.LoadFromFile(localSettingsPath)
+	if err != nil {
+		t.Fatalf("load local settings: %v", err)
+	}
+	if !localSettings.Vercel {
+		t.Fatal("expected vercel setting in local settings")
+	}
+
+	projectSettingsPath := filepath.Join(".", settings.EntireSettingsFile)
+	projectSettings, err := settings.LoadFromFile(projectSettingsPath)
+	if err != nil {
+		t.Fatalf("load project settings: %v", err)
+	}
+	if projectSettings.Vercel {
+		t.Fatal("expected project settings to remain unchanged")
 	}
 }
 
@@ -1901,5 +2290,209 @@ func TestConfigureCmd_CheckpointRemote_DoesNotLeakMergedSettings(t *testing.T) {
 	}
 	if _, exists := raw["log_level"]; exists {
 		t.Error("log_level from local settings leaked into project settings")
+	}
+}
+
+func stubCLIAvailable(t *testing.T) {
+	t.Helper()
+	orig := isSummaryCLIAvailable
+	isSummaryCLIAvailable = func(types.AgentName) bool { return true }
+	t.Cleanup(func() { isSummaryCLIAvailable = orig })
+}
+
+func TestConfigureCmd_SummarizeProvider_UpdatesProjectSettings(t *testing.T) {
+	setupTestRepo(t)
+	writeSettings(t, testSettingsEnabled)
+	stubCLIAvailable(t)
+
+	cmd := newSetupCmd()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--summarize-provider", "codex", "--summarize-model", "gpt-5"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("configure --summarize-provider failed: %v", err)
+	}
+
+	if !strings.Contains(stdout.String(), "Settings updated") {
+		t.Errorf("expected 'Settings updated' output, got: %s", stdout.String())
+	}
+
+	s, err := settings.LoadFromFile(EntireSettingsFile)
+	if err != nil {
+		t.Fatalf("failed to load settings: %v", err)
+	}
+	if s.SummaryGeneration == nil {
+		t.Fatal("expected summary_generation to be set")
+	}
+	if s.SummaryGeneration.Provider != "codex" {
+		t.Fatalf("summary provider = %q, want %q", s.SummaryGeneration.Provider, "codex")
+	}
+	if s.SummaryGeneration.Model != "gpt-5" {
+		t.Fatalf("summary model = %q, want %q", s.SummaryGeneration.Model, "gpt-5")
+	}
+}
+
+func TestConfigureCmd_SummarizeProvider_WritesToLocalFile(t *testing.T) {
+	setupTestRepo(t)
+	writeSettings(t, testSettingsEnabled)
+	stubCLIAvailable(t)
+
+	cmd := newSetupCmd()
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--local", "--summarize-provider", "claude-code", "--summarize-model", "sonnet"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("configure --local --summarize-provider failed: %v", err)
+	}
+
+	if !strings.Contains(stdout.String(), "settings.local.json") {
+		t.Errorf("expected output to reference settings.local.json, got: %s", stdout.String())
+	}
+
+	localS, err := settings.LoadFromFile(EntireSettingsLocalFile)
+	if err != nil {
+		t.Fatalf("failed to load local settings: %v", err)
+	}
+	if localS.SummaryGeneration == nil {
+		t.Fatal("expected local summary_generation to be set")
+	}
+	if localS.SummaryGeneration.Provider != "claude-code" {
+		t.Fatalf("local summary provider = %q, want %q", localS.SummaryGeneration.Provider, "claude-code")
+	}
+
+	projectS, err := settings.LoadFromFile(EntireSettingsFile)
+	if err != nil {
+		t.Fatalf("failed to load project settings: %v", err)
+	}
+	if projectS.SummaryGeneration != nil {
+		t.Fatal("summary_generation should not leak into project settings")
+	}
+}
+
+func TestConfigureCmd_SummarizeProvider_InvalidProvider(t *testing.T) {
+	setupTestRepo(t)
+	writeSettings(t, testSettingsEnabled)
+
+	cmd := newSetupCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--summarize-provider", "opencode"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for unsupported summary provider")
+	}
+}
+
+func TestConfigureCmd_SummarizeProvider_SwitchClearsStaleModel(t *testing.T) {
+	stubCLIAvailable(t)
+	setupTestRepo(t)
+	writeSettings(t, `{"enabled": true, "summary_generation": {"provider": "claude-code", "model": "sonnet"}}`)
+
+	cmd := newSetupCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--summarize-provider", "codex"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("configure --summarize-provider codex failed: %v", err)
+	}
+
+	s, err := settings.LoadFromFile(EntireSettingsFile)
+	if err != nil {
+		t.Fatalf("failed to load settings: %v", err)
+	}
+	if s.SummaryGeneration == nil {
+		t.Fatal("expected summary_generation to be set")
+	}
+	if s.SummaryGeneration.Provider != "codex" {
+		t.Fatalf("summary provider = %q, want %q", s.SummaryGeneration.Provider, "codex")
+	}
+	if s.SummaryGeneration.Model != "" {
+		t.Fatalf("summary model = %q, want empty after provider switch", s.SummaryGeneration.Model)
+	}
+}
+
+func TestConfigureCmd_SummarizeModel_RequiresProvider(t *testing.T) {
+	setupTestRepo(t)
+	writeSettings(t, testSettingsEnabled)
+
+	cmd := newSetupCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--summarize-model", "sonnet"})
+
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected error for summarize-model without provider")
+	}
+}
+
+func TestConfigureCmd_SummarizeModel_LocalInheritsProviderFromProject(t *testing.T) {
+	setupTestRepo(t)
+	stubCLIAvailable(t)
+	// Project settings define the provider; local override only sets the model.
+	writeSettings(t, `{"enabled": true, "summary_generation": {"provider": "claude-code"}}`)
+
+	cmd := newSetupCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--local", "--summarize-model", "sonnet"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("configure --local --summarize-model failed: %v", err)
+	}
+
+	localS, err := settings.LoadFromFile(EntireSettingsLocalFile)
+	if err != nil {
+		t.Fatalf("failed to load local settings: %v", err)
+	}
+	if localS.SummaryGeneration == nil {
+		t.Fatal("expected local summary_generation to be set")
+	}
+	if localS.SummaryGeneration.Model != "sonnet" {
+		t.Fatalf("local summary model = %q, want %q", localS.SummaryGeneration.Model, "sonnet")
+	}
+
+	// Project settings must not be modified.
+	projectS, err := settings.LoadFromFile(EntireSettingsFile)
+	if err != nil {
+		t.Fatalf("failed to load project settings: %v", err)
+	}
+	if projectS.SummaryGeneration.Model != "" {
+		t.Fatalf("project model = %q, should remain empty", projectS.SummaryGeneration.Model)
+	}
+}
+
+func TestConfigureCmd_SummarizeModel_UsesExistingProvider(t *testing.T) {
+	setupTestRepo(t)
+	stubCLIAvailable(t)
+	writeSettings(t, `{"enabled": true, "summary_generation": {"provider": "claude-code"}}`)
+
+	cmd := newSetupCmd()
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"--summarize-model", "sonnet"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("configure --summarize-model failed: %v", err)
+	}
+
+	s, err := settings.LoadFromFile(EntireSettingsFile)
+	if err != nil {
+		t.Fatalf("failed to load settings: %v", err)
+	}
+	if s.SummaryGeneration == nil {
+		t.Fatal("expected summary_generation to be set")
+	}
+	if s.SummaryGeneration.Provider != "claude-code" {
+		t.Fatalf("summary provider = %q, want %q", s.SummaryGeneration.Provider, "claude-code")
+	}
+	if s.SummaryGeneration.Model != "sonnet" {
+		t.Fatalf("summary model = %q, want %q", s.SummaryGeneration.Model, "sonnet")
 	}
 }

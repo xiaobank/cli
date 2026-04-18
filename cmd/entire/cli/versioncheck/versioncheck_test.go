@@ -262,7 +262,7 @@ func TestFetchLatestVersionPrerelease(t *testing.T) {
 
 	_, err := fetchLatestRelease(context.Background())
 	if err == nil {
-		t.Fatal("fetchLatestRelease(context.Background()) expected error for prerelease, got nil")
+		t.Fatal("fetchLatestVersion(context.Background()) expected error for prerelease, got nil")
 	}
 }
 
@@ -278,7 +278,7 @@ func TestFetchLatestVersionServerError(t *testing.T) {
 
 	_, err := fetchLatestRelease(context.Background())
 	if err == nil {
-		t.Fatal("fetchLatestRelease(context.Background()) expected error for 500 response, got nil")
+		t.Fatal("fetchLatestVersion(context.Background()) expected error for 500 response, got nil")
 	}
 }
 
@@ -315,161 +315,77 @@ func TestParseGitHubRelease(t *testing.T) {
 func TestUpdateCommand(t *testing.T) {
 	const plainBinPath = "/usr/local/bin/entire"
 	tests := []struct {
-		name      string
-		execPath  func() (string, error)
-		writeProv *InstallProvenance
-		want      string
+		name           string
+		currentVersion string
+		execPath       func() (string, error)
+		want           string
 	}{
 		{
-			name:     "install.sh provenance",
-			execPath: func() (string, error) { return plainBinPath, nil },
-			writeProv: &InstallProvenance{
-				Manager:     "install.sh",
-				Channel:     "stable",
-				Package:     "entire",
-				InstalledAt: time.Date(2026, time.April, 11, 12, 0, 0, 0, time.UTC),
-			},
-			want: "curl -fsSL https://entire.io/install.sh | bash",
+			name:           "homebrew stable cellar path uses cask command",
+			currentVersion: "1.0.0",
+			execPath:       func() (string, error) { return "/opt/homebrew/Cellar/entire/1.0.0/bin/entire", nil },
+			want:           "brew upgrade --cask entire",
 		},
 		{
-			name:     "brew provenance stable",
-			execPath: func() (string, error) { return plainBinPath, nil },
-			writeProv: &InstallProvenance{
-				Manager:     "brew",
-				Channel:     "stable",
-				Package:     "entire",
-				InstalledAt: time.Date(2026, time.April, 11, 12, 0, 0, 0, time.UTC),
-			},
-			want: "brew upgrade entire",
+			name:           "homebrew stable cask path uses cask command",
+			currentVersion: "1.0.0",
+			execPath:       func() (string, error) { return "/opt/homebrew/bin/entire", nil },
+			want:           "brew upgrade --cask entire",
 		},
 		{
-			name:     "brew provenance nightly package",
-			execPath: func() (string, error) { return plainBinPath, nil },
-			writeProv: &InstallProvenance{
-				Manager:     "brew",
-				Channel:     "nightly",
-				Package:     "entire@nightly",
-				InstalledAt: time.Date(2026, time.April, 11, 12, 0, 0, 0, time.UTC),
-			},
-			want: "brew upgrade entire@nightly",
+			name:           "homebrew nightly path uses cask command",
+			currentVersion: "1.0.1-nightly.202604101200.abc1234",
+			execPath:       func() (string, error) { return "/opt/homebrew/bin/entire", nil },
+			want:           "brew upgrade --cask entire@nightly",
 		},
 		{
-			name:     "scoop provenance",
-			execPath: func() (string, error) { return plainBinPath, nil },
-			writeProv: &InstallProvenance{
-				Manager:     "scoop",
-				Channel:     "stable",
-				Package:     "entire/cli",
-				InstalledAt: time.Date(2026, time.April, 11, 12, 0, 0, 0, time.UTC),
-			},
-			want: "scoop update entire/cli",
+			name:           "linuxbrew path",
+			currentVersion: "1.0.0",
+			execPath:       func() (string, error) { return "/home/linuxbrew/.linuxbrew/bin/entire", nil },
+			want:           "brew upgrade --cask entire",
 		},
 		{
-			name:     "homebrew cellar path",
-			execPath: func() (string, error) { return "/opt/homebrew/Cellar/entire/1.0.0/bin/entire", nil },
-			want:     "brew upgrade entire",
+			name:           "mise path",
+			currentVersion: "1.0.0",
+			execPath:       func() (string, error) { return "/home/user/.local/share/mise/installs/entire/1.0.0/bin/entire", nil },
+			want:           "mise upgrade entire",
 		},
 		{
-			name:     "homebrew opt path",
-			execPath: func() (string, error) { return "/opt/homebrew/bin/entire", nil },
-			want:     "brew upgrade entire",
+			name:           "scoop path",
+			currentVersion: "1.0.0",
+			execPath:       func() (string, error) { return `C:\Users\test\scoop\apps\cli\current\entire.exe`, nil },
+			want:           "scoop update entire/cli",
 		},
 		{
-			name:     "linuxbrew path",
-			execPath: func() (string, error) { return "/home/linuxbrew/.linuxbrew/bin/entire", nil },
-			want:     "brew upgrade entire",
+			name:           "unknown path stable falls back to stable curl command",
+			currentVersion: "1.0.0",
+			execPath:       func() (string, error) { return plainBinPath, nil },
+			want:           "curl -fsSL https://entire.io/install.sh | bash",
 		},
 		{
-			name:     "mise path",
-			execPath: func() (string, error) { return "/home/user/.local/share/mise/installs/entire/1.0.0/bin/entire", nil },
-			want:     "mise upgrade entire",
+			name:           "unknown path nightly falls back to nightly curl command",
+			currentVersion: "1.0.1-nightly.202604101200.abc1234",
+			execPath:       func() (string, error) { return plainBinPath, nil },
+			want:           "curl -fsSL https://entire.io/install.sh | bash -s -- --channel nightly",
 		},
 		{
-			name:     "username mise not detected as mise install",
-			execPath: func() (string, error) { return "/home/mise/bin/entire", nil },
-			want:     "curl -fsSL https://entire.io/install.sh | bash",
-		},
-		{
-			name:     "username homebrew not detected as brew install",
-			execPath: func() (string, error) { return "/home/homebrew/bin/entire", nil },
-			want:     "curl -fsSL https://entire.io/install.sh | bash",
-		},
-		{
-			name:     "unknown path falls back to curl",
-			execPath: func() (string, error) { return plainBinPath, nil },
-			want:     "curl -fsSL https://entire.io/install.sh | bash",
-		},
-		{
-			name:     "executable error falls back to curl",
-			execPath: func() (string, error) { return "", errors.New("not found") },
-			want:     "curl -fsSL https://entire.io/install.sh | bash",
+			name:           "executable error falls back to stable curl command",
+			currentVersion: "1.0.0",
+			execPath:       func() (string, error) { return "", errors.New("not found") },
+			want:           "curl -fsSL https://entire.io/install.sh | bash",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tmpHome := t.TempDir()
-			t.Setenv("HOME", tmpHome)
-
-			if tt.writeProv != nil {
-				configDir, err := globalConfigDirPath()
-				if err != nil {
-					t.Fatalf("globalConfigDirPath() error = %v", err)
-				}
-				if err := os.MkdirAll(configDir, 0o755); err != nil {
-					t.Fatalf("MkdirAll() error = %v", err)
-				}
-				data, err := json.Marshal(tt.writeProv)
-				if err != nil {
-					t.Fatalf("json.Marshal() error = %v", err)
-				}
-				if err := os.WriteFile(filepath.Join(configDir, installProvenanceFileName), data, 0o644); err != nil {
-					t.Fatalf("WriteFile() error = %v", err)
-				}
-			}
-
 			original := executablePath
 			executablePath = tt.execPath
 			t.Cleanup(func() { executablePath = original })
 
-			if got := updateCommand(); got != tt.want {
+			if got := updateCommand(tt.currentVersion); got != tt.want {
 				t.Errorf("updateCommand() = %q, want %q", got, tt.want)
 			}
 		})
-	}
-}
-
-func TestLoadInstallProvenance(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-
-	configDir, err := globalConfigDirPath()
-	if err != nil {
-		t.Fatalf("globalConfigDirPath() error = %v", err)
-	}
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-
-	want := &InstallProvenance{
-		Manager:     "brew",
-		Channel:     "stable",
-		Package:     "entire",
-		InstalledAt: time.Date(2026, time.April, 11, 13, 0, 0, 0, time.UTC),
-	}
-	data, err := json.Marshal(want)
-	if err != nil {
-		t.Fatalf("json.Marshal() error = %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(configDir, installProvenanceFileName), data, 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-
-	got, err := loadInstallProvenance()
-	if err != nil {
-		t.Fatalf("loadInstallProvenance() error = %v", err)
-	}
-	if *got != *want {
-		t.Fatalf("loadInstallProvenance() = %+v, want %+v", *got, *want)
 	}
 }
 

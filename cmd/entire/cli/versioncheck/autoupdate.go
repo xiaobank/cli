@@ -75,11 +75,12 @@ func MaybeAutoUpdate(ctx context.Context, w io.Writer, currentVersion string, re
 		return
 	}
 
-	cmdStr, fromProvenance := resolveUpdateCommand()
+	cmdStr := updateCommand(currentVersion)
+	manager := installManagerForCurrentBinary()
 
 	if mode == settings.AutoUpdateAuto {
-		if !fromProvenance {
-			logging.Debug(ctx, "auto-update: skipped (no install provenance)")
+		if manager == installManagerUnknown {
+			logging.Debug(ctx, "auto-update: skipped (install manager unknown)")
 			return
 		}
 		if !release.PublishedAt.IsZero() && nowFunc().Sub(release.PublishedAt) < autoUpdateSoakDuration {
@@ -114,7 +115,6 @@ func MaybeAutoUpdate(ctx context.Context, w io.Writer, currentVersion string, re
 		return
 	}
 	fmt.Fprintf(w, "Update complete. Re-run entire to use the new version.\n")
-	_ = currentVersion // reserved for future "updated from X to Y" messaging
 }
 
 // confirmUpdate prompts the user interactively. Returns false if they declined
@@ -180,17 +180,18 @@ func recordUpdateAttempt(ctx context.Context, ok bool) {
 // and resolves the installer command from provenance.
 // Returns (ran bool, err error). ran=false means the user declined or
 // the gates blocked execution; err indicates a real failure.
-func RunUpdateNow(ctx context.Context, w io.Writer, checkOnly, skipPrompt bool) (bool, error) {
+func RunUpdateNow(ctx context.Context, w io.Writer, currentVersion string, checkOnly, skipPrompt bool) (bool, error) {
 	if os.Getenv(envKillSwitch) != "" {
 		return false, errors.New("auto-update disabled by " + envKillSwitch)
 	}
 
-	cmdStr, fromProvenance := resolveUpdateCommand()
+	cmdStr := updateCommand(currentVersion)
+	manager := installManagerForCurrentBinary()
 	if checkOnly {
-		if fromProvenance {
-			fmt.Fprintf(w, "Update command (from install provenance): %s\n", cmdStr)
+		if manager == installManagerUnknown {
+			fmt.Fprintf(w, "Update command (fallback, install manager unknown): %s\n", cmdStr)
 		} else {
-			fmt.Fprintf(w, "Update command (inferred from executable path): %s\n", cmdStr)
+			fmt.Fprintf(w, "Update command (%s): %s\n", manager, cmdStr)
 		}
 		return false, nil
 	}

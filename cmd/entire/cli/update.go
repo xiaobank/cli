@@ -6,6 +6,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/entireio/cli/cmd/entire/cli/versioncheck"
+	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
 )
 
 func newUpdateCmd() *cobra.Command {
@@ -23,7 +24,7 @@ Flags:
   --check-only  Print the installer command without running it.
   --yes         Skip the confirmation prompt.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if _, err := versioncheck.RunUpdateNow(cmd.Context(), cmd.OutOrStdout(), checkOnly, skipPrompt); err != nil {
+			if _, err := versioncheck.RunUpdateNow(cmd.Context(), cmd.OutOrStdout(), versioninfo.Version, checkOnly, skipPrompt); err != nil {
 				return fmt.Errorf("update: %w", err)
 			}
 			return nil

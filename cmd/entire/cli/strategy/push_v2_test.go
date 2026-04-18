@@ -12,6 +12,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
+	"github.com/entireio/cli/redact"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
@@ -36,7 +37,7 @@ func setupRepoWithV2Ref(t *testing.T) string {
 	require.NoError(t, err)
 
 	// Create v2 /main ref with an empty tree
-	emptyTree, err := checkpoint.BuildTreeFromEntries(repo, map[string]object.TreeEntry{})
+	emptyTree, err := checkpoint.BuildTreeFromEntries(context.Background(), repo, map[string]object.TreeEntry{})
 	require.NoError(t, err)
 
 	commitHash, err := checkpoint.CreateCommit(repo, emptyTree, plumbing.ZeroHash,
@@ -137,7 +138,7 @@ func writeV2Checkpoint(t *testing.T, repo *git.Repository, cpID id.CheckpointID,
 		CheckpointID: cpID,
 		SessionID:    sessionID,
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"from":"` + sessionID + `"}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"from":"` + sessionID + `"}`)),
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	})
@@ -331,7 +332,7 @@ func TestFetchAndMergeRef_RotationConflict(t *testing.T) {
 		plumbing.NewHashReference(archiveRefName, archiveCommitHash)))
 
 	// Create fresh orphan /full/current
-	emptyTree, err := checkpoint.BuildTreeFromEntries(remoteRepo, map[string]object.TreeEntry{})
+	emptyTree, err := checkpoint.BuildTreeFromEntries(context.Background(), remoteRepo, map[string]object.TreeEntry{})
 	require.NoError(t, err)
 	orphanHash, err := checkpoint.CreateCommit(remoteRepo, emptyTree, plumbing.ZeroHash,
 		"Start generation", "Test", "test@test.com")

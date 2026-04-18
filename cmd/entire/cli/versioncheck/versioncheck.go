@@ -17,6 +17,15 @@ import (
 	"golang.org/x/mod/semver"
 )
 
+const (
+	installManagerBrew    = "brew"
+	installManagerMise    = "mise"
+	installManagerScoop   = "scoop"
+	installManagerUnknown = "unknown"
+	installChannelStable  = "stable"
+	installChannelNightly = "nightly"
+)
+
 // CheckAndNotify performs a version check and notifies the user if a newer version is available.
 // This is the main entry point for the version check system.
 // The function is silent on all errors to avoid interrupting CLI operations.
@@ -198,7 +207,6 @@ func fetchLatestRelease(ctx context.Context) (*GitHubRelease, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parsing release: %w", err)
 	}
-
 	return release, nil
 }
 
@@ -298,127 +306,63 @@ func isOutdated(current, latest string) bool {
 // It's a variable so tests can override it.
 var executablePath = os.Executable
 
-type updateHint struct {
-	Command string
+func releaseChannel(version string) string {
+	if isNightly(version) {
+		return installChannelNightly
+	}
+	return installChannelStable
 }
 
-func installProvenanceFilePath() (string, error) {
-	configDir, err := globalConfigDirPath()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(configDir, installProvenanceFileName), nil
-}
-
-func loadInstallProvenance() (*InstallProvenance, error) {
-	filePath, err := installProvenanceFilePath()
-	if err != nil {
-		return nil, err
-	}
-
-	data, err := os.ReadFile(filePath) //nolint:gosec // filePath is inside the user's config dir
-	if err != nil {
-		return nil, fmt.Errorf("reading install provenance: %w", err)
-	}
-
-	var provenance InstallProvenance
-	if err := json.Unmarshal(data, &provenance); err != nil {
-		return nil, fmt.Errorf("parsing install provenance: %w", err)
-	}
-
-	return &provenance, nil
-}
-
-const (
-	channelStable  = "stable"
-	channelNightly = "nightly"
-)
-
-func resolveUpdateHintFromProvenance(provenance *InstallProvenance) (updateHint, bool) {
-	if provenance == nil {
-		return updateHint{}, false
-	}
-
-	channel := strings.TrimSpace(provenance.Channel)
-	if channel == "" {
-		channel = channelStable
-	}
-
-	switch strings.TrimSpace(provenance.Manager) {
-	case "install.sh":
-		if channel != channelStable {
-			return updateHint{}, false
-		}
-		return updateHint{Command: "curl -fsSL https://entire.io/install.sh | bash"}, true
-	case "brew":
-		if channel != channelStable && channel != channelNightly {
-			return updateHint{}, false
-		}
-		pkg := strings.TrimSpace(provenance.Package)
-		if pkg == "" {
-			pkg = "entire"
-		}
-		return updateHint{Command: "brew upgrade " + pkg}, true
-	case "scoop":
-		if channel != channelStable && channel != channelNightly {
-			return updateHint{}, false
-		}
-		pkg := strings.TrimSpace(provenance.Package)
-		if pkg == "" {
-			pkg = "entire/cli"
-		}
-		return updateHint{Command: "scoop update " + pkg}, true
-	default:
-		return updateHint{}, false
-	}
-}
-
-func inferUpdateHintFromExecutablePath() updateHint {
+func installManagerForCurrentBinary() string {
 	execPath, err := executablePath()
 	if err != nil {
-		return updateHint{Command: "curl -fsSL https://entire.io/install.sh | bash"}
+		return installManagerUnknown
 	}
 
-	// Resolve symlinks to find the real path (Homebrew symlinks from bin/ to Cellar/)
 	realPath, err := filepath.EvalSymlinks(execPath)
 	if err != nil {
 		realPath = execPath
 	}
+	normalizedPath := strings.ReplaceAll(filepath.ToSlash(realPath), "\\", "/")
 
-	if strings.Contains(realPath, "/Cellar/") || strings.Contains(realPath, "/opt/homebrew/") || strings.Contains(realPath, "/linuxbrew/") {
-		return updateHint{Command: "brew upgrade entire"}
+	switch {
+	case strings.Contains(normalizedPath, "/Cellar/") ||
+		strings.Contains(normalizedPath, "/opt/homebrew/") ||
+		strings.Contains(normalizedPath, "/linuxbrew/") ||
+		strings.Contains(normalizedPath, "/Caskroom/"):
+		return installManagerBrew
+	case strings.Contains(normalizedPath, "/mise/installs/"):
+		return installManagerMise
+	case strings.Contains(normalizedPath, "/scoop/apps/"):
+		return installManagerScoop
+	default:
+		return installManagerUnknown
 	}
-
-	if strings.Contains(realPath, "/mise/installs/") {
-		return updateHint{Command: "mise upgrade entire"}
-	}
-
-	return updateHint{Command: "curl -fsSL https://entire.io/install.sh | bash"}
 }
 
-// resolveUpdateCommand returns the update instruction and whether it came from
-// install provenance (true) or the executable-path fallback (false).
-// "auto" mode refuses to execute the command when fromProvenance is false.
-func resolveUpdateCommand() (cmd string, fromProvenance bool) {
-	provenance, err := loadInstallProvenance()
-	if err == nil {
-		if hint, ok := resolveUpdateHintFromProvenance(provenance); ok {
-			return hint.Command, true
+// updateCommand returns the appropriate update instruction based on how the binary was installed.
+func updateCommand(currentVersion string) string {
+	switch installManagerForCurrentBinary() {
+	case installManagerBrew:
+		if releaseChannel(currentVersion) == installChannelNightly {
+			return "brew upgrade --cask entire@nightly"
 		}
+		return "brew upgrade --cask entire"
+	case installManagerMise:
+		return "mise upgrade entire"
+	case installManagerScoop:
+		return "scoop update entire/cli"
 	}
-	return inferUpdateHintFromExecutablePath().Command, false
-}
 
-// updateCommand returns the appropriate update instruction string.
-// Preserved as a thin wrapper for the notification message.
-func updateCommand() string {
-	cmd, _ := resolveUpdateCommand()
-	return cmd
+	if releaseChannel(currentVersion) == installChannelNightly {
+		return "curl -fsSL https://entire.io/install.sh | bash -s -- --channel nightly"
+	}
+	return "curl -fsSL https://entire.io/install.sh | bash"
 }
 
 // printNotification prints the version update notification to the user.
 func printNotification(w io.Writer, current, latest string) {
 	msg := fmt.Sprintf("\nA newer version of Entire CLI is available: %s (current: %s)\nRun '%s' to update.\n",
-		latest, current, updateCommand())
+		latest, current, updateCommand(current))
 	fmt.Fprint(w, msg)
 }

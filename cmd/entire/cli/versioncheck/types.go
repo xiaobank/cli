@@ -9,15 +9,6 @@ type VersionCache struct {
 	LastUpdateAttemptOk   bool      `json:"last_update_attempt_ok,omitempty"`
 }
 
-// InstallProvenance describes how a released Entire binary was installed.
-// The CLI reads this file but does not create or modify it.
-type InstallProvenance struct {
-	Manager     string    `json:"manager"`
-	Channel     string    `json:"channel"`
-	Package     string    `json:"package"`
-	InstalledAt time.Time `json:"installed_at"`
-}
-
 // GitHubRelease represents the GitHub API response for a release.
 type GitHubRelease struct {
 	TagName     string    `json:"tag_name"`
@@ -41,9 +32,6 @@ const (
 
 	// cacheFileName is the name of the cache file stored in the global config directory.
 	cacheFileName = "version_check.json"
-
-	// installProvenanceFileName is the installer-owned provenance file.
-	installProvenanceFileName = "install.json"
 
 	// globalConfigDirName is the name of the global config directory in the user's home.
 	globalConfigDirName = ".config/entire"

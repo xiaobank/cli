@@ -24,6 +24,7 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 	"github.com/entireio/cli/cmd/entire/cli/validation"
+	"github.com/entireio/cli/cmd/entire/cli/vercelconfig"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
 	"github.com/entireio/cli/perf"
 	"github.com/entireio/cli/redact"
@@ -61,7 +62,7 @@ func (s *GitStore) WriteCommitted(ctx context.Context, opts WriteCommittedOption
 	}
 
 	// Ensure sessions branch exists
-	if err := s.ensureSessionsBranch(); err != nil {
+	if err := s.ensureSessionsBranch(ctx); err != nil {
 		return fmt.Errorf("failed to ensure sessions branch: %w", err)
 	}
 
@@ -98,7 +99,11 @@ func (s *GitStore) WriteCommitted(ctx context.Context, opts WriteCommittedOption
 	}
 
 	// Build checkpoint subtree and splice into root (O(depth) tree surgery)
-	newTreeHash, err := s.spliceCheckpointSubtree(rootTreeHash, opts.CheckpointID, basePath, entries)
+	newTreeHash, err := s.spliceCheckpointSubtree(ctx, rootTreeHash, opts.CheckpointID, basePath, entries)
+	if err != nil {
+		return err
+	}
+	newTreeHash, err = s.maybeMergeVercelConfig(ctx, newTreeHash)
 	if err != nil {
 		return err
 	}
@@ -151,7 +156,7 @@ func (s *GitStore) flattenCheckpointEntries(rootTreeHash plumbing.Hash, checkpoi
 // at the correct shard location in the root tree using O(depth) tree surgery.
 // basePath is like "a3/b2c4d5e6f7/" (with trailing slash).
 // Returns the new root tree hash.
-func (s *GitStore) spliceCheckpointSubtree(rootTreeHash plumbing.Hash, checkpointID id.CheckpointID, basePath string, entries map[string]object.TreeEntry) (plumbing.Hash, error) {
+func (s *GitStore) spliceCheckpointSubtree(ctx context.Context, rootTreeHash plumbing.Hash, checkpointID id.CheckpointID, basePath string, entries map[string]object.TreeEntry) (plumbing.Hash, error) {
 	// Convert entries to relative paths (strip basePath prefix)
 	relEntries := make(map[string]object.TreeEntry, len(entries))
 	for path, entry := range entries {
@@ -163,7 +168,7 @@ func (s *GitStore) spliceCheckpointSubtree(rootTreeHash plumbing.Hash, checkpoin
 	}
 
 	// Build the checkpoint subtree from relative entries
-	checkpointTreeHash, err := BuildTreeFromEntries(s.repo, relEntries)
+	checkpointTreeHash, err := BuildTreeFromEntries(ctx, s.repo, relEntries)
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("failed to build checkpoint subtree: %w", err)
 	}
@@ -197,7 +202,7 @@ func (s *GitStore) writeIncrementalTaskCheckpoint(opts WriteCommittedOptions, ta
 		Type:      opts.IncrementalType,
 		ToolUseID: opts.ToolUseID,
 		Timestamp: time.Now().UTC(),
-		Data:      incData,
+		Data:      json.RawMessage(incData.Bytes()),
 	}
 	cpData, err := jsonutil.MarshalIndentWithNewline(checkpoint, "", "  ")
 	if err != nil {
@@ -254,9 +259,10 @@ func (s *GitStore) writeFinalTaskCheckpoint(ctx context.Context, opts WriteCommi
 					slog.String("path", opts.SubagentTranscriptPath),
 					slog.String("error", jsonlErr.Error()),
 				)
-				redacted = redact.Bytes(agentContent)
+				agentContent = redact.Bytes(agentContent)
+			} else {
+				agentContent = redacted.Bytes()
 			}
-			agentContent = redacted
 
 			agentBlobHash, agentBlobErr := CreateBlobFromContent(s.repo, agentContent)
 			if agentBlobErr == nil {
@@ -344,11 +350,14 @@ func (s *GitStore) writeSessionToSubdirectory(ctx context.Context, opts WriteCom
 	}
 
 	// Write transcript
-	if err := s.writeTranscript(ctx, opts, sessionPath, entries); err != nil {
+	wroteTranscript, err := s.writeTranscript(ctx, opts, sessionPath, entries)
+	if err != nil {
 		return filePaths, err
 	}
-	filePaths.Transcript = "/" + sessionPath + paths.TranscriptFileName
-	filePaths.ContentHash = "/" + sessionPath + paths.ContentHashFileName
+	if wroteTranscript {
+		filePaths.Transcript = "/" + sessionPath + paths.TranscriptFileName
+		filePaths.ContentHash = "/" + sessionPath + paths.ContentHashFileName
+	}
 
 	// Write prompts
 	if len(opts.Prompts) > 0 {
@@ -461,7 +470,7 @@ func (s *GitStore) UpdateCheckpointSummary(ctx context.Context, checkpointID id.
 		return err //nolint:wrapcheck // Propagating context cancellation
 	}
 
-	if err := s.ensureSessionsBranch(); err != nil {
+	if err := s.ensureSessionsBranch(ctx); err != nil {
 		return fmt.Errorf("failed to ensure sessions branch: %w", err)
 	}
 
@@ -503,7 +512,7 @@ func (s *GitStore) UpdateCheckpointSummary(ctx context.Context, checkpointID id.
 		Hash: metadataHash,
 	}
 
-	newTreeHash, err := s.spliceCheckpointSubtree(rootTreeHash, checkpointID, basePath, entries)
+	newTreeHash, err := s.spliceCheckpointSubtree(ctx, rootTreeHash, checkpointID, basePath, entries)
 	if err != nil {
 		return err
 	}
@@ -625,47 +634,45 @@ func aggregateTokenUsage(a, b *agent.TokenUsage) *agent.TokenUsage {
 	return result
 }
 
-// writeTranscript writes the transcript file from in-memory content or file path.
-// If the transcript exceeds MaxChunkSize, it's split into multiple chunk files.
-func (s *GitStore) writeTranscript(ctx context.Context, opts WriteCommittedOptions, basePath string, entries map[string]object.TreeEntry) error {
+// writeTranscript writes the transcript and content hash to the checkpoint entries.
+// Returns (true, nil) if files were written, (false, nil) if transcript was empty.
+func (s *GitStore) writeTranscript(ctx context.Context, opts WriteCommittedOptions, basePath string, entries map[string]object.TreeEntry) (bool, error) {
 	logCtx := logging.WithComponent(ctx, "checkpoint")
-	transcript := opts.Transcript
-	if len(transcript) == 0 && opts.TranscriptPath != "" {
-		var readErr error
-		transcript, readErr = os.ReadFile(opts.TranscriptPath)
+	transcriptBytes := opts.Transcript.Bytes()
+
+	// TranscriptPath fallback: data read from disk is an untrusted source,
+	// so we redact it here. The in-memory path (opts.Transcript) is already
+	// pre-redacted by the caller — enforced by the RedactedBytes type.
+	if len(transcriptBytes) == 0 && opts.TranscriptPath != "" {
+		rawData, readErr := os.ReadFile(opts.TranscriptPath)
 		if readErr != nil {
 			// Non-fatal: transcript may not exist yet
-			transcript = nil
+			rawData = nil
+		}
+		if len(rawData) > 0 {
+			redacted, redactErr := redact.JSONLBytes(rawData)
+			if redactErr != nil {
+				return false, fmt.Errorf("failed to redact transcript from file: %w", redactErr)
+			}
+			transcriptBytes = redacted.Bytes()
 		}
 	}
-	if len(transcript) == 0 {
-		return nil
+	if len(transcriptBytes) == 0 {
+		return false, nil
 	}
 
 	if opts.Agent == agent.AgentTypeCodex {
-		transcript = codex.SanitizePortableTranscript(transcript)
+		transcriptBytes = codex.SanitizePortableTranscript(transcriptBytes)
 	}
-
-	// Redact secrets before chunking so content hash reflects redacted content
-	redactStart := time.Now()
-	redactCtx, redactTranscriptSpan := perf.Start(ctx, "redact_transcript")
-	transcript, err := redact.JSONLBytes(transcript)
-	if err != nil {
-		redactTranscriptSpan.RecordError(err)
-		redactTranscriptSpan.End()
-		return fmt.Errorf("failed to redact transcript secrets: %w", err)
-	}
-	redactTranscriptSpan.End()
-	redactDuration := time.Since(redactStart)
 
 	// Chunk the transcript if it's too large
 	chunkStart := time.Now()
-	chunkCtx, chunkTranscriptSpan := perf.Start(redactCtx, "chunk_transcript")
-	chunks, err := agent.ChunkTranscript(chunkCtx, transcript, opts.Agent)
+	chunkCtx, chunkTranscriptSpan := perf.Start(ctx, "chunk_transcript")
+	chunks, err := agent.ChunkTranscript(chunkCtx, transcriptBytes, opts.Agent)
 	if err != nil {
 		chunkTranscriptSpan.RecordError(err)
 		chunkTranscriptSpan.End()
-		return fmt.Errorf("failed to chunk transcript: %w", err)
+		return false, fmt.Errorf("failed to chunk transcript: %w", err)
 	}
 	chunkTranscriptSpan.End()
 	chunkDuration := time.Since(chunkStart)
@@ -679,7 +686,7 @@ func (s *GitStore) writeTranscript(ctx context.Context, opts WriteCommittedOptio
 		if err != nil {
 			writeTranscriptBlobsSpan.RecordError(err)
 			writeTranscriptBlobsSpan.End()
-			return err
+			return false, err
 		}
 		entries[chunkPath] = object.TreeEntry{
 			Name: chunkPath,
@@ -693,12 +700,12 @@ func (s *GitStore) writeTranscript(ctx context.Context, opts WriteCommittedOptio
 	// Content hash for deduplication (hash of full transcript)
 	contentHashStart := time.Now()
 	_, contentHashSpan := perf.Start(blobCtx, "write_transcript_content_hash")
-	contentHash := fmt.Sprintf("sha256:%x", sha256.Sum256(transcript))
+	contentHash := fmt.Sprintf("sha256:%x", sha256.Sum256(transcriptBytes))
 	hashBlob, err := CreateBlobFromContent(s.repo, []byte(contentHash))
 	if err != nil {
 		contentHashSpan.RecordError(err)
 		contentHashSpan.End()
-		return err
+		return false, err
 	}
 	entries[basePath+paths.ContentHashFileName] = object.TreeEntry{
 		Name: basePath + paths.ContentHashFileName,
@@ -711,14 +718,13 @@ func (s *GitStore) writeTranscript(ctx context.Context, opts WriteCommittedOptio
 		slog.String("session_id", opts.SessionID),
 		slog.String("checkpoint_id", opts.CheckpointID.String()),
 		slog.String("agent", string(opts.Agent)),
-		slog.Int64("redact_transcript_ms", redactDuration.Milliseconds()),
 		slog.Int64("chunk_transcript_ms", chunkDuration.Milliseconds()),
 		slog.Int64("write_transcript_blobs_ms", blobDuration.Milliseconds()),
 		slog.Int64("write_transcript_content_hash_ms", time.Since(contentHashStart).Milliseconds()),
-		slog.Int("transcript_bytes", len(transcript)),
+		slog.Int("transcript_bytes", len(transcriptBytes)),
 		slog.Int("chunk_count", len(chunks)),
 	)
-	return nil
+	return true, nil
 }
 
 // mergeFilesTouched combines two file lists, removing duplicates.
@@ -1154,7 +1160,7 @@ func (s *GitStore) UpdateSummary(ctx context.Context, checkpointID id.Checkpoint
 	}
 
 	// Ensure sessions branch exists
-	if err := s.ensureSessionsBranch(); err != nil {
+	if err := s.ensureSessionsBranch(ctx); err != nil {
 		return fmt.Errorf("failed to ensure sessions branch: %w", err)
 	}
 
@@ -1217,7 +1223,7 @@ func (s *GitStore) UpdateSummary(ctx context.Context, checkpointID id.Checkpoint
 	}
 
 	// Build checkpoint subtree and splice into root (O(depth) tree surgery)
-	newTreeHash, err := s.spliceCheckpointSubtree(rootTreeHash, checkpointID, basePath, entries)
+	newTreeHash, err := s.spliceCheckpointSubtree(ctx, rootTreeHash, checkpointID, basePath, entries)
 	if err != nil {
 		return err
 	}
@@ -1252,7 +1258,7 @@ func (s *GitStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOpti
 	}
 
 	// Ensure sessions branch exists
-	if err := s.ensureSessionsBranch(); err != nil {
+	if err := s.ensureSessionsBranch(ctx); err != nil {
 		return fmt.Errorf("failed to ensure sessions branch: %w", err)
 	}
 
@@ -1309,14 +1315,10 @@ func (s *GitStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOpti
 
 	sessionPath := fmt.Sprintf("%s%d/", basePath, sessionIndex)
 
-	// Replace transcript (full replace, not append)
-	// Apply redaction as safety net (caller should redact, but we ensure it here)
-	if len(opts.Transcript) > 0 {
-		transcript, err := redact.JSONLBytes(opts.Transcript)
-		if err != nil {
-			return fmt.Errorf("failed to redact transcript secrets: %w", err)
-		}
-		if err := s.replaceTranscript(ctx, transcript, opts.Agent, sessionPath, entries); err != nil {
+	// Replace transcript (full replace, not append).
+	// Transcript is pre-redacted by the caller (enforced by RedactedBytes type).
+	if opts.Transcript.Len() > 0 {
+		if err := s.replaceTranscript(ctx, opts.Transcript, opts.Agent, sessionPath, entries); err != nil {
 			return fmt.Errorf("failed to replace transcript: %w", err)
 		}
 	}
@@ -1336,7 +1338,11 @@ func (s *GitStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOpti
 	}
 
 	// Build checkpoint subtree and splice into root (O(depth) tree surgery)
-	newTreeHash, err := s.spliceCheckpointSubtree(rootTreeHash, opts.CheckpointID, basePath, entries)
+	newTreeHash, err := s.spliceCheckpointSubtree(ctx, rootTreeHash, opts.CheckpointID, basePath, entries)
+	if err != nil {
+		return err
+	}
+	newTreeHash, err = s.maybeMergeVercelConfig(ctx, newTreeHash)
 	if err != nil {
 		return err
 	}
@@ -1359,7 +1365,7 @@ func (s *GitStore) UpdateCommitted(ctx context.Context, opts UpdateCommittedOpti
 
 // replaceTranscript writes the full transcript content, replacing any existing transcript.
 // Also removes any chunk files from a previous write and updates the content hash.
-func (s *GitStore) replaceTranscript(ctx context.Context, transcript []byte, agentType types.AgentType, sessionPath string, entries map[string]object.TreeEntry) error {
+func (s *GitStore) replaceTranscript(ctx context.Context, transcript redact.RedactedBytes, agentType types.AgentType, sessionPath string, entries map[string]object.TreeEntry) error {
 	// Remove existing transcript files (base + any chunks)
 	transcriptBase := sessionPath + paths.TranscriptFileName
 	for key := range entries {
@@ -1369,7 +1375,7 @@ func (s *GitStore) replaceTranscript(ctx context.Context, transcript []byte, age
 	}
 
 	// Chunk the transcript (matches writeTranscript behavior)
-	chunks, err := agent.ChunkTranscript(ctx, transcript, agentType)
+	chunks, err := agent.ChunkTranscript(ctx, transcript.Bytes(), agentType)
 	if err != nil {
 		return fmt.Errorf("failed to chunk transcript: %w", err)
 	}
@@ -1389,7 +1395,7 @@ func (s *GitStore) replaceTranscript(ctx context.Context, transcript []byte, age
 	}
 
 	// Update content hash
-	contentHash := fmt.Sprintf("sha256:%x", sha256.Sum256(transcript))
+	contentHash := fmt.Sprintf("sha256:%x", sha256.Sum256(transcript.Bytes()))
 	hashBlob, err := CreateBlobFromContent(s.repo, []byte(contentHash))
 	if err != nil {
 		return fmt.Errorf("failed to create content hash blob: %w", err)
@@ -1405,7 +1411,7 @@ func (s *GitStore) replaceTranscript(ctx context.Context, transcript []byte, age
 }
 
 // ensureSessionsBranch ensures the entire/checkpoints/v1 branch exists.
-func (s *GitStore) ensureSessionsBranch() error {
+func (s *GitStore) ensureSessionsBranch(ctx context.Context) error {
 	refName := plumbing.NewBranchReferenceName(paths.MetadataBranchName)
 	_, err := s.repo.Reference(refName, true)
 	if err == nil {
@@ -1413,7 +1419,11 @@ func (s *GitStore) ensureSessionsBranch() error {
 	}
 
 	// Create orphan branch with empty tree
-	emptyTreeHash, err := BuildTreeFromEntries(s.repo, make(map[string]object.TreeEntry))
+	emptyTreeHash, err := BuildTreeFromEntries(ctx, s.repo, make(map[string]object.TreeEntry))
+	if err != nil {
+		return err
+	}
+	emptyTreeHash, err = s.maybeMergeVercelConfig(ctx, emptyTreeHash)
 	if err != nil {
 		return err
 	}
@@ -1429,6 +1439,17 @@ func (s *GitStore) ensureSessionsBranch() error {
 		return fmt.Errorf("failed to set branch reference: %w", err)
 	}
 	return nil
+}
+
+func (s *GitStore) maybeMergeVercelConfig(ctx context.Context, rootTreeHash plumbing.Hash) (plumbing.Hash, error) {
+	if err := vercelconfig.InitSettings(ctx); err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("initialize vercel settings: %w", err)
+	}
+	mergedTreeHash, err := vercelconfig.MaybeMergeMetadataBranchConfig(s.repo, rootTreeHash)
+	if err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("merge vercel metadata branch config: %w", err)
+	}
+	return mergedTreeHash, nil
 }
 
 // getFetchingTree returns a FetchingTree for the metadata branch.
@@ -1592,9 +1613,10 @@ func createRedactedBlobFromFile(repo *git.Repository, filePath, treePath string)
 	if strings.HasSuffix(treePath, ".jsonl") {
 		redacted, jsonlErr := redact.JSONLBytes(content)
 		if jsonlErr != nil {
-			redacted = redact.Bytes(content)
+			content = redact.Bytes(content)
+		} else {
+			content = redacted.Bytes()
 		}
-		content = redacted
 	} else {
 		content = redact.Bytes(content)
 	}
@@ -1609,27 +1631,14 @@ func createRedactedBlobFromFile(repo *git.Repository, filePath, treePath string)
 // GetGitAuthorFromRepo retrieves the git user.name and user.email,
 // checking both the repository-local config and the global ~/.gitconfig.
 func GetGitAuthorFromRepo(repo *git.Repository) (name, email string) {
-	// Get repository config (includes local settings)
-	cfg, err := repo.Config()
-	if err == nil {
+	// ConfigScoped merges local + global (local wins), matching git's own resolution.
+	// Requires a ConfigLoader plugin to be registered; cmd/entire/main.go blank-imports
+	// go-git/v6/x/plugin to register the default Auto loader.
+	if cfg, err := repo.ConfigScoped(config.GlobalScope); err == nil {
 		name = cfg.User.Name
 		email = cfg.User.Email
 	}
 
-	// If not found in local config, try global config
-	if name == "" || email == "" {
-		globalCfg, err := config.LoadConfig(config.GlobalScope)
-		if err == nil {
-			if name == "" {
-				name = globalCfg.User.Name
-			}
-			if email == "" {
-				email = globalCfg.User.Email
-			}
-		}
-	}
-
-	// Provide sensible defaults if git user is not configured
 	if name == "" {
 		name = "Unknown"
 	}

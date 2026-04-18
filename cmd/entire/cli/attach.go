@@ -15,12 +15,16 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/agent/types"
 	cpkg "github.com/entireio/cli/cmd/entire/cli/checkpoint"
 	"github.com/entireio/cli/cmd/entire/cli/checkpoint/id"
+	"github.com/entireio/cli/cmd/entire/cli/interactive"
 	"github.com/entireio/cli/cmd/entire/cli/logging"
 	"github.com/entireio/cli/cmd/entire/cli/session"
+	"github.com/entireio/cli/cmd/entire/cli/settings"
 	"github.com/entireio/cli/cmd/entire/cli/strategy"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
 	"github.com/entireio/cli/cmd/entire/cli/validation"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
+	"github.com/entireio/cli/perf"
+	"github.com/entireio/cli/redact"
 
 	"github.com/charmbracelet/huh"
 	"github.com/go-git/go-git/v6"
@@ -139,19 +143,48 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 
 	tokenUsage := agent.CalculateTokenUsage(logCtx, ag, transcriptData, 0, "")
 
-	if err := store.WriteCommitted(ctx, cpkg.WriteCommittedOptions{
+	_, redactSpan := perf.Start(ctx, "redact_transcript")
+	redactedTranscript, redactErr := redact.JSONLBytes(storedTranscript)
+	redactSpan.End()
+	if redactErr != nil {
+		return fmt.Errorf("failed to redact transcript: %w", redactErr)
+	}
+
+	writeOpts := cpkg.WriteCommittedOptions{
 		CheckpointID: checkpointID,
 		SessionID:    sessionID,
 		Strategy:     strategy.StrategyNameManualCommit,
-		Transcript:   storedTranscript,
+		Transcript:   redactedTranscript,
 		Prompts:      prompts,
 		AuthorName:   author.Name,
 		AuthorEmail:  author.Email,
 		Agent:        ag.Type(),
 		Model:        meta.Model,
 		TokenUsage:   tokenUsage,
-	}); err != nil {
-		return fmt.Errorf("failed to write checkpoint: %w", err)
+	}
+
+	if compacted := compactTranscriptForStartLine(logCtx, redactedTranscript.Bytes(), cpkg.CommittedMetadata{
+		CheckpointID: checkpointID,
+		Agent:        ag.Type(),
+	}, 0); compacted != nil {
+		writeOpts.CompactTranscript = compacted
+	}
+
+	v2Only := settings.IsCheckpointsV2OnlyEnabled(logCtx)
+	if !v2Only {
+		if err := store.WriteCommitted(ctx, writeOpts); err != nil {
+			return fmt.Errorf("failed to write checkpoint: %w", err)
+		}
+	}
+	// IsCheckpointsV2Enabled is true whenever v2Only is true, so this covers both
+	// the v2-only and dual-write paths. Only v2-only propagates the error.
+	if settings.IsCheckpointsV2Enabled(logCtx) {
+		if err := writeAttachCheckpointV2(logCtx, repo, writeOpts); err != nil {
+			if v2Only {
+				return fmt.Errorf("failed to write checkpoint to v2: %w", err)
+			}
+			logging.Warn(logCtx, "attach v2 dual-write failed", "error", err)
+		}
 	}
 
 	// Create or update session state.
@@ -172,6 +205,15 @@ func runAttach(ctx context.Context, w io.Writer, sessionID string, agentName typ
 		fmt.Fprintf(w, "\nCopy to your commit message to attach:\n\n  Entire-Checkpoint: %s\n", cpIDStr)
 	}
 
+	return nil
+}
+
+// writeAttachCheckpointV2 writes attach-created checkpoints into the v2 refs.
+func writeAttachCheckpointV2(ctx context.Context, repo *git.Repository, opts cpkg.WriteCommittedOptions) error {
+	v2Store := cpkg.NewV2GitStore(repo, strategy.ResolveCheckpointURL(ctx, "origin"))
+	if err := v2Store.WriteCommitted(ctx, opts); err != nil {
+		return fmt.Errorf("v2 write committed: %w", err)
+	}
 	return nil
 }
 
@@ -382,7 +424,7 @@ func promptAmendCommit(ctx context.Context, w io.Writer, headCommit *object.Comm
 
 	amend := true
 	if !force {
-		if !canPromptInteractively() {
+		if !interactive.CanPromptInteractively() {
 			// Non-interactive: can't prompt, print trailer for manual use.
 			fmt.Fprintf(w, "\nCopy to your commit message to attach:\n\n  Entire-Checkpoint: %s\n", checkpointIDStr)
 			return nil

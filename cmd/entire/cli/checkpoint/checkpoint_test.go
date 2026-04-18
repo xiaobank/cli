@@ -18,12 +18,15 @@ import (
 	"github.com/entireio/cli/cmd/entire/cli/paths"
 	"github.com/entireio/cli/cmd/entire/cli/testutil"
 	"github.com/entireio/cli/cmd/entire/cli/trailers"
+	"github.com/entireio/cli/cmd/entire/cli/vercelconfig"
 	"github.com/entireio/cli/cmd/entire/cli/versioninfo"
+	"github.com/entireio/cli/redact"
 	"github.com/stretchr/testify/require"
 
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/config"
 	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/filemode"
 	"github.com/go-git/go-git/v6/plumbing/object"
 )
 
@@ -142,7 +145,7 @@ func TestWriteCommitted_AgentField(t *testing.T) {
 		SessionID:    sessionID,
 		Strategy:     "manual-commit",
 		Agent:        agentType,
-		Transcript:   []byte("test transcript content"),
+		Transcript:   redact.AlreadyRedacted([]byte("test transcript content")),
 		AuthorName:   "Test Author",
 		AuthorEmail:  "test@example.com",
 	})
@@ -447,6 +450,166 @@ func setupBranchTestRepo(t *testing.T) (*git.Repository, plumbing.Hash) {
 	return repo, commitHash
 }
 
+func TestEnsureSessionsBranch_WritesVercelConfigWhenEnabled(t *testing.T) {
+	vercelconfig.ResetSettingsCache()
+	t.Cleanup(vercelconfig.ResetSettingsCache)
+
+	repo, _ := setupBranchTestRepo(t)
+	worktree, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("repo.Worktree() error = %v", err)
+	}
+	t.Chdir(worktree.Filesystem.Root())
+
+	entireDir := filepath.Join(worktree.Filesystem.Root(), ".entire")
+	if err := os.MkdirAll(entireDir, 0o755); err != nil {
+		t.Fatalf("mkdir .entire: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(entireDir, "settings.json"), []byte(`{"enabled":true,"vercel":true}`), 0o644); err != nil {
+		t.Fatalf("write settings.json: %v", err)
+	}
+
+	store := NewGitStore(repo)
+	if err := store.ensureSessionsBranch(context.Background()); err != nil {
+		t.Fatalf("ensureSessionsBranch() error = %v", err)
+	}
+
+	ref, err := repo.Reference(plumbing.NewBranchReferenceName(paths.MetadataBranchName), true)
+	if err != nil {
+		t.Fatalf("metadata branch ref: %v", err)
+	}
+	commit, err := repo.CommitObject(ref.Hash())
+	if err != nil {
+		t.Fatalf("metadata commit: %v", err)
+	}
+	tree, err := commit.Tree()
+	if err != nil {
+		t.Fatalf("metadata tree: %v", err)
+	}
+	file, err := tree.File(vercelconfig.FileName)
+	if err != nil {
+		t.Fatalf("expected %s on metadata branch: %v", vercelconfig.FileName, err)
+	}
+	content, err := file.Contents()
+	if err != nil {
+		t.Fatalf("read %s: %v", vercelconfig.FileName, err)
+	}
+
+	var config map[string]any
+	if err := json.Unmarshal([]byte(content), &config); err != nil {
+		t.Fatalf("parse %s: %v", vercelconfig.FileName, err)
+	}
+	if !vercelconfig.DeploymentDisabled(config) {
+		t.Fatalf("expected %s to disable %s, got %s", vercelconfig.FileName, vercelconfig.BranchPattern, content)
+	}
+}
+
+func TestWriteCommitted_MergesVercelConfigOnMetadataBranch(t *testing.T) {
+	vercelconfig.ResetSettingsCache()
+	t.Cleanup(vercelconfig.ResetSettingsCache)
+
+	repo, _ := setupBranchTestRepo(t)
+	worktree, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("repo.Worktree() error = %v", err)
+	}
+	repoRoot := worktree.Filesystem.Root()
+	t.Chdir(repoRoot)
+
+	entireDir := filepath.Join(repoRoot, ".entire")
+	if err := os.MkdirAll(entireDir, 0o755); err != nil {
+		t.Fatalf("mkdir .entire: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(entireDir, "settings.json"), []byte(`{"enabled":true,"vercel":true}`), 0o644); err != nil {
+		t.Fatalf("write settings.json: %v", err)
+	}
+
+	initialConfig := []byte(`{
+  "cleanUrls": true,
+  "git": {
+    "deploymentEnabled": {
+      "main": true
+    }
+  }
+}
+`)
+	blobHash, err := CreateBlobFromContent(repo, initialConfig)
+	if err != nil {
+		t.Fatalf("CreateBlobFromContent() error = %v", err)
+	}
+	treeHash, err := BuildTreeFromEntries(context.Background(), repo, map[string]object.TreeEntry{
+		vercelconfig.FileName: {Name: vercelconfig.FileName, Mode: filemode.Regular, Hash: blobHash},
+	})
+	if err != nil {
+		t.Fatalf("BuildTreeFromEntries() error = %v", err)
+	}
+
+	store := NewGitStore(repo)
+	commitHash, err := store.createCommit(treeHash, plumbing.ZeroHash, "Initialize metadata branch", "Test", "test@test.com")
+	if err != nil {
+		t.Fatalf("createCommit() error = %v", err)
+	}
+	if err := repo.Storer.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(paths.MetadataBranchName), commitHash)); err != nil {
+		t.Fatalf("set metadata branch ref: %v", err)
+	}
+
+	cpID := id.MustCheckpointID("abcdef123456")
+	err = store.WriteCommitted(context.Background(), WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "test-session-id",
+		Strategy:     "manual-commit",
+		Transcript:   redact.AlreadyRedacted([]byte(`{"test": true}`)),
+		AuthorName:   "Test",
+		AuthorEmail:  "test@test.com",
+	})
+	if err != nil {
+		t.Fatalf("WriteCommitted() error = %v", err)
+	}
+
+	ref, err := repo.Reference(plumbing.NewBranchReferenceName(paths.MetadataBranchName), true)
+	if err != nil {
+		t.Fatalf("metadata branch ref: %v", err)
+	}
+	commit, err := repo.CommitObject(ref.Hash())
+	if err != nil {
+		t.Fatalf("metadata commit: %v", err)
+	}
+	tree, err := commit.Tree()
+	if err != nil {
+		t.Fatalf("metadata tree: %v", err)
+	}
+	file, err := tree.File(vercelconfig.FileName)
+	if err != nil {
+		t.Fatalf("expected %s on metadata branch: %v", vercelconfig.FileName, err)
+	}
+	content, err := file.Contents()
+	if err != nil {
+		t.Fatalf("read %s: %v", vercelconfig.FileName, err)
+	}
+
+	var config map[string]any
+	if err := json.Unmarshal([]byte(content), &config); err != nil {
+		t.Fatalf("parse %s: %v", vercelconfig.FileName, err)
+	}
+	if config["cleanUrls"] != true {
+		t.Fatalf("expected cleanUrls to be preserved, got %#v", config["cleanUrls"])
+	}
+	gitConfig, ok := config["git"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected git object, got %#v", config["git"])
+	}
+	deploymentEnabled, ok := gitConfig["deploymentEnabled"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected deploymentEnabled object, got %#v", gitConfig["deploymentEnabled"])
+	}
+	if deploymentEnabled["main"] != true {
+		t.Fatalf("expected main rule to be preserved, got %#v", deploymentEnabled["main"])
+	}
+	if deploymentEnabled[vercelconfig.BranchPattern] != false {
+		t.Fatalf("expected %s to be disabled, got %#v", vercelconfig.BranchPattern, deploymentEnabled[vercelconfig.BranchPattern])
+	}
+}
+
 // verifyBranchInMetadata reads and verifies the branch field in metadata.json.
 func verifyBranchInMetadata(t *testing.T, repo *git.Repository, checkpointID id.CheckpointID, expectedBranch string, shouldOmit bool) {
 	t.Helper()
@@ -529,7 +692,7 @@ func TestWriteCommitted_BranchField(t *testing.T) {
 			SessionID:    "test-session-123",
 			Strategy:     "manual-commit",
 			Branch:       currentBranch,
-			Transcript:   []byte("test transcript content"),
+			Transcript:   redact.AlreadyRedacted([]byte("test transcript content")),
 			AuthorName:   "Test Author",
 			AuthorEmail:  "test@example.com",
 		})
@@ -569,7 +732,7 @@ func TestWriteCommitted_BranchField(t *testing.T) {
 			SessionID:    "test-session-456",
 			Strategy:     "manual-commit",
 			Branch:       "", // Empty when in detached HEAD
-			Transcript:   []byte("test transcript content"),
+			Transcript:   redact.AlreadyRedacted([]byte("test transcript content")),
 			AuthorName:   "Test Author",
 			AuthorEmail:  "test@example.com",
 		})
@@ -593,7 +756,7 @@ func TestUpdateSummary(t *testing.T) {
 		CheckpointID: checkpointID,
 		SessionID:    "test-session-summary",
 		Strategy:     "manual-commit",
-		Transcript:   []byte("test transcript content"),
+		Transcript:   redact.AlreadyRedacted([]byte("test transcript content")),
 		FilesTouched: []string{"file1.go", "file2.go"},
 		AuthorName:   "Test Author",
 		AuthorEmail:  "test@example.com",
@@ -660,7 +823,7 @@ func TestUpdateSummary_NotFound(t *testing.T) {
 	store := NewGitStore(repo)
 
 	// Ensure sessions branch exists
-	err := store.ensureSessionsBranch()
+	err := store.ensureSessionsBranch(context.Background())
 	if err != nil {
 		t.Fatalf("ensureSessionsBranch() error = %v", err)
 	}
@@ -713,7 +876,7 @@ func TestListCommitted_FallsBackToRemote(t *testing.T) {
 		CheckpointID: cpID,
 		SessionID:    "test-session-id",
 		Strategy:     "manual-commit",
-		Transcript:   []byte(`{"test": true}`),
+		Transcript:   redact.AlreadyRedacted([]byte(`{"test": true}`)),
 		AuthorName:   "Test",
 		AuthorEmail:  "test@test.com",
 	})
@@ -782,7 +945,7 @@ func TestGetCheckpointAuthor(t *testing.T) {
 		CheckpointID: checkpointID,
 		SessionID:    "test-session-author",
 		Strategy:     "manual-commit",
-		Transcript:   []byte("test transcript"),
+		Transcript:   redact.AlreadyRedacted([]byte("test transcript")),
 		FilesTouched: []string{"main.go"},
 		AuthorName:   authorName,
 		AuthorEmail:  authorEmail,
@@ -866,7 +1029,7 @@ func TestWriteCommitted_MultipleSessionsSameCheckpoint(t *testing.T) {
 		CheckpointID:     checkpointID,
 		SessionID:        "session-one",
 		Strategy:         "manual-commit",
-		Transcript:       []byte(`{"message": "first session"}`),
+		Transcript:       redact.AlreadyRedacted([]byte(`{"message": "first session"}`)),
 		Prompts:          []string{"First prompt"},
 		FilesTouched:     []string{"file1.go"},
 		CheckpointsCount: 3,
@@ -882,7 +1045,7 @@ func TestWriteCommitted_MultipleSessionsSameCheckpoint(t *testing.T) {
 		CheckpointID:     checkpointID,
 		SessionID:        "session-two",
 		Strategy:         "manual-commit",
-		Transcript:       []byte(`{"message": "second session"}`),
+		Transcript:       redact.AlreadyRedacted([]byte(`{"message": "second session"}`)),
 		Prompts:          []string{"Second prompt"},
 		FilesTouched:     []string{"file2.go"},
 		CheckpointsCount: 2,
@@ -947,7 +1110,7 @@ func TestWriteCommitted_Aggregation(t *testing.T) {
 		CheckpointID:     checkpointID,
 		SessionID:        "session-one",
 		Strategy:         "manual-commit",
-		Transcript:       []byte(`{"message": "first"}`),
+		Transcript:       redact.AlreadyRedacted([]byte(`{"message": "first"}`)),
 		FilesTouched:     []string{"a.go", "b.go"},
 		CheckpointsCount: 3,
 		TokenUsage: &agent.TokenUsage{
@@ -967,7 +1130,7 @@ func TestWriteCommitted_Aggregation(t *testing.T) {
 		CheckpointID:     checkpointID,
 		SessionID:        "session-two",
 		Strategy:         "manual-commit",
-		Transcript:       []byte(`{"message": "second"}`),
+		Transcript:       redact.AlreadyRedacted([]byte(`{"message": "second"}`)),
 		FilesTouched:     []string{"b.go", "c.go"}, // b.go overlaps
 		CheckpointsCount: 2,
 		TokenUsage: &agent.TokenUsage{
@@ -1039,7 +1202,7 @@ func TestReadCommitted_ReturnsCheckpointSummary(t *testing.T) {
 			CheckpointID:     checkpointID,
 			SessionID:        sessionID,
 			Strategy:         "manual-commit",
-			Transcript:       []byte(fmt.Sprintf(`{"session": %d}`, i)),
+			Transcript:       redact.AlreadyRedacted([]byte(fmt.Sprintf(`{"session": %d}`, i))),
 			Prompts:          []string{fmt.Sprintf("Prompt %d", i)},
 			FilesTouched:     []string{fmt.Sprintf("file%d.go", i)},
 			CheckpointsCount: i + 1,
@@ -1108,7 +1271,7 @@ func TestReadSessionContent_ByIndex(t *testing.T) {
 			CheckpointID:     checkpointID,
 			SessionID:        s.id,
 			Strategy:         "manual-commit",
-			Transcript:       []byte(s.transcript),
+			Transcript:       redact.AlreadyRedacted([]byte(s.transcript)),
 			Prompts:          []string{s.prompt},
 			CheckpointsCount: 1,
 			AuthorName:       "Test Author",
@@ -1159,7 +1322,7 @@ func writeSingleSession(t *testing.T, cpIDStr, sessionID, transcript string) (*G
 		CheckpointID:     checkpointID,
 		SessionID:        sessionID,
 		Strategy:         "manual-commit",
-		Transcript:       []byte(transcript),
+		Transcript:       redact.AlreadyRedacted([]byte(transcript)),
 		CheckpointsCount: 1,
 		AuthorName:       "Test Author",
 		AuthorEmail:      "test@example.com",
@@ -1185,7 +1348,7 @@ func TestWriteCommitted_CodexSanitizesPortableTranscript(t *testing.T) {
 		SessionID:        "codex-session",
 		Strategy:         "manual-commit",
 		Agent:            agent.AgentTypeCodex,
-		Transcript:       []byte(transcript),
+		Transcript:       redact.AlreadyRedacted([]byte(transcript)),
 		CheckpointsCount: 1,
 		AuthorName:       "Test Author",
 		AuthorEmail:      "test@example.com",
@@ -1231,7 +1394,7 @@ func TestReadLatestSessionContent(t *testing.T) {
 			CheckpointID:     checkpointID,
 			SessionID:        fmt.Sprintf("session-%d", i),
 			Strategy:         "manual-commit",
-			Transcript:       []byte(fmt.Sprintf(`{"index": %d}`, i)),
+			Transcript:       redact.AlreadyRedacted([]byte(fmt.Sprintf(`{"index": %d}`, i))),
 			CheckpointsCount: 1,
 			AuthorName:       "Test Author",
 			AuthorEmail:      "test@example.com",
@@ -1270,7 +1433,7 @@ func TestReadSessionContentByID(t *testing.T) {
 			CheckpointID:     checkpointID,
 			SessionID:        sid,
 			Strategy:         "manual-commit",
-			Transcript:       []byte(fmt.Sprintf(`{"session_name": "%s"}`, sid)),
+			Transcript:       redact.AlreadyRedacted([]byte(fmt.Sprintf(`{"session_name": "%s"}`, sid))),
 			CheckpointsCount: 1,
 			AuthorName:       "Test Author",
 			AuthorEmail:      "test@example.com",
@@ -1323,7 +1486,7 @@ func TestListCommitted_MultiSessionInfo(t *testing.T) {
 			SessionID:        sid,
 			Strategy:         "manual-commit",
 			Agent:            agent.AgentTypeClaudeCode,
-			Transcript:       []byte(fmt.Sprintf(`{"i": %d}`, i)),
+			Transcript:       redact.AlreadyRedacted([]byte(fmt.Sprintf(`{"i": %d}`, i))),
 			FilesTouched:     []string{fmt.Sprintf("file%d.go", i)},
 			CheckpointsCount: i + 1,
 			AuthorName:       "Test Author",
@@ -1381,7 +1544,7 @@ func TestWriteCommitted_SessionWithNoPrompts(t *testing.T) {
 		CheckpointID:     checkpointID,
 		SessionID:        "no-prompts-session",
 		Strategy:         "manual-commit",
-		Transcript:       []byte(`{"no_prompts": true}`),
+		Transcript:       redact.AlreadyRedacted([]byte(`{"no_prompts": true}`)),
 		Prompts:          nil, // No prompts
 		CheckpointsCount: 1,
 		AuthorName:       "Test Author",
@@ -1430,7 +1593,7 @@ func TestWriteCommitted_SessionWithSummary(t *testing.T) {
 		CheckpointID:     checkpointID,
 		SessionID:        "summary-session",
 		Strategy:         "manual-commit",
-		Transcript:       []byte(`{"test": true}`),
+		Transcript:       redact.AlreadyRedacted([]byte(`{"test": true}`)),
 		CheckpointsCount: 1,
 		AuthorName:       "Test Author",
 		AuthorEmail:      "test@example.com",
@@ -1469,7 +1632,7 @@ func TestWriteCommitted_ThreeSessions(t *testing.T) {
 			CheckpointID:     checkpointID,
 			SessionID:        fmt.Sprintf("three-session-%d", i),
 			Strategy:         "manual-commit",
-			Transcript:       []byte(fmt.Sprintf(`{"session_number": %d}`, i)),
+			Transcript:       redact.AlreadyRedacted([]byte(fmt.Sprintf(`{"session_number": %d}`, i))),
 			FilesTouched:     []string{fmt.Sprintf("s%d.go", i)},
 			CheckpointsCount: i + 1,
 			TokenUsage: &agent.TokenUsage{
@@ -1534,7 +1697,7 @@ func TestReadCommitted_NonexistentCheckpoint(t *testing.T) {
 	store := NewGitStore(repo)
 
 	// Ensure sessions branch exists
-	err := store.ensureSessionsBranch()
+	err := store.ensureSessionsBranch(context.Background())
 	if err != nil {
 		t.Fatalf("ensureSessionsBranch() error = %v", err)
 	}
@@ -1557,7 +1720,7 @@ func TestReadSessionContent_NonexistentCheckpoint(t *testing.T) {
 	store := NewGitStore(repo)
 
 	// Ensure sessions branch exists
-	err := store.ensureSessionsBranch()
+	err := store.ensureSessionsBranch(context.Background())
 	if err != nil {
 		t.Fatalf("ensureSessionsBranch() error = %v", err)
 	}
@@ -1669,6 +1832,135 @@ func TestWriteTemporary_FirstCheckpoint_CapturesModifiedTrackedFiles(t *testing.
 
 	if content != modifiedContent {
 		t.Errorf("checkpoint should contain modified content\ngot:\n%s\nwant:\n%s", content, modifiedContent)
+	}
+}
+
+// TestWriteTemporary_PathNormalizationAndSkipping verifies that shadow branch writes
+// normalize absolute in-repo paths back to repo-relative tree entries and skip invalid
+// paths rather than encoding them into git trees.
+func TestWriteTemporary_PathNormalizationAndSkipping(t *testing.T) {
+	tests := []struct {
+		name          string
+		modifiedFiles func(repoRoot, mainFile string) []string
+		wantUpdated   bool
+	}{
+		{
+			name: "absolute in repo path is normalized",
+			modifiedFiles: func(_, mainFile string) []string {
+				return []string{mainFile}
+			},
+			wantUpdated: true,
+		},
+		{
+			name: "absolute outside repo path is skipped",
+			modifiedFiles: func(_, _ string) []string {
+				return []string{"C:/Users/rober/Vaults/Flowsign/main.go"}
+			},
+			wantUpdated: false,
+		},
+		{
+			name: "empty segment path is skipped",
+			modifiedFiles: func(_, _ string) []string {
+				return []string{"dir//main.go"}
+			},
+			wantUpdated: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tempDir := t.TempDir()
+			// Resolve symlinks so absolute paths match git's resolved repo root.
+			// On macOS, t.TempDir() returns /var/... but git resolves to /private/var/...
+			tempDir, err := filepath.EvalSymlinks(tempDir)
+			if err != nil {
+				t.Fatalf("failed to resolve symlinks: %v", err)
+			}
+
+			repo, err := git.PlainInit(tempDir, false)
+			if err != nil {
+				t.Fatalf("failed to init git repo: %v", err)
+			}
+
+			worktree, err := repo.Worktree()
+			if err != nil {
+				t.Fatalf("failed to get worktree: %v", err)
+			}
+
+			mainFile := filepath.Join(tempDir, "main.go")
+			if err := os.WriteFile(mainFile, []byte("package main\n"), 0o644); err != nil {
+				t.Fatalf("failed to write main.go: %v", err)
+			}
+			if _, err := worktree.Add("main.go"); err != nil {
+				t.Fatalf("failed to add main.go: %v", err)
+			}
+			initialCommit, err := worktree.Commit("Initial commit", &git.CommitOptions{
+				Author: &object.Signature{Name: "Test", Email: "test@test.com"},
+			})
+			if err != nil {
+				t.Fatalf("failed to commit: %v", err)
+			}
+
+			updatedContent := "package main\n\nfunc main() {}\n"
+			if err := os.WriteFile(mainFile, []byte(updatedContent), 0o644); err != nil {
+				t.Fatalf("failed to update main.go: %v", err)
+			}
+
+			t.Chdir(tempDir)
+
+			metadataDir := filepath.Join(tempDir, ".entire", "metadata", "test-session")
+			if err := os.MkdirAll(metadataDir, 0o755); err != nil {
+				t.Fatalf("failed to create metadata dir: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(metadataDir, "full.jsonl"), []byte(`{"test": true}`), 0o644); err != nil {
+				t.Fatalf("failed to write transcript: %v", err)
+			}
+
+			store := NewGitStore(repo)
+			result, err := store.WriteTemporary(context.Background(), WriteTemporaryOptions{
+				SessionID:      "test-session",
+				BaseCommit:     initialCommit.String(),
+				ModifiedFiles:  tt.modifiedFiles(tempDir, mainFile),
+				MetadataDir:    ".entire/metadata/test-session",
+				MetadataDirAbs: metadataDir,
+				CommitMessage:  "Checkpoint with path normalization",
+				AuthorName:     "Test",
+				AuthorEmail:    "test@test.com",
+			})
+			if err != nil {
+				t.Fatalf("WriteTemporary() error = %v", err)
+			}
+
+			commit, err := repo.CommitObject(result.CommitHash)
+			if err != nil {
+				t.Fatalf("failed to get commit object: %v", err)
+			}
+
+			tree, err := commit.Tree()
+			if err != nil {
+				t.Fatalf("failed to get tree: %v", err)
+			}
+
+			assertNoEmptyEntryNames(t, repo, commit.TreeHash, "")
+
+			file, err := tree.File("main.go")
+			if err != nil {
+				t.Fatalf("main.go not found in checkpoint tree: %v", err)
+			}
+
+			content, err := file.Contents()
+			if err != nil {
+				t.Fatalf("failed to read main.go content: %v", err)
+			}
+
+			wantContent := "package main\n"
+			if tt.wantUpdated {
+				wantContent = updatedContent
+			}
+			if content != wantContent {
+				t.Errorf("unexpected main.go content\ngot:\n%s\nwant:\n%s", content, wantContent)
+			}
+		})
 	}
 }
 
@@ -2650,7 +2942,7 @@ func TestWriteCommitted_DuplicateSessionIDUpdatesInPlace(t *testing.T) {
 		CheckpointID:     checkpointID,
 		SessionID:        "session-X",
 		Strategy:         "manual-commit",
-		Transcript:       []byte(`{"message": "session X v1"}`),
+		Transcript:       redact.AlreadyRedacted([]byte(`{"message": "session X v1"}`)),
 		FilesTouched:     []string{"a.go"},
 		CheckpointsCount: 3,
 		TokenUsage: &agent.TokenUsage{
@@ -2670,7 +2962,7 @@ func TestWriteCommitted_DuplicateSessionIDUpdatesInPlace(t *testing.T) {
 		CheckpointID:     checkpointID,
 		SessionID:        "session-Y",
 		Strategy:         "manual-commit",
-		Transcript:       []byte(`{"message": "session Y"}`),
+		Transcript:       redact.AlreadyRedacted([]byte(`{"message": "session Y"}`)),
 		FilesTouched:     []string{"b.go"},
 		CheckpointsCount: 2,
 		TokenUsage: &agent.TokenUsage{
@@ -2690,7 +2982,7 @@ func TestWriteCommitted_DuplicateSessionIDUpdatesInPlace(t *testing.T) {
 		CheckpointID:     checkpointID,
 		SessionID:        "session-X",
 		Strategy:         "manual-commit",
-		Transcript:       []byte(`{"message": "session X v2"}`),
+		Transcript:       redact.AlreadyRedacted([]byte(`{"message": "session X v2"}`)),
 		FilesTouched:     []string{"a.go", "c.go"},
 		CheckpointsCount: 5,
 		TokenUsage: &agent.TokenUsage{
@@ -2785,7 +3077,7 @@ func TestWriteCommitted_DuplicateSessionIDSingleSession(t *testing.T) {
 		CheckpointID:     checkpointID,
 		SessionID:        "session-X",
 		Strategy:         "manual-commit",
-		Transcript:       []byte(`{"message": "v1"}`),
+		Transcript:       redact.AlreadyRedacted([]byte(`{"message": "v1"}`)),
 		FilesTouched:     []string{"old.go"},
 		CheckpointsCount: 1,
 		AuthorName:       "Test Author",
@@ -2800,7 +3092,7 @@ func TestWriteCommitted_DuplicateSessionIDSingleSession(t *testing.T) {
 		CheckpointID:     checkpointID,
 		SessionID:        "session-X",
 		Strategy:         "manual-commit",
-		Transcript:       []byte(`{"message": "v2"}`),
+		Transcript:       redact.AlreadyRedacted([]byte(`{"message": "v2"}`)),
 		FilesTouched:     []string{"new.go"},
 		CheckpointsCount: 5,
 		AuthorName:       "Test Author",
@@ -2861,7 +3153,7 @@ func TestWriteCommitted_DuplicateSessionIDReusesIndex(t *testing.T) {
 		CheckpointID:     checkpointID,
 		SessionID:        "session-A",
 		Strategy:         "manual-commit",
-		Transcript:       []byte(`{"v": 1}`),
+		Transcript:       redact.AlreadyRedacted([]byte(`{"v": 1}`)),
 		CheckpointsCount: 1,
 		AuthorName:       "Test",
 		AuthorEmail:      "test@example.com",
@@ -2875,7 +3167,7 @@ func TestWriteCommitted_DuplicateSessionIDReusesIndex(t *testing.T) {
 		CheckpointID:     checkpointID,
 		SessionID:        "session-B",
 		Strategy:         "manual-commit",
-		Transcript:       []byte(`{"v": 2}`),
+		Transcript:       redact.AlreadyRedacted([]byte(`{"v": 2}`)),
 		CheckpointsCount: 1,
 		AuthorName:       "Test",
 		AuthorEmail:      "test@example.com",
@@ -2889,7 +3181,7 @@ func TestWriteCommitted_DuplicateSessionIDReusesIndex(t *testing.T) {
 		CheckpointID:     checkpointID,
 		SessionID:        "session-A",
 		Strategy:         "manual-commit",
-		Transcript:       []byte(`{"v": 3}`),
+		Transcript:       redact.AlreadyRedacted([]byte(`{"v": 3}`)),
 		CheckpointsCount: 2,
 		AuthorName:       "Test",
 		AuthorEmail:      "test@example.com",
@@ -2945,7 +3237,7 @@ func TestWriteCommitted_DuplicateSessionIDClearsStaleFiles(t *testing.T) {
 		CheckpointID:     checkpointID,
 		SessionID:        "session-A",
 		Strategy:         "manual-commit",
-		Transcript:       []byte(`{"v": 1}`),
+		Transcript:       redact.AlreadyRedacted([]byte(`{"v": 1}`)),
 		Prompts:          []string{"original prompt"},
 		CheckpointsCount: 1,
 		AuthorName:       "Test",
@@ -2960,7 +3252,7 @@ func TestWriteCommitted_DuplicateSessionIDClearsStaleFiles(t *testing.T) {
 		CheckpointID:     checkpointID,
 		SessionID:        "session-B",
 		Strategy:         "manual-commit",
-		Transcript:       []byte(`{"session": "B"}`),
+		Transcript:       redact.AlreadyRedacted([]byte(`{"session": "B"}`)),
 		Prompts:          []string{"B prompt"},
 		CheckpointsCount: 1,
 		AuthorName:       "Test",
@@ -2975,7 +3267,7 @@ func TestWriteCommitted_DuplicateSessionIDClearsStaleFiles(t *testing.T) {
 		CheckpointID:     checkpointID,
 		SessionID:        "session-A",
 		Strategy:         "manual-commit",
-		Transcript:       []byte(`{"v": 2}`),
+		Transcript:       redact.AlreadyRedacted([]byte(`{"v": 2}`)),
 		Prompts:          nil,
 		CheckpointsCount: 2,
 		AuthorName:       "Test",
@@ -3013,18 +3305,23 @@ func TestWriteCommitted_DuplicateSessionIDClearsStaleFiles(t *testing.T) {
 // highEntropySecret is a string with Shannon entropy > 4.5 that will trigger redaction.
 const highEntropySecret = "sk-ant-api03-xK9mZ2vL8nQ5rT1wY4bC7dF0gH3jE6pA"
 
-func TestWriteCommitted_RedactsTranscriptSecrets(t *testing.T) {
+func TestWriteCommitted_PreservesRedactedTranscript(t *testing.T) {
 	repo, _ := setupBranchTestRepo(t)
 	store := NewGitStore(repo)
 	checkpointID := id.MustCheckpointID("aabbccddeef1")
 
-	transcript := []byte(`{"role":"assistant","content":"Here is your key: ` + highEntropySecret + `"}` + "\n")
+	// Callers redact before passing to WriteCommitted; the store persists as-is.
+	rawTranscript := []byte(`{"role":"assistant","content":"Here is your key: ` + highEntropySecret + `"}` + "\n")
+	redactedTranscript, err := redact.JSONLBytes(rawTranscript)
+	if err != nil {
+		t.Fatalf("redact.JSONLBytes() error = %v", err)
+	}
 
-	err := store.WriteCommitted(context.Background(), WriteCommittedOptions{
+	err = store.WriteCommitted(context.Background(), WriteCommittedOptions{
 		CheckpointID:     checkpointID,
 		SessionID:        "redact-transcript-session",
 		Strategy:         "manual-commit",
-		Transcript:       transcript,
+		Transcript:       redactedTranscript,
 		CheckpointsCount: 1,
 		AuthorName:       "Test Author",
 		AuthorEmail:      "test@example.com",
@@ -3055,7 +3352,7 @@ func TestWriteCommitted_RedactsPromptSecrets(t *testing.T) {
 		CheckpointID:     checkpointID,
 		SessionID:        "redact-prompt-session",
 		Strategy:         "manual-commit",
-		Transcript:       []byte(`{"msg":"safe"}`),
+		Transcript:       redact.AlreadyRedacted([]byte(`{"msg":"safe"}`)),
 		Prompts:          []string{"Set API_KEY=" + highEntropySecret},
 		CheckpointsCount: 1,
 		AuthorName:       "Test Author",
@@ -3184,7 +3481,7 @@ func TestWriteCommitted_CLIVersionField(t *testing.T) {
 		SessionID:    sessionID,
 		Strategy:     "manual-commit",
 		Agent:        agent.AgentTypeClaudeCode,
-		Transcript:   []byte("test transcript"),
+		Transcript:   redact.AlreadyRedacted([]byte("test transcript")),
 		AuthorName:   "Test Author",
 		AuthorEmail:  "test@example.com",
 	})
@@ -3295,7 +3592,7 @@ func TestWriteCommitted_ModelFieldAlwaysPresent(t *testing.T) {
 		SessionID:    "test-session-model",
 		Strategy:     "manual-commit",
 		Agent:        agent.AgentTypeClaudeCode,
-		Transcript:   []byte("test transcript"),
+		Transcript:   redact.AlreadyRedacted([]byte("test transcript")),
 		AuthorName:   "Test Author",
 		AuthorEmail:  "test@example.com",
 	})
@@ -3512,7 +3809,7 @@ func TestWriteCommitted_RedactsSummarySecrets(t *testing.T) {
 		CheckpointID:     checkpointID,
 		SessionID:        "redact-summary-session",
 		Strategy:         "manual-commit",
-		Transcript:       []byte(`{"msg":"safe"}` + "\n"),
+		Transcript:       redact.AlreadyRedacted([]byte(`{"msg":"safe"}` + "\n")),
 		CheckpointsCount: 1,
 		AuthorName:       "Test Author",
 		AuthorEmail:      "test@example.com",
@@ -3555,7 +3852,7 @@ func TestUpdateSummary_RedactsSecrets(t *testing.T) {
 		CheckpointID:     checkpointID,
 		SessionID:        "update-summary-session",
 		Strategy:         "manual-commit",
-		Transcript:       []byte(`{"msg":"safe"}` + "\n"),
+		Transcript:       redact.AlreadyRedacted([]byte(`{"msg":"safe"}` + "\n")),
 		CheckpointsCount: 1,
 		AuthorName:       "Test Author",
 		AuthorEmail:      "test@example.com",
@@ -3607,7 +3904,7 @@ func TestWriteCommitted_SubagentTranscript_JSONLFallback(t *testing.T) {
 		CheckpointID:           checkpointID,
 		SessionID:              "jsonl-fallback-session",
 		Strategy:               "manual-commit",
-		Transcript:             []byte(`{"msg":"safe"}` + "\n"),
+		Transcript:             redact.AlreadyRedacted([]byte(`{"msg":"safe"}` + "\n")),
 		CheckpointsCount:       1,
 		AuthorName:             "Test Author",
 		AuthorEmail:            "test@example.com",

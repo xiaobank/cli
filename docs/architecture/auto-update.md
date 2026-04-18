@@ -48,20 +48,22 @@ The auto-update path refuses to execute unless all of the following hold:
 
 Additionally, `auto` mode requires:
 
-- An `InstallProvenance` file at `~/.config/entire/install.json` resolves to a
-  known installer (brew / scoop / install.sh). The executable-path fallback is
-  not trusted for silent installs.
+- `installManagerForCurrentBinary()` resolves to a known manager (brew, mise,
+  scoop). The curl fallback is not trusted for silent installs.
 - The release was published at least 24 hours ago (soak delay — cushion
   against a bad release).
 - No failed attempt was recorded in the last 24 hours.
 
 ## Installer mapping
 
-Derived from `InstallProvenance` (see `docs/architecture/install-provenance.md`):
+Derived from the running binary's path plus the release channel
+(stable / nightly). See `versioncheck.updateCommand` for the authoritative
+table.
 
-- `install.sh` + `stable` → `curl -fsSL https://entire.io/install.sh | bash`
-- `brew` + `stable|nightly` → `brew upgrade <package>`
-- `scoop` + `stable|nightly` → `scoop update <package>`
+- Homebrew / Homebrew cask → `brew upgrade --cask entire[@nightly]`
+- mise → `mise upgrade entire`
+- scoop → `scoop update entire/cli`
+- unknown → `curl -fsSL https://entire.io/install.sh | bash [-s -- --channel nightly]`
 
 The installer is run via `sh -c` on Unix and `cmd /C` on Windows. stdin,
 stdout, and stderr are wired to the user so passwords and progress output
