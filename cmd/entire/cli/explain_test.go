@@ -398,18 +398,126 @@ func TestRunExplainCheckpoint_WrapsSentinelNotFound(t *testing.T) {
 		"runExplainCheckpoint must wrap checkpoint.ErrCheckpointNotFound so runExplainAuto can detect it with errors.Is")
 }
 
-// TestRunExplainCheckpoint_WrapsSentinelCannotGenerateTemporary guards the
-// second typed-error contract: when --generate is requested for a target
-// that has no committed checkpoint, runExplainCheckpoint must return an
-// error matching errCannotGenerateTemporaryCheckpoint via errors.Is.
-func TestRunExplainCheckpoint_WrapsSentinelCannotGenerateTemporary(t *testing.T) {
+// TestRunExplainCheckpoint_GenerateNonMatchingReturnsNotFound verifies the
+// corrected contract: when --generate is requested for a target that does
+// NOT match any committed or temporary checkpoint, runExplainCheckpoint
+// returns ErrCheckpointNotFound (so runExplainAuto can fall back to commit
+// resolution), not errCannotGenerateTemporaryCheckpoint. The previous
+// behavior returned the temp-checkpoint sentinel speculatively and broke
+// fallback routing for random SHAs with --generate.
+func TestRunExplainCheckpoint_GenerateNonMatchingReturnsNotFound(t *testing.T) {
 	runExplainAutoTestRepo(t)
 
 	var out, errOut bytes.Buffer
 	err := runExplainCheckpoint(context.Background(), &out, &errOut, "abababababab", false, false, false, false, true, false, false)
 
 	require.Error(t, err)
-	require.ErrorIs(t, err, errCannotGenerateTemporaryCheckpoint)
+	require.ErrorIs(t, err, checkpoint.ErrCheckpointNotFound,
+		"non-matching --generate target must return ErrCheckpointNotFound so runExplainAuto can fall back to commit resolution")
+	require.NotErrorIs(t, err, errCannotGenerateTemporaryCheckpoint,
+		"sentinel must not fire unless a real temp checkpoint was matched")
+}
+
+// TestRunExplainAuto_GenerateAmbiguousPrefixRefused guards the Codex finding
+// that a short positional arg matching both a committed-checkpoint prefix
+// and a git revision must not silently write a summary to the wrong
+// checkpoint. With --generate set, runExplainAuto should refuse and ask the
+// user to disambiguate via --commit or --checkpoint.
+func TestRunExplainAuto_GenerateAmbiguousPrefixRefused(t *testing.T) {
+	repo, _ := runExplainAutoTestRepo(t)
+	ctx := context.Background()
+
+	// Seed a committed checkpoint whose ID starts with a common hex prefix.
+	cpID := id.MustCheckpointID("abcdef123456")
+	v1Store := checkpoint.NewGitStore(repo)
+	require.NoError(t, v1Store.WriteCommitted(ctx, checkpoint.WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-ambiguous",
+		Strategy:     "manual-commit",
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"user","message":{"content":[{"type":"text","text":"hi"}]}}` + "\n")),
+		AuthorName:   "Test",
+		AuthorEmail:  "test@example.com",
+	}))
+
+	// Find a short prefix that resolves as a git revision (the initial
+	// seed commit's SHA abbreviation) AND also prefix-matches the
+	// checkpoint ID. We construct this by using the first few chars of
+	// the commit SHA; git can resolve 4+ char unique abbreviations.
+	wt, err := repo.Worktree()
+	require.NoError(t, err)
+	head, err := repo.Head()
+	require.NoError(t, err)
+	commitPrefix := head.Hash().String()[:7]
+	require.NotEmpty(t, commitPrefix)
+
+	// To create a real collision, make a new commit whose SHA we force-
+	// select to start with "abcdef". That's impractical without SHA
+	// mining, so instead we rename the checkpoint prefix to match the
+	// real commit prefix we have.
+	_ = wt
+	collisionID := id.MustCheckpointID(commitPrefix + "aaaaa") // 7 + 5 = 12 chars
+	require.NoError(t, v1Store.WriteCommitted(ctx, checkpoint.WriteCommittedOptions{
+		CheckpointID: collisionID,
+		SessionID:    "session-collision",
+		Strategy:     "manual-commit",
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"user","message":{"content":[{"type":"text","text":"hi"}]}}` + "\n")),
+		AuthorName:   "Test",
+		AuthorEmail:  "test@example.com",
+	}))
+
+	var out, errOut bytes.Buffer
+	err = runExplainAuto(ctx, &out, &errOut, commitPrefix, true, false, false, false, true, false, false)
+
+	require.Error(t, err, "--generate on an ambiguous target must error, not write to a checkpoint")
+	require.ErrorContains(t, err, "ambiguous target")
+	require.ErrorContains(t, err, "--commit")
+	require.ErrorContains(t, err, "--checkpoint")
+}
+
+// TestRunExplainAuto_GenerateUnambiguousCheckpointIDPasses verifies the
+// ambiguity guard does NOT fire when the target is a valid 12-char
+// checkpoint ID that doesn't resolve as a git revision. Regression guard
+// against over-triggering.
+func TestRunExplainAuto_GenerateUnambiguousCheckpointIDPasses(t *testing.T) {
+	_, _ = runExplainAutoTestRepo(t)
+
+	// A 12-char hex string that is extremely unlikely to resolve as a git
+	// ref in a fresh repo. The ambiguity guard should be a no-op here.
+	var out, errOut bytes.Buffer
+	err := runExplainAuto(context.Background(), &out, &errOut, "ffffffffffff", true, false, false, false, true, false, false)
+
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "ambiguous target",
+		"ambiguity guard must not fire when target does not resolve as a git ref")
+}
+
+// TestExplainCmd_CommitFlagWithGenerateValidates verifies Fix #3: the
+// --commit flag combined with --generate now passes flag validation.
+// Previously hasCheckpointTarget excluded commitFlag, so users of the
+// explicit --commit form couldn't invoke generate/raw-transcript modes
+// even though the positional equivalent worked.
+func TestExplainCmd_CommitFlagWithGenerateValidates(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+	testutil.InitRepo(t, tmpDir)
+	testutil.WriteFile(t, tmpDir, "f.txt", "x")
+	testutil.GitAdd(t, tmpDir, "f.txt")
+	testutil.GitCommit(t, tmpDir, "seed")
+
+	cmd := newExplainCmd()
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{"--commit", "HEAD", "--generate"})
+
+	err := cmd.Execute()
+	// The command will fail downstream (no trailer on seed commit) but
+	// must get past flag validation. We verify it's NOT the "--generate
+	// requires..." validation error.
+	if err != nil {
+		require.NotContains(t, err.Error(), "--generate requires",
+			"--commit + --generate must pass flag validation")
+	}
 }
 
 func TestGenerateCheckpointAISummary_AddsDefaultTimeoutWithoutParentDeadline(t *testing.T) {
@@ -634,7 +742,7 @@ func TestExplainCommit_NotFound(t *testing.T) {
 	testutil.InitRepo(t, tmpDir)
 
 	var stdout bytes.Buffer
-	err := runExplainCommit(context.Background(), &stdout, "nonexistent", false, false, false, false)
+	err := runExplainCommit(context.Background(), &stdout, &stdout, "nonexistent", false, false, false, false, false, false, false)
 
 	if err == nil {
 		t.Error("expected error for nonexistent commit, got nil")
@@ -677,7 +785,7 @@ func TestExplainCommit_NoEntireData(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	err = runExplainCommit(context.Background(), &stdout, commitHash.String(), false, false, false, false)
+	err = runExplainCommit(context.Background(), &stdout, &stdout, commitHash.String(), false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("runExplainCommit() should not error for non-Entire commits, got: %v", err)
 	}
@@ -746,7 +854,7 @@ func TestExplainCommit_WithMetadataTrailerButNoCheckpoint(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	err = runExplainCommit(context.Background(), &stdout, commitHash.String(), false, false, false, false)
+	err = runExplainCommit(context.Background(), &stdout, &stdout, commitHash.String(), false, false, false, false, false, false, false)
 	if err != nil {
 		t.Fatalf("runExplainCommit() error = %v", err)
 	}
@@ -3509,7 +3617,7 @@ func TestRunExplainCommit_NoCheckpointTrailer(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err = runExplainCommit(context.Background(), &buf, hash.String()[:7], false, false, false, false)
+	err = runExplainCommit(context.Background(), &buf, &buf, hash.String()[:7], false, false, false, false, false, false, false)
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -3556,7 +3664,7 @@ func TestRunExplainCommit_WithCheckpointTrailer(t *testing.T) {
 	var buf bytes.Buffer
 	// This should try to look up the checkpoint and fail (checkpoint doesn't exist in store)
 	// but it should still attempt the lookup rather than showing commit details
-	err = runExplainCommit(context.Background(), &buf, hash.String()[:7], false, false, false, false)
+	err = runExplainCommit(context.Background(), &buf, &buf, hash.String()[:7], false, false, false, false, false, false, false)
 
 	// Should error because the checkpoint doesn't exist in the store
 	if err == nil {

@@ -171,16 +171,17 @@ Note: --session filters the list view; the positional arg, --commit, and --check
 			}
 
 			// --generate and --raw-transcript need a specific target — either the
-			// positional arg (checkpoint ID or commit SHA) or --checkpoint/-c.
-			hasCheckpointTarget := checkpointFlag != "" || positional != ""
+			// positional arg, --checkpoint/-c, or --commit (which forwards to
+			// the checkpoint path via the commit's Entire-Checkpoint trailer).
+			hasCheckpointTarget := checkpointFlag != "" || commitFlag != "" || positional != ""
 			if generateFlag && !hasCheckpointTarget {
-				return errors.New("--generate requires a checkpoint ID or commit SHA (positional) or --checkpoint/-c flag")
+				return errors.New("--generate requires a checkpoint ID or commit SHA (positional), --checkpoint/-c, or --commit flag")
 			}
 			if forceFlag && !generateFlag {
 				return errors.New("--force requires --generate flag")
 			}
 			if rawTranscriptFlag && !hasCheckpointTarget {
-				return errors.New("--raw-transcript requires a checkpoint ID or commit SHA (positional) or --checkpoint/-c flag")
+				return errors.New("--raw-transcript requires a checkpoint ID or commit SHA (positional), --checkpoint/-c, or --commit flag")
 			}
 
 			// Convert short flag to verbose (verbose = !short)
@@ -233,7 +234,7 @@ func runExplain(ctx context.Context, w, errW io.Writer, sessionID, commitRef, ch
 		return runExplainAuto(ctx, w, errW, target, noPager, verbose, full, rawTranscript, generate, force, searchAll)
 	}
 	if commitRef != "" {
-		return runExplainCommit(ctx, w, commitRef, noPager, verbose, full, searchAll)
+		return runExplainCommit(ctx, w, errW, commitRef, noPager, verbose, full, rawTranscript, generate, force, searchAll)
 	}
 	if checkpointID != "" {
 		return runExplainCheckpoint(ctx, w, errW, checkpointID, noPager, verbose, full, rawTranscript, generate, force, searchAll)
@@ -247,29 +248,40 @@ func runExplain(ctx context.Context, w, errW io.Writer, sessionID, commitRef, ch
 // or a git commit ref, then delegates to the checkpoint detail view.
 //
 // Resolution order:
-//  1. Try the checkpoint path (committed checkpoints, then shadow-branch temporary
-//     checkpoints). This preserves short-prefix matching for checkpoint IDs.
-//  2. If the checkpoint path returned checkpoint.ErrCheckpointNotFound or
-//     errCannotGenerateTemporaryCheckpoint, resolve the target as a git commit
-//     ref and follow its Entire-Checkpoint trailer.
+//  1. When --generate is set, pre-check for ambiguity: if the target
+//     both resolves as a git revision AND prefix-matches a committed
+//     checkpoint, refuse rather than silently persist a summary onto a
+//     checkpoint the user may not have meant.
+//  2. Try the checkpoint path (committed checkpoints, then shadow-branch
+//     temporary checkpoints). This preserves short-prefix matching for
+//     checkpoint IDs.
+//  3. On checkpoint.ErrCheckpointNotFound, resolve the target as a git
+//     commit ref and follow its Entire-Checkpoint trailer.
 //
-// Other errors (ambiguous prefix, read failure, IO) bubble up — they indicate
-// the target DID resolve to something but reading failed, so retrying as a
-// commit would hide the real problem.
+// errCannotGenerateTemporaryCheckpoint (returned when --generate hits a
+// real temp checkpoint) does NOT trigger fallback — the commit path would
+// give a misleading "no trailer" error for the shadow-branch commit.
 //
-// When the target resolves to a git commit that has no Entire-Checkpoint
-// trailer, a friendly message is printed and nil is returned. This matches
-// runExplainCommit and lets `entire explain <random-sha>` produce a useful
-// message instead of an error.
+// When a resolved commit has no Entire-Checkpoint trailer, a friendly
+// message is printed and nil is returned for read-only modes; --generate
+// or --raw-transcript surfaces an error instead to avoid silently
+// succeeding without doing the requested work.
 func runExplainAuto(ctx context.Context, w, errW io.Writer, target string, noPager, verbose, full, rawTranscript, generate, force, searchAll bool) error {
+	if generate {
+		if err := runExplainAutoAmbiguityGuard(ctx, target); err != nil {
+			return err
+		}
+	}
 	checkpointErr := runExplainCheckpoint(ctx, w, errW, target, noPager, verbose, full, rawTranscript, generate, force, searchAll)
 	if checkpointErr == nil {
 		return nil
 	}
-	// Only fall back on typed "not found" sentinels so error-message changes
-	// don't silently break routing.
-	if !errors.Is(checkpointErr, checkpoint.ErrCheckpointNotFound) &&
-		!errors.Is(checkpointErr, errCannotGenerateTemporaryCheckpoint) {
+	// Fall back to commit resolution ONLY when nothing (committed or temp)
+	// matched the target. errCannotGenerateTemporaryCheckpoint signals that
+	// we DID match a temp checkpoint but --generate is unsupported for it;
+	// falling back to commit in that case would produce a misleading
+	// "no trailer" error for the shadow-branch commit.
+	if !errors.Is(checkpointErr, checkpoint.ErrCheckpointNotFound) {
 		return checkpointErr
 	}
 	logging.Debug(ctx, "explain auto: checkpoint lookup failed, trying commit fallback",
@@ -312,6 +324,47 @@ func runExplainAuto(ctx context.Context, w, errW io.Writer, target string, noPag
 		slog.String("commit", hash.String()[:7]),
 		slog.String("checkpoint_id", cpID.String()))
 	return runExplainCheckpoint(ctx, w, errW, cpID.String(), noPager, verbose, full, rawTranscript, generate, force, searchAll)
+}
+
+// runExplainAutoAmbiguityGuard refuses --generate when the positional target
+// is ambiguous between a git revision and a committed-checkpoint prefix.
+// Writing a summary via --generate mutates checkpoint state, so silently
+// picking one interpretation could persist AI content onto the wrong
+// checkpoint. Read-only flows tolerate the same ambiguity by preferring the
+// checkpoint interpretation; users who hit a collision there can re-run with
+// --commit or --checkpoint.
+//
+// The guard is best-effort: failures to open the repo or list checkpoints
+// return nil so normal error reporting downstream still produces useful
+// messages — this function's job is to detect a clear collision, not to
+// replace the main resolution flow.
+func runExplainAutoAmbiguityGuard(ctx context.Context, target string) error {
+	// The guard intentionally swallows errors on the "can't check" paths and
+	// returns nil so the main flow handles them. Downstream code (openRepo in
+	// runExplainCheckpoint, listCommittedForExplain call inside it, etc.) will
+	// produce the appropriate user-facing error. Returning those errors here
+	// would double-report and mask the real resolution path.
+	repo, err := openRepository(ctx)
+	if err != nil {
+		return nil //nolint:nilerr // intentional: best-effort guard, main flow handles repo errors
+	}
+	hash, gitErr := repo.ResolveRevision(plumbing.Revision(target))
+	if gitErr != nil {
+		return nil //nolint:nilerr // intentional: target isn't a git ref → no collision possible
+	}
+	v1Store := checkpoint.NewGitStore(repo)
+	v2Store := checkpoint.NewV2GitStore(repo, strategy.ResolveCheckpointURL(ctx, "origin"))
+	preferV2 := settings.IsCheckpointsV2Enabled(ctx)
+	committed, err := listCommittedForExplain(ctx, v1Store, v2Store, preferV2)
+	if err != nil {
+		return nil //nolint:nilerr // intentional: if we can't enumerate, main flow will surface the real failure
+	}
+	for _, info := range committed {
+		if strings.HasPrefix(info.CheckpointID.String(), target) {
+			return fmt.Errorf("ambiguous target %q with --generate: matches both git revision %s and checkpoint prefix (e.g. %s)\nUse --commit <ref> or --checkpoint <id> to disambiguate", target, hash.String()[:7], info.CheckpointID)
+		}
+	}
+	return nil
 }
 
 // runExplainCheckpoint explains a specific checkpoint.
@@ -381,12 +434,23 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 	var fullCheckpointID id.CheckpointID
 	switch len(matches) {
 	case 0:
-		// Not found in committed, try temporary checkpoints by git SHA
-		if generate {
-			return fmt.Errorf("%w %s (only committed checkpoints supported)", errCannotGenerateTemporaryCheckpoint, checkpointIDPrefix)
-		}
+		// Check temp checkpoints BEFORE returning errCannotGenerateTemporaryCheckpoint
+		// so runExplainAuto can distinguish:
+		//   - target matched a real temp checkpoint (sentinel returned, no fallback)
+		//   - target matched nothing (ErrCheckpointNotFound, safe to fall back to commit)
+		// Previously the --generate path bailed before checking temp checkpoints,
+		// which made runExplainAuto fall back to commit resolution for temp
+		// checkpoint SHAs and produce a misleading "no trailer" error.
+		//
+		// --generate and --raw-transcript are mutually exclusive at the flag
+		// layer, so rawTranscript is always false when generate is true; the
+		// direct-to-w write path inside explainTemporaryCheckpoint is not
+		// reachable here and won't leak partial output on error.
 		output, found := explainTemporaryCheckpoint(ctx, w, repo, v1Store, checkpointIDPrefix, verbose, full, rawTranscript)
 		if found {
+			if generate {
+				return fmt.Errorf("%w %s (only committed checkpoints supported)", errCannotGenerateTemporaryCheckpoint, checkpointIDPrefix)
+			}
 			outputExplainContent(w, output, noPager)
 			return nil
 		}
@@ -1664,7 +1728,7 @@ func outputExplainContent(w io.Writer, content string, noPager bool) {
 // runExplainCommit looks up the checkpoint associated with a commit.
 // Extracts the Entire-Checkpoint trailer and delegates to checkpoint detail view.
 // If no trailer found, shows a message indicating no associated checkpoint.
-func runExplainCommit(ctx context.Context, w io.Writer, commitRef string, noPager, verbose, full, searchAll bool) error {
+func runExplainCommit(ctx context.Context, w, errW io.Writer, commitRef string, noPager, verbose, full, rawTranscript, generate, force, searchAll bool) error {
 	repo, err := openRepository(ctx)
 	if err != nil {
 		return fmt.Errorf("not a git repository: %w", err)
@@ -1684,15 +1748,22 @@ func runExplainCommit(ctx context.Context, w io.Writer, commitRef string, noPage
 	// Extract Entire-Checkpoint trailer
 	checkpointID, hasCheckpoint := trailers.ParseCheckpoint(commit.Message)
 	if !hasCheckpoint {
+		// --generate/--raw-transcript explicitly ask for checkpoint work;
+		// silently succeeding would leave scripts unable to tell success
+		// from no-op. Match runExplainAuto's behavior for trailer-less
+		// commits in those modes.
+		if generate || rawTranscript {
+			return fmt.Errorf("cannot %s: commit %s has no Entire-Checkpoint trailer", generateOrRawLabel(generate), hash.String()[:7])
+		}
 		fmt.Fprintln(w, "No associated Entire checkpoint")
 		fmt.Fprintf(w, "\nCommit %s does not have an Entire-Checkpoint trailer.\n", hash.String()[:7])
 		fmt.Fprintln(w, "This commit was not created during an Entire session, or the trailer was removed.")
 		return nil
 	}
 
-	// Delegate to checkpoint detail view
-	// Note: errW is only used for generate mode, but we pass w for safety
-	return runExplainCheckpoint(ctx, w, w, checkpointID.String(), noPager, verbose, full, false, false, false, searchAll)
+	// Delegate to checkpoint detail view, forwarding the full flag set so
+	// --generate / --raw-transcript / --force work via --commit as well.
+	return runExplainCheckpoint(ctx, w, errW, checkpointID.String(), noPager, verbose, full, rawTranscript, generate, force, searchAll)
 }
 
 // formatSessionInfo formats session information for display.
