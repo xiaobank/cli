@@ -204,9 +204,8 @@ func TestFormatCheckpointSummaryError_Unknown(t *testing.T) {
 
 // TestExplainCmd_PositionalArgConflictsWithFlags verifies that combining a
 // positional target with --checkpoint, --commit, or --session is rejected.
-// A bare positional arg (without conflicting flags) is accepted and routed to
-// the auto-detection path; that routing is covered by runExplainAuto tests
-// elsewhere and does not need a cmd-level reject test.
+// The bare-positional happy path (auto-resolution to a checkpoint ID or commit
+// ref) is covered by the TestRunExplainAuto_* tests in this file.
 func TestExplainCmd_PositionalArgConflictsWithFlags(t *testing.T) {
 	tests := []struct {
 		name string
@@ -235,6 +234,139 @@ func TestExplainCmd_PositionalArgConflictsWithFlags(t *testing.T) {
 			}
 		})
 	}
+}
+
+// runExplainAutoTestRepo seeds a git repo and returns the initial commit's hash.
+// It configures the repo the way testutil.InitRepo does and matches the setup
+// used by the surrounding TestRunExplainCheckpoint_* tests so the auto-path
+// tests exercise the same production code paths.
+func runExplainAutoTestRepo(t *testing.T) (repo *git.Repository, initialCommit plumbing.Hash) {
+	t.Helper()
+	tmpDir := t.TempDir()
+	t.Chdir(tmpDir)
+
+	testutil.InitRepo(t, tmpDir)
+	repoOpened, err := git.PlainOpen(tmpDir)
+	require.NoError(t, err)
+
+	wt, err := repoOpened.Worktree()
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "seed.txt"), []byte("seed"), 0o644))
+	_, err = wt.Add("seed.txt")
+	require.NoError(t, err)
+	initial, err := wt.Commit("seed commit", &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
+	})
+	require.NoError(t, err)
+	return repoOpened, initial
+}
+
+// TestRunExplainAuto_ChecksPositionalCheckpointIDFirst verifies that a
+// checkpoint-ID-shaped positional arg routes through the checkpoint path.
+// When the checkpoint does not exist locally, the returned error must wrap
+// checkpoint.ErrCheckpointNotFound so runExplainAuto can detect it via
+// errors.Is rather than substring matching (PR #990 review feedback).
+func TestRunExplainAuto_ChecksPositionalCheckpointIDFirst(t *testing.T) {
+	runExplainAutoTestRepo(t)
+
+	var out, errOut bytes.Buffer
+	err := runExplainAuto(context.Background(), &out, &errOut, "abababababab", false, false, false, false, false, false, false)
+
+	require.Error(t, err)
+	require.ErrorContains(t, err, `no checkpoint or commit found matching "abababababab"`)
+}
+
+// TestRunExplainAuto_CommitRefWithCheckpointTrailer verifies that a commit SHA
+// passed positionally falls through to commit resolution and delegates to the
+// checkpoint path with the ID from the Entire-Checkpoint trailer.
+func TestRunExplainAuto_CommitRefWithCheckpointTrailer(t *testing.T) {
+	repo, _ := runExplainAutoTestRepo(t)
+	ctx := context.Background()
+
+	cpID := id.MustCheckpointID("deadbeefcafe")
+	v1Store := checkpoint.NewGitStore(repo)
+	require.NoError(t, v1Store.WriteCommitted(ctx, checkpoint.WriteCommittedOptions{
+		CheckpointID: cpID,
+		SessionID:    "session-auto",
+		Strategy:     "manual-commit",
+		Transcript:   redact.AlreadyRedacted([]byte(`{"type":"user","message":{"content":[{"type":"text","text":"hello"}]}}` + "\n")),
+		AuthorName:   "Test",
+		AuthorEmail:  "test@example.com",
+	}))
+
+	// Create a second commit whose message includes the checkpoint trailer.
+	wt, err := repo.Worktree()
+	require.NoError(t, err)
+	tmpDir := wt.Filesystem.Root()
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "feature.txt"), []byte("feature"), 0o644))
+	_, err = wt.Add("feature.txt")
+	require.NoError(t, err)
+	commitHash, err := wt.Commit(trailers.AppendCheckpointTrailer("Implement feature", cpID.String()), &git.CommitOptions{
+		Author: &object.Signature{Name: "Test", Email: "test@example.com", When: time.Now()},
+	})
+	require.NoError(t, err)
+
+	var out, errOut bytes.Buffer
+	err = runExplainAuto(ctx, &out, &errOut, commitHash.String(), true, false, false, false, false, false, false)
+	require.NoError(t, err)
+	require.Contains(t, out.String(), cpID.String(), "expected checkpoint header resolved via trailer")
+}
+
+// TestRunExplainAuto_CommitRefWithoutTrailer verifies the silent-success path:
+// a valid git commit without an Entire-Checkpoint trailer prints the friendly
+// message and returns nil. This matches runExplainCommit's behavior.
+func TestRunExplainAuto_CommitRefWithoutTrailer(t *testing.T) {
+	_, initialCommit := runExplainAutoTestRepo(t)
+
+	var out, errOut bytes.Buffer
+	err := runExplainAuto(context.Background(), &out, &errOut, initialCommit.String(), true, false, false, false, false, false, false)
+
+	require.NoError(t, err, "commit without trailer must not error")
+	output := out.String()
+	require.Contains(t, output, "No associated Entire checkpoint")
+	require.Contains(t, output, initialCommit.String()[:7])
+	require.Contains(t, output, "does not have an Entire-Checkpoint trailer")
+}
+
+// TestRunExplainAuto_NoMatch verifies that a target that is neither a
+// checkpoint ID nor a resolvable git ref returns the composite error.
+func TestRunExplainAuto_NoMatch(t *testing.T) {
+	runExplainAutoTestRepo(t)
+
+	var out, errOut bytes.Buffer
+	err := runExplainAuto(context.Background(), &out, &errOut, "zzzzzz999999", false, false, false, false, false, false, false)
+
+	require.Error(t, err)
+	require.ErrorContains(t, err, `no checkpoint or commit found matching "zzzzzz999999"`)
+}
+
+// TestRunExplainCheckpoint_WrapsSentinelNotFound guards the typed-error
+// contract runExplainAuto depends on: runExplainCheckpoint must return an
+// error matching checkpoint.ErrCheckpointNotFound via errors.Is when the
+// target matches no checkpoint (PR #990 review feedback).
+func TestRunExplainCheckpoint_WrapsSentinelNotFound(t *testing.T) {
+	runExplainAutoTestRepo(t)
+
+	var out, errOut bytes.Buffer
+	err := runExplainCheckpoint(context.Background(), &out, &errOut, "abababababab", false, false, false, false, false, false, false)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, checkpoint.ErrCheckpointNotFound,
+		"runExplainCheckpoint must wrap checkpoint.ErrCheckpointNotFound so runExplainAuto can detect it with errors.Is")
+}
+
+// TestRunExplainCheckpoint_WrapsSentinelCannotGenerateTemporary guards the
+// second typed-error contract: when --generate is requested for a target
+// that has no committed checkpoint, runExplainCheckpoint must return an
+// error matching errCannotGenerateTemporaryCheckpoint via errors.Is.
+func TestRunExplainCheckpoint_WrapsSentinelCannotGenerateTemporary(t *testing.T) {
+	runExplainAutoTestRepo(t)
+
+	var out, errOut bytes.Buffer
+	err := runExplainCheckpoint(context.Background(), &out, &errOut, "abababababab", false, false, false, false, true, false, false)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, errCannotGenerateTemporaryCheckpoint)
 }
 
 func TestGenerateCheckpointAISummary_AddsDefaultTimeoutWithoutParentDeadline(t *testing.T) {

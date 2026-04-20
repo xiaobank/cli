@@ -44,6 +44,12 @@ var checkpointSummaryTimeout = defaultCheckpointSummaryTimeout
 
 var generateTranscriptSummary = summarize.GenerateFromTranscript
 
+// errCannotGenerateTemporaryCheckpoint is returned by runExplainCheckpoint when
+// --generate is requested for a target that does not match any committed
+// checkpoint. runExplainAuto uses errors.Is to detect this case and fall back
+// to resolving the target as a git commit ref.
+var errCannotGenerateTemporaryCheckpoint = errors.New("cannot generate summary for temporary checkpoint")
+
 // interaction holds a single prompt and its responses for display.
 type interaction struct {
 	Prompt    string
@@ -125,7 +131,12 @@ Checkpoint detail view shows:
   - Prompts and responses from the session
 
 Note: --session filters the list view; the positional arg, --commit, and --checkpoint are mutually exclusive.`,
-		Args: cobra.MaximumNArgs(1),
+		Args: func(_ *cobra.Command, args []string) error {
+			if len(args) > 1 {
+				return fmt.Errorf("accepts at most 1 argument (checkpoint ID or commit SHA), received %d\nHint: use --session to filter the list view, or pass a single checkpoint ID / commit SHA", len(args))
+			}
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Check if Entire is disabled
 			if checkDisabledGuard(cmd.Context(), cmd.OutOrStdout()) {
@@ -150,17 +161,17 @@ Note: --session filters the list view; the positional arg, --commit, and --check
 				}
 			}
 
-			// Validate flag dependencies. --generate/--raw-transcript need a specific
-			// checkpoint target, which can come from the positional arg or --checkpoint.
+			// --generate and --raw-transcript need a specific target — either the
+			// positional arg (checkpoint ID or commit SHA) or --checkpoint/-c.
 			hasCheckpointTarget := checkpointFlag != "" || positional != ""
 			if generateFlag && !hasCheckpointTarget {
-				return errors.New("--generate requires a checkpoint ID (positional) or --checkpoint/-c flag")
+				return errors.New("--generate requires a checkpoint ID or commit SHA (positional) or --checkpoint/-c flag")
 			}
 			if forceFlag && !generateFlag {
 				return errors.New("--force requires --generate flag")
 			}
 			if rawTranscriptFlag && !hasCheckpointTarget {
-				return errors.New("--raw-transcript requires a checkpoint ID (positional) or --checkpoint/-c flag")
+				return errors.New("--raw-transcript requires a checkpoint ID or commit SHA (positional) or --checkpoint/-c flag")
 			}
 
 			// Convert short flag to verbose (verbose = !short)
@@ -229,33 +240,49 @@ func runExplain(ctx context.Context, w, errW io.Writer, sessionID, commitRef, ch
 // Resolution order:
 //  1. Try the checkpoint path (committed checkpoints, then shadow-branch temporary
 //     checkpoints). This preserves short-prefix matching for checkpoint IDs.
-//  2. If the target matched nothing, try to resolve it as a git commit ref and
-//     follow its Entire-Checkpoint trailer.
+//  2. If the checkpoint path returned checkpoint.ErrCheckpointNotFound or
+//     errCannotGenerateTemporaryCheckpoint, resolve the target as a git commit
+//     ref and follow its Entire-Checkpoint trailer.
 //
-// Only "not found" errors from the checkpoint path trigger the fallback; other
-// errors (ambiguous prefix, read failure) bubble up unchanged.
+// Other errors (ambiguous prefix, read failure, IO) bubble up — they indicate
+// the target DID resolve to something but reading failed, so retrying as a
+// commit would hide the real problem.
+//
+// When the target resolves to a git commit that has no Entire-Checkpoint
+// trailer, a friendly message is printed and nil is returned. This matches
+// runExplainCommit and lets `entire explain <random-sha>` produce a useful
+// message instead of an error.
 func runExplainAuto(ctx context.Context, w, errW io.Writer, target string, noPager, verbose, full, rawTranscript, generate, force, searchAll bool) error {
 	checkpointErr := runExplainCheckpoint(ctx, w, errW, target, noPager, verbose, full, rawTranscript, generate, force, searchAll)
 	if checkpointErr == nil {
 		return nil
 	}
-	errStr := checkpointErr.Error()
-	if !strings.Contains(errStr, "checkpoint not found") &&
-		!strings.Contains(errStr, "cannot generate summary for temporary checkpoint") {
+	// Only fall back on typed "not found" sentinels so error-message changes
+	// don't silently break routing.
+	if !errors.Is(checkpointErr, checkpoint.ErrCheckpointNotFound) &&
+		!errors.Is(checkpointErr, errCannotGenerateTemporaryCheckpoint) {
 		return checkpointErr
 	}
+	logging.Debug(ctx, "explain auto: checkpoint lookup failed, trying commit fallback",
+		slog.String("target", target),
+		slog.String("checkpoint_error", checkpointErr.Error()))
 
 	repo, repoErr := openRepository(ctx)
 	if repoErr != nil {
-		return checkpointErr
+		// Surface both errors so the user isn't misled by the stale
+		// "checkpoint not found" message when the real problem is repo access.
+		return errors.Join(checkpointErr, fmt.Errorf("failed to reopen repository for commit fallback: %w", repoErr))
 	}
 	hash, resolveErr := repo.ResolveRevision(plumbing.Revision(target))
 	if resolveErr != nil {
+		logging.Debug(ctx, "explain auto: git ref resolution failed",
+			slog.String("target", target),
+			slog.String("error", resolveErr.Error()))
 		return fmt.Errorf("no checkpoint or commit found matching %q", target)
 	}
 	commit, commitErr := repo.CommitObject(*hash)
 	if commitErr != nil {
-		return fmt.Errorf("failed to get commit: %w", commitErr)
+		return fmt.Errorf("failed to get commit %s: %w", hash.String()[:7], commitErr)
 	}
 	cpID, hasCheckpoint := trailers.ParseCheckpoint(commit.Message)
 	if !hasCheckpoint {
@@ -264,6 +291,10 @@ func runExplainAuto(ctx context.Context, w, errW io.Writer, target string, noPag
 		fmt.Fprintln(w, "This commit was not created during an Entire session, or the trailer was removed.")
 		return nil
 	}
+	logging.Debug(ctx, "explain auto: resolved commit to checkpoint via trailer",
+		slog.String("target", target),
+		slog.String("commit", hash.String()[:7]),
+		slog.String("checkpoint_id", cpID.String()))
 	return runExplainCheckpoint(ctx, w, errW, cpID.String(), noPager, verbose, full, rawTranscript, generate, force, searchAll)
 }
 
@@ -336,7 +367,7 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 	case 0:
 		// Not found in committed, try temporary checkpoints by git SHA
 		if generate {
-			return fmt.Errorf("cannot generate summary for temporary checkpoint %s (only committed checkpoints supported)", checkpointIDPrefix)
+			return fmt.Errorf("%w %s (only committed checkpoints supported)", errCannotGenerateTemporaryCheckpoint, checkpointIDPrefix)
 		}
 		output, found := explainTemporaryCheckpoint(ctx, w, repo, v1Store, checkpointIDPrefix, verbose, full, rawTranscript)
 		if found {
@@ -347,7 +378,7 @@ func runExplainCheckpoint(ctx context.Context, w, errW io.Writer, checkpointIDPr
 		if output != "" {
 			return errors.New(output)
 		}
-		return fmt.Errorf("checkpoint not found: %s", checkpointIDPrefix)
+		return fmt.Errorf("checkpoint not found: %s: %w", checkpointIDPrefix, checkpoint.ErrCheckpointNotFound)
 	case 1:
 		fullCheckpointID = matches[0]
 	default:
