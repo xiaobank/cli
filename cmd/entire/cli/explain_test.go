@@ -340,6 +340,49 @@ func TestRunExplainAuto_NoMatch(t *testing.T) {
 	require.ErrorContains(t, err, `no checkpoint or commit found matching "zzzzzz999999"`)
 }
 
+// TestRunExplainAuto_GenerateCommitWithoutTrailer guards against silently
+// dropping --generate when the resolved commit has no Entire-Checkpoint
+// trailer. The user explicitly asked to generate a summary; returning nil
+// (exit 0) would make scripts unable to distinguish success from no-op.
+func TestRunExplainAuto_GenerateCommitWithoutTrailer(t *testing.T) {
+	_, initialCommit := runExplainAutoTestRepo(t)
+
+	var out, errOut bytes.Buffer
+	// Note: args are (noPager, verbose, full, rawTranscript, generate, force, searchAll).
+	err := runExplainAuto(context.Background(), &out, &errOut, initialCommit.String(), true, false, false, false, true, false, false)
+
+	require.Error(t, err, "--generate on a commit without a trailer must surface as an error, not silently succeed")
+	require.ErrorContains(t, err, "cannot generate summary")
+	require.ErrorContains(t, err, initialCommit.String()[:7])
+}
+
+// TestRunExplainAuto_RawTranscriptCommitWithoutTrailer is the --raw-transcript
+// twin of the test above — same silent-success hazard, same fix.
+func TestRunExplainAuto_RawTranscriptCommitWithoutTrailer(t *testing.T) {
+	_, initialCommit := runExplainAutoTestRepo(t)
+
+	var out, errOut bytes.Buffer
+	err := runExplainAuto(context.Background(), &out, &errOut, initialCommit.String(), true, false, false, true, false, false, false)
+
+	require.Error(t, err)
+	require.ErrorContains(t, err, "cannot show raw transcript")
+	require.ErrorContains(t, err, initialCommit.String()[:7])
+}
+
+// TestRunExplainCheckpoint_NotFoundMessageNotDuplicated guards against the
+// "checkpoint not found: X: checkpoint not found" regression from wrapping
+// the sentinel with a format string that also spelled out its text.
+func TestRunExplainCheckpoint_NotFoundMessageNotDuplicated(t *testing.T) {
+	runExplainAutoTestRepo(t)
+
+	var out, errOut bytes.Buffer
+	err := runExplainCheckpoint(context.Background(), &out, &errOut, "abababababab", false, false, false, false, false, false, false)
+
+	require.Error(t, err)
+	require.Equal(t, 1, strings.Count(err.Error(), "checkpoint not found"),
+		"error phrase %q should appear once, got %q", "checkpoint not found", err.Error())
+}
+
 // TestRunExplainCheckpoint_WrapsSentinelNotFound guards the typed-error
 // contract runExplainAuto depends on: runExplainCheckpoint must return an
 // error matching checkpoint.ErrCheckpointNotFound via errors.Is when the
