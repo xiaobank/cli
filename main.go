@@ -20,6 +20,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		// Exit code 1 is more appropriate here for general runtime errors;
 		// exit code 2 is reserved for usage/argument errors handled inside cmd.
+		//
+		// TODO: consider wrapping errors with more context before printing,
+		// e.g. using fmt.Errorf("command failed: %w", err) upstream in cmd.Execute.
 		os.Exit(1)
 	}
 }
